@@ -1,0 +1,14 @@
+apiVersion: 1
+datasources:
+  - name: Benchmark Prometheus
+    uid: benchmark-prometheus
+    type: prometheus
+    url: http://prometheus:9090
+    access: proxy
+    isDefault: true
+  - name: AWS CloudWatch
+    uid: benchmark-cloudwatch
+    type: cloudwatch
+    jsonData:
+      authType: default
+      defaultRegion: ap-southeast-1

@@ -9,8 +9,11 @@ services:
       WARMUP_SECONDS: ${WARMUP_SECONDS:-120}
       LOAD_DATA: /inputs/load-data.json
       SCENARIO_CONFIG: /inputs/scenario.json
+      K6_PROMETHEUS_RW_SERVER_URL: ${PROMETHEUS_URL:-http://127.0.0.1:9090/api/v1/write}
+      K6_PROMETHEUS_RW_TREND_STATS: p(50),p(95),p(99),avg,max
+      K6_PROMETHEUS_RW_PUSH_INTERVAL: 5s
     volumes:
-      - ./benchmarks/k6:/scripts:ro
-      - ${INPUT_DIR:-./artifacts/inputs}:/inputs:ro
-      - ${OUTPUT_DIR:-./artifacts/output}:/output
+      - ./benchmarks/k6:/scripts:ro,z
+      - ${INPUT_DIR:-./artifacts/inputs}:/inputs:ro,Z
+      - ${OUTPUT_DIR:-./artifacts/output}:/output:Z
     command: ["run", "--out", "json=/output/metrics.json.gz", "/scripts/workload.js"]

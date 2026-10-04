@@ -1,0 +1,10 @@
+name: language-benchmark-host-telemetry
+services:
+  node-exporter:
+    image: prom/node-exporter:v1.12.1
+    network_mode: host
+    pid: host
+    command: ["--path.rootfs=/host", "--web.listen-address=:9100"]
+    security_opt: ["label=disable"]
+    volumes: ["/:/host:ro,rslave"]
+    restart: unless-stopped

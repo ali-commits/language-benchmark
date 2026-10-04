@@ -1,0 +1,30 @@
+name: language-benchmark-monitoring
+services:
+  prometheus:
+    image: prom/prometheus:v3.15.0
+    command: ["--config.file=/etc/prometheus/prometheus.yml", "--web.enable-remote-write-receiver", "--storage.tsdb.retention.time=90d"]
+    ports: ["${PROMETHEUS_BIND_IP:-127.0.0.1}:9090:9090"]
+    volumes:
+      - ./artifacts/aws/prometheus.yml:/etc/prometheus/prometheus.yml:ro,Z
+      - prometheus-data:/prometheus
+  grafana:
+    image: grafana/grafana:13.2.3
+    ports: ["127.0.0.1:3000:3000"]
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:?Set GRAFANA_PASSWORD}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro,Z
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro,Z
+  history:
+    image: lb-tools:latest
+    entrypoint: ["python3", "/workspace/monitoring/history.py"]
+    environment: {RESULTS_DIR: /results}
+    volumes:
+      - ./monitoring:/workspace/monitoring:ro,Z
+      - ./artifacts/results:/results:ro,z
+volumes:
+  prometheus-data:
+  grafana-data:

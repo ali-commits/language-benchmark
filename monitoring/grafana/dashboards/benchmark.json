@@ -1,0 +1,288 @@
+{
+  "uid": "language-benchmark",
+  "title": "Language Benchmark \u2014 live and history",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "5s",
+  "timezone": "browser",
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "cell",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "benchmark-prometheus"
+        },
+        "query": "label_values(k6_operations_attempted_total, cell)",
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": true,
+        "refresh": 1
+      },
+      {
+        "name": "trial",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "benchmark-prometheus"
+        },
+        "query": "label_values(k6_operations_attempted_total, trial)",
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": true,
+        "refresh": 1
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Live successful operations/s",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "benchmark-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (cell,operation) (rate(k6_operations_succeeded_total{cell=~\"$cell\",trial=~\"$trial\"}[30s]))",
+          "legendFormat": "{{cell}} {{operation}} {{job}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 2,
+      "title": "Latency p50 / p95 / p99 (seconds)",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "benchmark-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "k6_operation_duration_p95{cell=~\"$cell\",trial=~\"$trial\"}",
+          "legendFormat": "{{cell}} {{operation}} {{job}}"
+        },
+        {
+          "refId": "B",
+          "expr": "k6_operation_duration_p50{cell=~\"$cell\",trial=~\"$trial\"}",
+          "legendFormat": "p50 {{operation}}"
+        },
+        {
+          "refId": "C",
+          "expr": "k6_operation_duration_p99{cell=~\"$cell\",trial=~\"$trial\"}",
+          "legendFormat": "p99 {{operation}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 3,
+      "title": "Failed operations",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "benchmark-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (cell) (k6_operations_failed_total{cell=~\"$cell\",trial=~\"$trial\"})",
+          "legendFormat": "{{cell}} {{operation}} {{job}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 4,
+      "title": "Dropped arrivals",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 12,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "benchmark-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (cell) (k6_dropped_iterations_total{cell=~\"$cell\",trial=~\"$trial\"})",
+          "legendFormat": "{{cell}} {{operation}} {{job}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 5,
+      "title": "Host CPU utilization",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 0,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "benchmark-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "100 * (1 - avg by (job) (rate(node_cpu_seconds_total{mode=\"idle\"}[1m])))",
+          "legendFormat": "{{cell}} {{operation}} {{job}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 6,
+      "title": "Host available memory",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 12,
+        "y": 16,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "benchmark-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "node_memory_MemAvailable_bytes",
+          "legendFormat": "{{cell}} {{operation}} {{job}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 7,
+      "title": "Historical successful throughput by offered rate",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 0,
+        "y": 24,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "benchmark-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "benchmark_successful_ops_per_second{cell=~\"$cell\",trial=~\"$trial\"}",
+          "legendFormat": "{{cell}} {{operation}} {{job}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 8,
+      "title": "Historical p95 latency and validity",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 12,
+        "y": 24,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "benchmark-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "benchmark_latency_p95_ms{cell=~\"$cell\",trial=~\"$trial\"}",
+          "legendFormat": "{{cell}} {{operation}} {{job}}"
+        },
+        {
+          "refId": "B",
+          "expr": "benchmark_trial_qualified{cell=~\"$cell\",trial=~\"$trial\"}",
+          "legendFormat": "validity: 1 pass, 0 fail, -1 unknown"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms"
+        },
+        "overrides": []
+      }
+    }
+  ],
+  "tags": [
+    "benchmark",
+    "python"
+  ],
+  "description": "Compare equal workloads/rates/fixtures. Never average percentiles across trials. Saved raw artifacts define final qualification."
+}

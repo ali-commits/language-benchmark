@@ -21,8 +21,8 @@ services:
       PYTHON_JIT: ${PYTHON_JIT:-0}
       # Empty leaves free-threaded default behavior intact; unsafe extensions can re-enable GIL and fail checks.
     volumes:
-      - ${RUN_DIR_HOST:-./artifacts/runtime}:/run/benchmark
-      - ${RDS_CA_FILE:-./docker/README-ca.txt}:/certs/rds-ca.pem:ro
+      - ${RUN_DIR_HOST:-./artifacts/runtime}:/run/benchmark:Z
+      - ${RDS_CA_FILE:-./docker/README-ca.txt}:/certs/rds-ca.pem:ro,Z
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready')"]
       interval: 5s

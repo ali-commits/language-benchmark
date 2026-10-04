@@ -176,6 +176,13 @@ def run_trial(campaign: dict, trial: dict, output_dir: Path) -> dict:
             "seed": trial["seed"],
             "operation": campaign.get("operation", "mixed"),
             "expires_at": load_metadata["expires_at"],
+            "tags": {
+                "cell": cell.id,
+                "trial": trial["id"],
+                "campaign": trial["campaign_id"],
+                "workload": campaign.get("operation", "mixed"),
+                "offered_rate": str(trial["rate"]),
+            },
         }
         (secret_inputs / "scenario.json").write_text(json.dumps(scenario))
         mkdir = "import pathlib,os; [pathlib.Path(p).mkdir(parents=True,exist_ok=True) for p in (os.environ['INPUTS'],os.environ['OUTPUTS'])]; pathlib.Path(os.environ['INPUTS']).chmod(0o700); print(str(os.getuid())+':'+str(os.getgid()))"
@@ -193,6 +200,7 @@ def run_trial(campaign: dict, trial: dict, output_dir: Path) -> dict:
             "LOAD_UID": uidgid[0],
             "LOAD_GID": uidgid[1],
             "WARMUP_SECONDS": str(campaign["warmup_seconds"]),
+            "PROMETHEUS_URL": campaign.get("prometheus_url", "http://127.0.0.1:9090/api/v1/write"),
         }
         load_compose = ["docker", "compose", "-f", "compose.load.yaml", "run", "--rm", "k6", "run"]
         with Collector(
@@ -212,11 +220,16 @@ def run_trial(campaign: dict, trial: dict, output_dir: Path) -> dict:
             result["status"] = "measuring"
             result["measurement_started_epoch"] = time.time()
             atomic_json(output_dir / "result.json", result)
+            extra_output = (
+                ["--out", "experimental-prometheus-rw"] if campaign.get("prometheus_url") else []
+            )
             try:
                 measured = execute(
                     load,
                     load_compose
-                    + ["--out", "json=/output/metrics.json.gz", "/scripts/workload.js"],
+                    + ["--out", "json=/output/metrics.json.gz"]
+                    + extra_output
+                    + ["/scripts/workload.js"],
                     load_env,
                     timeout=campaign["measure_seconds"] + 120,
                 )
