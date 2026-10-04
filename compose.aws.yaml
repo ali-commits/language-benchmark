@@ -5,12 +5,13 @@ services:
     cpus: 2.0
     mem_limit: 3g
     memswap_limit: 3g
-    ports: ["${BIND_IP:-127.0.0.1}:8000:8000"]
+    network_mode: host
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgresql://placeholder@invalid/language_benchmark}
       JWT_SECRET: ${JWT_SECRET:-}
       JWT_TTL_SECONDS: ${JWT_TTL_SECONDS:-3600}
       MODE: ${MODE:-aws}
+      BIND_IP: ${BIND_IP:-127.0.0.1}
       WORKERS: ${WORKERS:-2}
       ADAPTER: ${ADAPTER:-async}
       RUN_ID: ${RUN_ID:-}

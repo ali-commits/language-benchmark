@@ -1,0 +1,29 @@
+[project]
+name = "language-benchmark"
+version = "0.1.0"
+requires-python = ">=3.10,<3.16"
+dependencies = [
+  "fastapi==0.142.2",
+  "pydantic==2.13.5",
+  "pydantic-settings==2.15.0",
+  "SQLAlchemy==2.0.54",
+  "psycopg[binary,pool]==3.3.6",
+  "uvicorn==0.54.0",
+  "argon2-cffi==25.1.0",
+  "PyJWT==2.15.1",
+  "pytest==9.1.1",
+  "httpx==0.28.1",
+  "alembic==1.20.0",
+  "PyYAML==6.0.3",
+  "boto3==1.43.108"
+]
+
+[tool.uv]
+package = false
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]
