@@ -1,0 +1,39 @@
+{
+  "mode": "aws",
+  "smoke": false,
+  "cells": [
+    "baseline-3.10.22",
+    "baseline-3.11.17",
+    "baseline-3.12.13",
+    "baseline-3.13.16",
+    "baseline-3.14.8",
+    "baseline-3.15.0rc3"
+  ],
+  "rates": [
+    25,
+    50,
+    100,
+    200,
+    400
+  ],
+  "max_rate": 3200,
+  "repeats": 5,
+  "warmup_seconds": 120,
+  "measure_seconds": 300,
+  "vus": 400,
+  "seed": 20261004,
+  "fixture": "artifacts/fixture/manifest.json",
+  "credentials": "artifacts/credentials.json",
+  "database_allowlist": "language_benchmark",
+  "operation": "mixed",
+  "backend_host": {},
+  "load_host": {
+    "ssh": "benchmark-load",
+    "project": "/home/ubuntu/language-benchmark"
+  },
+  "base_url": "http://127.0.0.1:8000",
+  "load_base_url": "http://BACKEND_PRIVATE_IP:8000",
+  "bind_ip": "0.0.0.0",
+  "region": "ap-southeast-1",
+  "rds_identifier": "language-benchmark"
+}

@@ -1,0 +1,27 @@
+{
+  "mode": "local",
+  "smoke": true,
+  "cells": [
+    "baseline-3.15.0rc3"
+  ],
+  "rates": [
+    5
+  ],
+  "max_rate": 3200,
+  "repeats": 1,
+  "warmup_seconds": 3,
+  "measure_seconds": 10,
+  "vus": 16,
+  "seed": 20261004,
+  "fixture": "artifacts/small-fixture/manifest.json",
+  "credentials": "artifacts/small-credentials.json",
+  "database_allowlist": "language_benchmark",
+  "operation": "mixed",
+  "backend_host": {},
+  "load_host": {},
+  "base_url": "http://127.0.0.1:8000",
+  "load_base_url": "http://127.0.0.1:8000",
+  "bind_ip": "127.0.0.1",
+  "region": "ap-southeast-1",
+  "rds_identifier": "language-benchmark"
+}
