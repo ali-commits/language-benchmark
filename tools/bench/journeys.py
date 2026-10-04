@@ -44,8 +44,7 @@ def read_journey_metrics(path: Path) -> dict:
     }
     status = {"incomplete": False}
     durations = []
-    times = []
-    activity_times = []
+    steady_start = steady_end = activity_start = activity_end = None
     for line in metric_lines(path, status):
         try:
             p = json.loads(line)
@@ -58,10 +57,11 @@ def read_journey_metrics(path: Path) -> dict:
         metric = p["metric"]
         value = d["value"]
         phase = d.get("tags", {}).get("phase")
+        timestamp = None
         if phase in ("ramp", "settle", "steady") and d.get("time"):
-            activity_times.append(
-                datetime.fromisoformat(d["time"].replace("Z", "+00:00")).timestamp()
-            )
+            timestamp = datetime.fromisoformat(d["time"].replace("Z", "+00:00")).timestamp()
+            activity_start = timestamp if activity_start is None else min(activity_start, timestamp)
+            activity_end = timestamp if activity_end is None else max(activity_end, timestamp)
         if metric == "generator_resource_errors" and phase != "drain":
             m["generator_resource_errors"] += value
         if metric == "users_authenticated" and phase != "drain":
@@ -73,8 +73,9 @@ def read_journey_metrics(path: Path) -> dict:
                 m[phase + "_succeeded"] += value
         if phase != "steady":
             continue
-        if d.get("time"):
-            times.append(datetime.fromisoformat(d["time"].replace("Z", "+00:00")).timestamp())
+        if timestamp is not None:
+            steady_start = timestamp if steady_start is None else min(steady_start, timestamp)
+            steady_end = timestamp if steady_end is None else max(steady_end, timestamp)
         if metric == "http_reqs":
             m["http_requests"] += value
         if metric == "user_journeys_completed":
@@ -91,10 +92,8 @@ def read_journey_metrics(path: Path) -> dict:
             m["active_users_max"] = max(m["active_users_max"], value)
         if metric == "operation_duration":
             durations.append(value)
-    if activity_times:
-        m.update(
-            activity_started_epoch=min(activity_times), activity_finished_epoch=max(activity_times)
-        )
+    if activity_start is not None:
+        m.update(activity_started_epoch=activity_start, activity_finished_epoch=activity_end)
     m["incomplete"] = status["incomplete"]
     if durations:
         m.update(
@@ -102,8 +101,8 @@ def read_journey_metrics(path: Path) -> dict:
             p95=percentile(durations, 0.95),
             p99=percentile(durations, 0.99),
         )
-    if times:
-        m.update(steady_started_epoch=min(times), steady_finished_epoch=max(times))
+    if steady_start is not None:
+        m.update(steady_started_epoch=steady_start, steady_finished_epoch=steady_end)
     return m
 
 

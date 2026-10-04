@@ -125,3 +125,18 @@ def test_generator_socket_exhaustion_invalidates_trial_even_if_responses_pass(tm
     metrics = read_journey_metrics(p)
     assert metrics["generator_resource_errors"] == 1
     assert classify_journey(metrics, 10, []) == "invalid"
+
+
+def test_activity_windows_keep_extrema_when_points_arrive_out_of_order(tmp_path):
+    p = tmp_path / "raw.gz"
+    rows = [
+        point("operations_attempted", 1, time="2026-10-04T12:00:20Z"),
+        point("users_authenticated", 1, "ramp", "2026-10-04T12:00:00Z"),
+        point("operations_succeeded", 1, time="2026-10-04T12:00:10Z"),
+        point("operations_attempted", 1, "drain", "2026-10-04T12:01:00Z"),
+    ]
+    with gzip.open(p, "wt") as f:
+        f.write("\n".join(json.dumps(x) for x in rows))
+    m = read_journey_metrics(p)
+    assert m["activity_finished_epoch"] - m["activity_started_epoch"] == 20
+    assert m["steady_finished_epoch"] - m["steady_started_epoch"] == 10
