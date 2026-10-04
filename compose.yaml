@@ -1,7 +1,7 @@
 name: language-benchmark-local
 services:
   db:
-    image: postgres:17.6@sha256:00bc86618629af00d2937fdc5a5d63db3ff8450acf52f0636ec813c7f4902929
+    image: postgres:19
     environment:
       POSTGRES_DB: language_benchmark
       POSTGRES_USER: benchmark
@@ -32,7 +32,7 @@ services:
       PYTHON_JIT: ${PYTHON_JIT:-0}
     volumes: ["${RUN_DIR_HOST:-./artifacts/runtime}:/run/benchmark"]
     depends_on:
-      db: {condition: service_healthy}
+      db: { condition: service_healthy }
   modern:
     profiles: [modern]
     image: ${MODERN_IMAGE:-lb-modern:3.15.0rc3-standard}
@@ -45,6 +45,6 @@ services:
       ADAPTER: ${ADAPTER:-async}
     volumes: ["${RUN_DIR_HOST:-./artifacts/runtime}:/run/benchmark"]
     depends_on:
-      db: {condition: service_healthy}
+      db: { condition: service_healthy }
 volumes:
   db-data:
