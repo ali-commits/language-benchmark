@@ -10,6 +10,17 @@ def validate_worker_snapshots(cell: RuntimeCell, snapshots: list[dict]) -> list[
     ):
         reasons.append("stale or missing run identity")
     for s in snapshots:
+        import shlex
+
+        flags = set(shlex.split(s.get("config_args") or ""))
+        if not flags.intersection(
+            {"--enable-optimizations", "--enable-optimizations=yes"}
+        ) or not flags.intersection(
+            {"--with-lto", "--with-lto=yes", "--with-lto=full", "--with-lto=thin"}
+        ):
+            reasons.append("source build must enable PGO and LTO")
+        if s.get("jit_available") != (cell.build == "jit"):
+            reasons.append("JIT build capability mismatch independent of runtime toggle")
         if s.get("python") != cell.python:
             reasons.append("Python release mismatch")
         if s.get("gil") != cell.gil:

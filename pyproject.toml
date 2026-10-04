@@ -15,7 +15,8 @@ dependencies = [
   "httpx==0.28.1",
   "alembic==1.20.0",
   "PyYAML==6.0.3",
-  "boto3==1.43.108"
+  "boto3==1.43.108",
+  "matplotlib==3.10.8",
 ]
 
 [tool.uv]

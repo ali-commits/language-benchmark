@@ -124,3 +124,59 @@ def rds_metrics(identifier: str, region: str, start, end) -> dict:
         ]
     }
     return result
+
+
+REQUIRED_RDS_METRICS = (
+    "CPUUtilization",
+    "DatabaseConnections",
+    "FreeableMemory",
+    "ReadIOPS",
+    "WriteIOPS",
+    "ReadLatency",
+    "WriteLatency",
+    "ReadThroughput",
+    "WriteThroughput",
+    "DiskQueueDepth",
+)
+
+
+def validate_rds_evidence(data: dict, start: float, end: float) -> list[str]:
+    from datetime import datetime
+
+    reasons = []
+    if not start or not end or end <= start:
+        return ["RDS measurement interval missing"]
+
+    def timestamp(value):
+        if isinstance(value, datetime):
+            return value.timestamp()
+        if isinstance(value, str):
+            return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+        return float(value)
+
+    for metric in REQUIRED_RDS_METRICS:
+        points = data.get(metric, [])
+        valid = []
+        for point in points:
+            try:
+                # CloudWatch rounds statistics to minute buckets. Accept the bucket overlapping start.
+                t = timestamp(point["Timestamp"])
+                if start - 60 <= t <= end and ("Average" in point or "Maximum" in point):
+                    valid.append(t)
+            except (ValueError, TypeError, KeyError):
+                continue
+        expected_buckets = max(1, int((end - start) // 60))
+        if len(set(valid)) < expected_buckets:
+            reasons.append("RDS " + metric + " evidence does not cover measurement interval")
+    for event in data.get("events", []):
+        try:
+            inside = start <= timestamp(event["Date"]) <= end
+        except (KeyError, TypeError, ValueError):
+            reasons.append("RDS event has invalid timestamp")
+            continue
+        if inside and any(
+            word in event.get("Message", "").lower()
+            for word in ("failover", "maintenance", "restart", "reboot", "recovery", "unavailable")
+        ):
+            reasons.append("RDS disruptive event during measurement: " + event.get("Message", ""))
+    return reasons

@@ -19,7 +19,7 @@ def client_command(tool: str, dsn: str, args: list[str]) -> tuple[list[str], dic
     # Never put password or the connection URL in argv, output, or exceptions.
     env.update(
         {
-            ("PG" + k.upper()): v
+            ("PGDATABASE" if k == "dbname" else "PG" + k.upper()): v
             for k, v in info.items()
             if k in ("host", "port", "user", "password", "dbname", "sslmode", "sslrootcert")
         }
@@ -43,7 +43,7 @@ def client_command(tool: str, dsn: str, args: list[str]) -> tuple[list[str], dic
         ], env
     if not shutil.which(tool):
         raise RuntimeError("PostgreSQL client required: " + tool)
-    return [tool, *args], env
+    return [tool, "-d", info["dbname"], *args], env
 
 
 def logical_fingerprints(dsn: str) -> tuple[dict, dict]:

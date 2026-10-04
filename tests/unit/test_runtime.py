@@ -49,3 +49,33 @@ def test_jit_enabled_requires_available_build():
         for i in [1, 2]
     ]
     assert validate_worker_snapshots(cell, rows)
+
+
+def test_jit_off_control_requires_jit_capable_optimized_build():
+    cell = RuntimeCell(id="jit-off", python="3.15.0rc3", app="modern", build="jit", jit=False)
+    row = dict(
+        pid=1,
+        run_id="current",
+        python=cell.python,
+        gil=True,
+        free_threaded=False,
+        jit=False,
+        jit_available=False,
+        config_args="--enable-optimizations --with-lto",
+    )
+    assert validate_worker_snapshots(cell, [row, {**row, "pid": 2}])
+
+
+def test_unoptimized_source_build_is_rejected():
+    cell = RuntimeCell(id="std", python="3.14.8")
+    row = dict(
+        pid=1,
+        run_id="current",
+        python=cell.python,
+        gil=True,
+        free_threaded=False,
+        jit=False,
+        jit_available=False,
+        config_args="--prefix=/opt/python",
+    )
+    assert validate_worker_snapshots(cell, [row, {**row, "pid": 2}])

@@ -56,3 +56,20 @@ def test_fixture_manifest_records_seed_parameters(database, tmp_path, monkeypatc
     seed_database(database, spec)
     m = capture_fixture(database, tmp_path)
     assert m.spec == asdict(spec)
+
+
+def test_native_clients_capture_and_restore_configured_database(database, tmp_path, monkeypatch):
+    import shutil
+
+    if not shutil.which("pg_dump") or not shutil.which("pg_restore"):
+        pytest.skip("native PostgreSQL clients unavailable")
+    monkeypatch.delenv("DB_CLIENT_CONTAINER", raising=False)
+    mark_database(database, "language_benchmark_test")
+    with psycopg.connect(database) as c:
+        c.execute("INSERT INTO users(username,password_hash) VALUES ('alice','hash')")
+        c.execute("INSERT INTO posts(author_id,content) VALUES (1,'original')")
+    m = capture_fixture(database, tmp_path)
+    with psycopg.connect(database) as c:
+        c.execute("UPDATE posts SET content='changed'")
+    restore_fixture(database, tmp_path / "manifest.json", "language_benchmark_test")
+    assert not verify_fixture(database, m)

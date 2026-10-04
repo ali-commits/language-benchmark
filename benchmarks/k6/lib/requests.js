@@ -1,6 +1,6 @@
 import http from 'k6/http';
 import {check} from 'k6';
-import {attempted,completed,succeeded,failed,duration} from './metrics.js';
+import {attempted,completed,succeeded,failed,duration,failureRate} from './metrics.js';
 
 export function perform(op,actor,post,cursor,base,pair,remove) {
  const tags={operation:op,name:op}; const options={headers:{Authorization:'Bearer '+actor.token,'Content-Type':'application/json'},tags,timeout:'15s'};
@@ -16,6 +16,7 @@ export function perform(op,actor,post,cursor,base,pair,remove) {
  if(ok&&expected!==204) {
   try {const b=r.json();ok=op==='login'?typeof b.access_token==='string':(op==='feed'||op==='comments')?Array.isArray(b.items):Number.isInteger(b.id)&&typeof b.content==='string';}catch(_){ok=false;}
  }
+ failureRate.add(!ok,tags);
  check(r,{'operation response valid':()=>ok},tags);
  duration.add(Date.now()-start,tags);completed.add(1,tags);if(ok)succeeded.add(1,tags);else failed.add(1,tags);
  return ok;

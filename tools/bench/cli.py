@@ -3,12 +3,15 @@
 import argparse
 import json
 import os
+import tempfile
+from contextlib import contextmanager
 from dataclasses import asdict
 from pathlib import Path
 
 from .compatibility import probe_cell, validate_runtime_lock
 from .fixture import capture_fixture
 from .load_data import prepare_load_data
+from .manifest import atomic_json
 from .models import FixtureSpec, RuntimeCell
 from .report import write_report
 from .reset import mark_database, restore_fixture
@@ -85,20 +88,10 @@ def main():
         print(prepare_load_data(a.url, a.credentials, a.output, a.valid_seconds))
     elif a.command in ("run", "pilot"):
         if a.command == "pilot":
-            cfg = json.loads(a.config.read_text())
-            cfg.update(
-                smoke=True,
-                repeats=1,
-                measure_seconds=30,
-                warmup_seconds=30,
-                rates=[25, 50, 100, 200, 400, 800, 1600, 3200],
-            )
-            cfg["rates"] = [r for r in cfg["rates"] if r <= cfg.get("max_rate", 3200)]
-            tmp = a.output / "pilot-config.json"
-            tmp.parent.mkdir(parents=True, exist_ok=True)
-            tmp.write_text(json.dumps(cfg))
-            a.config = tmp
-        results = run_campaign(a.config, a.output)
+            with private_pilot_config(a.config, a.output) as private:
+                results = run_campaign(private, a.output)
+        else:
+            results = run_campaign(a.config, a.output)
         print(json.dumps(results, indent=2))
         if any(
             r["status"] in ("failed", "interrupted") or not r["reset_verified"] for r in results
@@ -117,6 +110,27 @@ def main():
             )
         else:
             print(json.dumps(lock, indent=2))
+
+
+@contextmanager
+def private_pilot_config(source: Path, output: Path):
+    cfg = json.loads(source.read_text())
+    cfg.update(
+        smoke=True,
+        repeats=1,
+        measure_seconds=30,
+        warmup_seconds=30,
+        rates=[25, 50, 100, 200, 400, 800, 1600, 3200],
+    )
+    cfg["rates"] = [r for r in cfg["rates"] if r <= cfg.get("max_rate", 3200)]
+    output.mkdir(parents=True, exist_ok=True)
+    atomic_json(output / "pilot-config.redacted.json", cfg)
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".json", prefix="benchmark-pilot-", delete=True
+    ) as private:
+        json.dump(cfg, private)
+        private.flush()
+        yield Path(private.name)
 
 
 if __name__ == "__main__":

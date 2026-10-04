@@ -26,8 +26,8 @@ def verify_password(password: str, encoded: str) -> bool:
             return False
 
 
-def issue_token(user_id: int, now: datetime) -> str:
-    cfg = Settings()
+def issue_token(user_id: int, now: datetime, cfg: Settings | None = None) -> str:
+    cfg = cfg or Settings()
     t = int(now.timestamp())
     return jwt.encode(
         {
@@ -42,11 +42,12 @@ def issue_token(user_id: int, now: datetime) -> str:
     )
 
 
-def decode_token(token: str, now: datetime) -> int:
+def decode_token(token: str, now: datetime, cfg: Settings | None = None) -> int:
+    cfg = cfg or Settings()
     try:
         data = jwt.decode(
             token,
-            Settings().jwt_secret,
+            cfg.jwt_secret,
             algorithms=["HS256"],
             issuer="language-benchmark",
             audience="social-api",

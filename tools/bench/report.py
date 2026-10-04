@@ -1,15 +1,16 @@
 """Reports derive distributions from raw points; failures remain in denominators."""
 
-import gzip
 import html
 import json
 import statistics
+import zlib
 from pathlib import Path
 
 from .manifest import atomic_json
+from .telemetry import validate_rds_evidence
 
 
-def qualify(metrics: dict, reasons: list[str]) -> str:
+def qualify(metrics: dict, reasons: list[str], workload: str = "mixed") -> str:
     required = ("attempted", "succeeded", "dropped", "p95", "p99")
     if reasons or any(k not in metrics for k in required) or metrics.get("attempted", 0) <= 0:
         return "unknown"
@@ -17,8 +18,8 @@ def qualify(metrics: dict, reasons: list[str]) -> str:
         "pass"
         if metrics["succeeded"] / metrics["attempted"] >= 0.999
         and metrics["dropped"] == 0
-        and metrics["p95"] <= 200
-        and metrics["p99"] <= 500
+        and metrics["p95"] <= (500 if workload == "login" else 200)
+        and (workload == "login" or metrics["p99"] <= 500)
         else "fail"
     )
 
@@ -35,29 +36,34 @@ def read_metrics(path: Path) -> dict:
     durations = []
     per = {}
     metrics = {"attempted": 0, "succeeded": 0, "dropped": 0, "http_requests": 0}
-    with gzip.open(path, "rt") as f:
-        for line in f:
+    status = {"incomplete": False}
+    for line in metric_lines(path, status):
+        try:
             point = json.loads(line)
-            if point.get("type") != "Point":
-                continue
-            name = point["metric"]
-            data = point["data"]
-            value = data["value"]
-            op = data.get("tags", {}).get("operation", "unknown")
-            bucket = per.setdefault(op, {"attempted": 0, "succeeded": 0, "durations": []})
-            if name == "operation_duration":
-                durations.append(value)
-                bucket["durations"].append(value)
-            if name == "operations_attempted":
-                metrics["attempted"] += value
-                bucket["attempted"] += value
-            if name == "operations_succeeded":
-                metrics["succeeded"] += value
-                bucket["succeeded"] += value
-            if name == "http_reqs":
-                metrics["http_requests"] += value
-            if name == "dropped_iterations":
-                metrics["dropped"] += value
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            status["incomplete"] = True
+            continue
+        if point.get("type") != "Point":
+            continue
+        name = point["metric"]
+        data = point["data"]
+        value = data["value"]
+        op = data.get("tags", {}).get("operation", "unknown")
+        bucket = per.setdefault(op, {"attempted": 0, "succeeded": 0, "durations": []})
+        if name == "operation_duration":
+            durations.append(value)
+            bucket["durations"].append(value)
+        if name == "operations_attempted":
+            metrics["attempted"] += value
+            bucket["attempted"] += value
+        if name == "operations_succeeded":
+            metrics["succeeded"] += value
+            bucket["succeeded"] += value
+        if name == "http_reqs":
+            metrics["http_requests"] += value
+        if name == "dropped_iterations":
+            metrics["dropped"] += value
+    metrics["incomplete"] = status["incomplete"]
     if durations:
         metrics.update(
             p50=percentile(durations, 0.5),
@@ -122,23 +128,43 @@ def generator_flags(path: Path) -> list[str]:
 
 def summarize_campaign(results_dir: Path) -> dict:
     trials = []
-    for p in sorted(results_dir.glob("*/result.json")):
-        result = json.loads(p.read_text())
-        manifest = json.loads(p.with_name("manifest.json").read_text())
+    for manifest_path in sorted(results_dir.glob("*/manifest.json")):
+        p = manifest_path.with_name("result.json")
+        manifest = json.loads(manifest_path.read_text())
+        result = (
+            json.loads(p.read_text())
+            if p.exists()
+            else {
+                "trial": manifest["trial"],
+                "status": "incomplete",
+                "label": manifest.get("label"),
+                "reset_verified": False,
+                "reasons": ["trial ended before final result was persisted"],
+            }
+        )
         metrics_path = p.parent / "k6/metrics.json.gz"
         metrics = {}
         if metrics_path.exists():
             metrics = read_metrics(metrics_path)
         reasons = list(result.get("reasons", []))
+        if metrics.get("incomplete"):
+            reasons.append("raw metric stream is incomplete or corrupt")
+        if result.get("status") != "measured":
+            reasons.append("trial did not complete measurement lifecycle")
         if not result.get("reset_verified"):
             reasons.append("final fixture restoration not verified")
         reasons += generator_flags(p.parent / "telemetry.jsonl")
-        if (
-            manifest.get("campaign", {}).get("mode") == "aws"
-            and not (p.parent / "rds.json").exists()
-        ):
-            reasons.append("RDS telemetry missing")
-        qualification = qualify(metrics, reasons)
+        if manifest.get("campaign", {}).get("mode") == "aws":
+            evidence = p.parent / "rds.json"
+            if not evidence.exists():
+                reasons.append("RDS telemetry missing")
+            else:
+                reasons += validate_rds_evidence(
+                    json.loads(evidence.read_text()),
+                    result.get("measurement_started_epoch", 0),
+                    result.get("measurement_finished_epoch", 0),
+                )
+        qualification = qualify(metrics, reasons, manifest["campaign"].get("operation", "mixed"))
         login = metrics.get("endpoints", {}).get("login", {})
         if qualification == "pass" and login.get("p95", 0) > 500:
             qualification = "fail"
@@ -205,6 +231,7 @@ def write_report(results_dir: Path, output_path: Path) -> None:
         rows.append(
             "<tr>" + "".join("<td>" + html.escape(str(v)) + "</td>" for v in values) + "</tr>"
         )
+    charts = plot_curves(report, output_path.parent)
     output_path.write_text(
         '<!doctype html><html lang="en"><meta charset="utf-8"><title>Python benchmark report</title><style>body{font:16px system-ui;margin:2rem}table{border-collapse:collapse}td,th{padding:.5rem;border:1px solid #ccc}td:last-child{max-width:30rem}</style><h1>Python FastAPI benchmark</h1><p>'
         + html.escape(report["method"])
@@ -225,5 +252,81 @@ def write_report(results_dir: Path, output_path: Path) -> None:
         )
         + "</tr>"
         + "".join(rows)
-        + "</table></html>"
+        + "</table>"
+        + "".join(
+            '<figure><img style="max-width:100%" src="'
+            + html.escape(p.name)
+            + '" alt="Benchmark curve"></figure>'
+            for p in charts
+        )
+        + "</html>"
     )
+
+
+def metric_lines(path: Path, status: dict):
+    decoder = zlib.decompressobj(16 + zlib.MAX_WBITS)
+    buffer = b""
+    with path.open("rb") as f:
+        while chunk := f.read(65536):
+            try:
+                buffer += decoder.decompress(chunk)
+            except zlib.error:
+                status["incomplete"] = True
+                break
+            lines = buffer.split(b"\n")
+            buffer = lines.pop()
+            for line in lines:
+                if line.strip():
+                    yield line
+            if len(buffer) > 1048576:
+                status["incomplete"] = True
+                break
+    if not decoder.eof:
+        status["incomplete"] = True
+    if buffer.strip():
+        yield buffer
+
+
+def plot_curves(report: dict, output_dir: Path) -> list[Path]:
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    groups = {}
+    for trial in report["trials"]:
+        if not trial["metrics"].get("attempted", 1):
+            continue
+        groups.setdefault((trial["campaign"], trial["cell"]), []).append(trial)
+    paths = []
+    for metric, label, filename in [
+        ("successful_operations_s", "Successful operations/s", "throughput.png"),
+        ("p95", "p95 operation latency (ms)", "latency-p95.png"),
+    ]:
+        fig, axis = plt.subplots(figsize=(9, 5), layout="constrained")
+        for (campaign, cell), trials in groups.items():
+            rates = sorted({t["rate"] for t in trials})
+            values = []
+            used = []
+            for rate in rates:
+                sample = [
+                    t.get(metric, t["metrics"].get(metric)) for t in trials if t["rate"] == rate
+                ]
+                sample = [v for v in sample if v is not None]
+                if sample:
+                    used.append(rate)
+                    values.append(statistics.median(sample))
+            if used:
+                axis.plot(used, values, marker="o", label=cell + " / " + campaign)
+        axis.set_xlabel("Offered operations/s")
+        axis.set_ylabel(label)
+        axis.grid(True, alpha=0.25)
+        axis.set_title("Trial medians; consult qualification and individual-trial evidence")
+        if groups:
+            axis.legend(fontsize=8)
+        path = output_dir / filename
+        fig.savefig(path, dpi=150)
+        plt.close(fig)
+        paths.append(path)
+    return paths

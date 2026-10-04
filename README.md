@@ -11,7 +11,7 @@ Two real social APIs and a controlled Docker/k6 experiment. The API implements p
 | `benchmarks/k6` | Arrival-rate capacity scenarios, mixed operations, warm-up, user journeys and calibration |
 | `docker` | Matched source-built CPython and uv application images |
 
-See [methodology](docs/methodology.md), [AWS runbook](docs/aws-runbook.md), [runtime support](docs/runtime-support.md), the [approved specification](docs/superpowers/specs/2026-10-04-python-fastapi-benchmark-design.md), and [implementation plan](docs/superpowers/plans/2026-10-04-python-fastapi-benchmark.md).
+See [repository layout](docs/file-structure.md), [verification evidence](docs/verification.md), [implementation decisions](docs/implementation-decisions.md), [methodology](docs/methodology.md), [AWS runbook](docs/aws-runbook.md), [runtime support](docs/runtime-support.md), the [approved specification](docs/superpowers/specs/2026-10-04-python-fastapi-benchmark-design.md), and [implementation plan](docs/superpowers/plans/2026-10-04-python-fastapi-benchmark.md).
 
 ## Prerequisites
 

@@ -1,7 +1,7 @@
 # Python FastAPI benchmark experiment
 
 Date: 2026-10-04
-Status: Approved by the user on 2026-10-04; implementation plan pending review.
+Status: Approved and implemented; local correctness/workflow verification complete, AWS campaign not yet run.
 
 ## 1. Intent and agreed constraints
 

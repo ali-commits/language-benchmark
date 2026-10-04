@@ -2,6 +2,7 @@ import fcntl
 import json
 import os
 import time
+import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -9,13 +10,14 @@ from pathlib import Path
 import httpx
 import psycopg
 
+from .jit_probe import JIT_PROBE
 from .load_data import prepare_load_data
 from .manifest import atomic_json, collect_manifest
 from .models import RuntimeCell
 from .reset import restore_fixture
 from .runtime import validate_dependency_inventory, validate_worker_snapshots
 from .schedule import schedule_trials
-from .telemetry import Collector, rds_metrics
+from .telemetry import Collector, rds_metrics, validate_rds_evidence
 from .transport import CommandFailure, copy_from, copy_to, execute
 
 
@@ -57,7 +59,8 @@ def run_trial(campaign: dict, trial: dict, output_dir: Path) -> dict:
     base = campaign.get("base_url", "http://127.0.0.1:8000")
     project = backend.get("project", str(Path.cwd()))
     load_project = load.get("project", str(Path.cwd()))
-    runtime = f"{project}/artifacts/runtime/{trial['id']}"
+    runtime_identity = trial_runtime_identity(trial["id"])
+    runtime = f"{project}/artifacts/runtime/{runtime_identity}"
     inputs = f"{load_project}/artifacts/load/{trial['id']}/inputs"
     outputs = f"{load_project}/artifacts/load/{trial['id']}/output"
     env = {
@@ -65,7 +68,7 @@ def run_trial(campaign: dict, trial: dict, output_dir: Path) -> dict:
         "MODE": campaign["mode"],
         "WORKERS": str(cell.workers),
         "ADAPTER": cell.adapter,
-        "RUN_ID": trial["id"],
+        "RUN_ID": runtime_identity,
         "RUN_DIR_HOST": runtime,
         "EXPECTED_GIL": str(cell.gil).lower(),
         "EXPECTED_JIT": str(cell.jit).lower(),
@@ -76,7 +79,6 @@ def run_trial(campaign: dict, trial: dict, output_dir: Path) -> dict:
         "RDS_CA_FILE": os.environ.get("RDS_CA_FILE", str(Path("docker/README-ca.txt").resolve())),
     }
     compose = ["docker", "compose", "-f", "compose.aws.yaml"]
-    start = datetime.now(timezone.utc)
 
     def stop():
         execute(
@@ -115,7 +117,7 @@ def run_trial(campaign: dict, trial: dict, output_dir: Path) -> dict:
                 execute(backend, ["python3", "-c", code], {"TARGET": runtime}).stdout
             )
             if len(snapshots) == cell.workers and all(
-                s["run_id"] == trial["id"] for s in snapshots
+                s["run_id"] == runtime_identity for s in snapshots
             ):
                 break
             time.sleep(1)
@@ -125,6 +127,30 @@ def run_trial(campaign: dict, trial: dict, output_dir: Path) -> dict:
         if reasons:
             raise ValueError("; ".join(reasons))
         manifest["workers"] = snapshots
+        if cell.build == "jit":
+            probe = execute(
+                backend,
+                [
+                    "docker",
+                    "run",
+                    "--rm",
+                    "--cpus",
+                    "2",
+                    "--memory",
+                    "128m",
+                    "--memory-swap",
+                    "128m",
+                    "--entrypoint",
+                    "python3",
+                    "-e",
+                    "PYTHON_JIT=" + str(int(cell.jit)),
+                    cell.image,
+                    "-c",
+                    JIT_PROBE,
+                ],
+                timeout=30,
+            )
+            manifest["jit_engine_probe"] = json.loads(probe.stdout)
         manifest["image"] = json.loads(
             execute(
                 backend, ["docker", "image", "inspect", cell.image, "--format", "{{json .}}"]
@@ -183,7 +209,9 @@ def run_trial(campaign: dict, trial: dict, output_dir: Path) -> dict:
                 )
                 (output_dir / "warmup.log").write_text(w.stdout)
             # Threshold failures are overload evidence, not grounds to discard the run.
+            result["status"] = "measuring"
             result["measurement_started_epoch"] = time.time()
+            atomic_json(output_dir / "result.json", result)
             try:
                 measured = execute(
                     load,
@@ -210,14 +238,15 @@ def run_trial(campaign: dict, trial: dict, output_dir: Path) -> dict:
                 telemetry = rds_metrics(
                     campaign["rds_identifier"],
                     campaign["region"],
-                    start,
-                    datetime.now(timezone.utc),
+                    datetime.fromtimestamp(result["measurement_started_epoch"], timezone.utc),
+                    datetime.fromtimestamp(result["measurement_finished_epoch"], timezone.utc),
                 )
                 atomic_json(output_dir / "rds.json", telemetry)
-                if not any(telemetry.get("CPUUtilization", [])):
-                    result["reasons"].append(
-                        "RDS CloudWatch data not yet available; retrieve before qualification"
-                    )
+                result["reasons"] += validate_rds_evidence(
+                    telemetry,
+                    result["measurement_started_epoch"],
+                    result["measurement_finished_epoch"],
+                )
             except Exception as e:
                 result["reasons"].append("RDS telemetry missing: " + type(e).__name__)
 
@@ -253,6 +282,7 @@ def run_trial(campaign: dict, trial: dict, output_dir: Path) -> dict:
 
 def run_campaign(config_path: Path, output_dir: Path) -> list[dict]:
     cfg = json.loads(config_path.read_text())
+    cfg["campaign_instance"] = uuid.uuid4().hex
     trials = schedule_trials(cfg)
     results = []
     with (
@@ -302,3 +332,7 @@ def database_campaign_lock(dsn: str):
             yield
         finally:
             connection.execute("SELECT pg_advisory_unlock(20261005)")
+
+
+def trial_runtime_identity(trial_id: str) -> str:
+    return trial_id + "-" + uuid.uuid4().hex

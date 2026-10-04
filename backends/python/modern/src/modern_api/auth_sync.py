@@ -15,11 +15,15 @@ bearer = HTTPBearer(auto_error=False)
 Session = Annotated[SyncSession, Depends(session, scope="function")]
 
 
-def identity(credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)]) -> int:
+def identity(
+    credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer)], request: Request
+) -> int:
     if credentials is None:
         raise HTTPException(401, "invalid credentials", headers={"WWW-Authenticate": "Bearer"})
     try:
-        return decode_token(credentials.credentials, datetime.now(timezone.utc))
+        return decode_token(
+            credentials.credentials, datetime.now(timezone.utc), request.app.state.settings
+        )
     except ValueError:
         raise HTTPException(401, "invalid credentials", headers={"WWW-Authenticate": "Bearer"})
 
@@ -49,7 +53,7 @@ def login(body: Login, s: Session, request: Request):
     if not valid or row is None:
         raise HTTPException(401, "invalid credentials", headers={"WWW-Authenticate": "Bearer"})
     return Token(
-        access_token=issue_token(row["id"], datetime.now(timezone.utc)),
+        access_token=issue_token(row["id"], datetime.now(timezone.utc), request.app.state.settings),
         expires_in=request.app.state.settings.jwt_ttl_seconds,
     )
 

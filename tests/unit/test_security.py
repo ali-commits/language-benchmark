@@ -33,3 +33,18 @@ def test_password_salts_are_independent():
     assert a != b
     assert verify_password("valid-password", a)
     assert not verify_password("incorrect", a)
+
+
+def test_token_operations_accept_lifespan_settings_without_reading_environment(monkeypatch):
+    from baseline_api.security import decode_token, issue_token
+    from baseline_api.settings import Settings
+
+    cfg = Settings(
+        database_url="postgresql://unused@localhost/language_benchmark",
+        jwt_secret="cached-signing-secret-at-least-32-bytes",
+    )
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    monkeypatch.delenv("JWT_SECRET", raising=False)
+    now = datetime.now(timezone.utc)
+    token = issue_token(42, now, cfg)
+    assert decode_token(token, now, cfg) == 42

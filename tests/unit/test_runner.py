@@ -72,3 +72,11 @@ def test_nested_error_strings_redact_environment_secrets(monkeypatch):
     assert "unique-private-signing-value" not in str(
         redact({"reasons": ["invalid settings unique-private-signing-value"]})
     )
+
+
+def test_repeated_campaigns_use_fresh_worker_run_identities():
+    from bench.runner import trial_runtime_identity
+
+    a = trial_runtime_identity("same-trial")
+    b = trial_runtime_identity("same-trial")
+    assert a != b and a.startswith("same-trial-")

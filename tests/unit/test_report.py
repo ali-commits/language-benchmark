@@ -18,3 +18,10 @@ def test_missing_metrics_cannot_pass():
         )
         == "unknown"
     )
+
+
+def test_standalone_login_uses_500_ms_p95_target():
+    metrics = {"attempted": 1000, "succeeded": 1000, "dropped": 0, "p95": 300, "p99": 700}
+    assert qualify(metrics, [], workload="login") == "pass"
+    assert qualify(metrics, [], workload="mixed") == "fail"
+    assert qualify({**metrics, "p95": 501}, [], workload="login") == "fail"
