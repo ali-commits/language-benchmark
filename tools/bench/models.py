@@ -29,3 +29,28 @@ class RuntimeCell:
             raise ValueError('threaded comparison requires modern one-process configuration')
         if not self.supported and not self.reasons:
             raise ValueError('unsupported cells require reasons')
+
+@dataclass
+class FixtureSpec:
+    users: int=50000
+    posts: int=500000
+    follows_per_user: int=50
+    likes: int=1000000
+    comments: int=250000
+    seed: int=20261004
+    time_origin: str='2026-01-01T00:00:00+00:00'
+
+    def __post_init__(self):
+        if self.users<2 or self.posts<1 or not 0<=self.follows_per_user<self.users or not 0<=self.likes<=self.users*self.posts or self.comments<0:
+            raise ValueError('impossible fixture counts')
+
+@dataclass
+class FixtureManifest:
+    schema_revision: str
+    checksum: str
+    dump: str
+    identity: str
+    counts: dict
+    fingerprints: dict
+    generator_version: str='1'
+    spec: dict=field(default_factory=dict)
