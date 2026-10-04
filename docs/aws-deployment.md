@@ -5,7 +5,7 @@ Provisioned on 2026-10-04 in **ap-southeast-1c (Singapore)** using the existing 
 | Role | Instance | Size |
 | --- | --- | --- |
 | Backend | i-045a47c800445e2a1 | c7i.large, 2 vCPUs / 4 GiB |
-| Load generator | i-0169b9bccdf00ed65 | c7i.4xlarge, 16 vCPUs / 32 GiB |
+| Load generator | i-0169b9bccdf00ed65 | c7i.8xlarge, 32 vCPUs / 64 GiB |
 | Dashboard/orchestrator | i-022a1b193ba5fb794 | c7i.large, 2 vCPUs / 4 GiB |
 | Database | language-benchmark | RDS PostgreSQL 17.6, db.m7i.xlarge, encrypted gp3 100 GiB, private endpoint |
 
@@ -31,7 +31,7 @@ The primary campaign now measures concurrent users performing stateful journeys 
 
 The earlier arrival-rate pilot and its failed `language-benchmark-full.service` remain separate evidence. They cannot establish a concurrent-user capacity. The new controller is `language-benchmark-user-capacity.service`, with status/results in `artifacts/results/user-capacity/`.
 
-Runtime depends on the number of search probes and repetitions and can span multiple days. The three EC2 machines total approximately **USD 1.03/hour**, and the RDS compute rate is **USD 0.494/hour** in the checked AWS on-demand catalog. Combined compute is about **USD 1.52/hour**, plus EBS/RDS storage and public IPv4 charges. These are estimates at provisioning time, not a billing guarantee.
+Runtime depends on the number of search probes and repetitions and can span multiple days. The three EC2 machines total approximately **USD 1.85/hour**, and the RDS compute rate is **USD 0.494/hour** in the checked AWS on-demand catalog. Combined compute is about **USD 2.35/hour**, plus EBS/RDS storage and public IPv4 charges. These are estimates at provisioning time, not a billing guarantee.
 
 Check progress:
 
@@ -60,3 +60,9 @@ uv run python infrastructure/aws/stop.py
 This preserves disk/database data. **Storage charges continue while stopped**, and **RDS automatically restarts after seven days**. Later deletion requires a separate decision about preserving results/snapshots. The existing unrelated `rds-eb` database is not part of this deployment or shutdown script.
 
 Private deployment identifiers, SSH configuration/key and credentials are under ignored `artifacts/aws/`. Do not share that directory wholesale; exported benchmark manifests/reports redact credentials.
+
+## Generator reliability
+
+The generator was enlarged to c7i.8xlarge after the first concurrent-user trial exhausted source ports and saturated generator CPU. It uses four VPC source addresses, a 1024–65535 ephemeral port range, TCP TIME_WAIT reuse and a 250,000-file-descriptor container limit, following Grafana’s [large-test guidance](https://grafana.com/docs/k6/latest/testing-guides/running-large-tests/). The backend remains c7i.large with Docker enforcing 2 CPUs and 3 GiB memory. No backend CPU allocation changed.
+
+k6 records socket/resource failures separately from request timeouts. Warning-per-request logs are suppressed to prevent an overload log flood; raw counters retain failure evidence. Backend log collection retains the last 2,000 lines plus container exit/OOM and CPU/memory limits. The invalid initial campaign remains in `artifacts/results/user-capacity-invalid-20261004/` after the replacement starts.

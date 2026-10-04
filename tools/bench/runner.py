@@ -89,7 +89,28 @@ def run_trial(campaign: dict, trial: dict, output_dir: Path) -> dict:
             {"INPUT_DIR": inputs, "OUTPUT_DIR": outputs},
         )
         try:
-            logs = execute(backend, compose + ["logs", "--no-color", "--tail", "2000"], env, timeout=30)
+            ids = execute(
+                backend, compose + ["ps", "--all", "--quiet"], env, timeout=30
+            ).stdout.split()
+            if ids:
+                state = execute(
+                    backend,
+                    [
+                        "docker",
+                        "inspect",
+                        "--format",
+                        '{"state":{{json .State}},"nano_cpus":{{.HostConfig.NanoCpus}},"memory":{{.HostConfig.Memory}}}',
+                        *ids,
+                    ],
+                    timeout=30,
+                )
+                (output_dir / "backend-state.jsonl").write_text(state.stdout)
+        except Exception:
+            result["reasons"].append("backend state unavailable")
+        try:
+            logs = execute(
+                backend, compose + ["logs", "--no-color", "--tail", "2000"], env, timeout=30
+            )
             from .manifest import redact
 
             (output_dir / "backend.log").write_text(redact(logs.stdout + "\n" + logs.stderr))
