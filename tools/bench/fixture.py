@@ -65,7 +65,7 @@ def capture_fixture(dsn: str, output_dir: Path) -> FixtureManifest:
     output_dir.mkdir(parents=True, exist_ok=True)
     with psycopg.connect(dsn) as c:
         marker = c.execute(
-            "SELECT identity::text FROM benchmark_identity WHERE singleton"
+            "SELECT identity::text,fixture_spec FROM benchmark_identity WHERE singleton"
         ).fetchone()
         if not marker:
             raise ValueError("database is not explicitly marked for benchmark reset")
@@ -75,7 +75,13 @@ def capture_fixture(dsn: str, output_dir: Path) -> FixtureManifest:
         subprocess.run(argv, env=env, stdout=f, stderr=subprocess.PIPE, check=True, timeout=1800)
     counts, digests = logical_fingerprints(dsn)
     manifest = FixtureManifest(
-        "0001", hashlib.sha256(dump.read_bytes()).hexdigest(), dump.name, marker[0], counts, digests
+        "0001",
+        hashlib.sha256(dump.read_bytes()).hexdigest(),
+        dump.name,
+        marker[0],
+        counts,
+        digests,
+        spec=marker[1],
     )
     (output_dir / "manifest.json").write_text(json.dumps(asdict(manifest), indent=2) + "\n")
     return manifest

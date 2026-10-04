@@ -1,3 +1,5 @@
+import time
+
 from fastapi import Request
 from sqlalchemy.ext.asyncio import create_async_engine
 
@@ -19,4 +21,7 @@ def make_engine(cfg: Settings):
 async def session(request: Request):
     async with request.app.state.sessions() as s:
         async with s.begin():
+            started = time.monotonic()
+            await s.connection()
+            request.app.state.telemetry.record(time.monotonic() - started)
             yield s

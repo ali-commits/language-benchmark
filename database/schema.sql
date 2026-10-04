@@ -30,4 +30,4 @@ CREATE TABLE comments (
  created_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX comments_post_created_idx ON comments(post_id,created_at DESC,id DESC);
-CREATE TABLE benchmark_identity (singleton boolean PRIMARY KEY DEFAULT true CHECK(singleton), identity uuid NOT NULL);
+CREATE TABLE benchmark_identity (singleton boolean PRIMARY KEY DEFAULT true CHECK(singleton), identity uuid NOT NULL, fixture_spec jsonb NOT NULL DEFAULT '{}'::jsonb);

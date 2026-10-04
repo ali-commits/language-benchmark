@@ -1,6 +1,8 @@
 import hashlib
 import json
+import os
 import platform
+import re
 import subprocess
 from pathlib import Path
 
@@ -19,6 +21,12 @@ def redact(value):
         value.startswith("postgresql://") or value.startswith("postgresql+psycopg://")
     ):
         return "[redacted connection]"
+    if isinstance(value, str):
+        value = re.sub(r"postgresql(?:\+psycopg)?://[^\s'\"<>]+", "[redacted connection]", value)
+        for key in ("JWT_SECRET", "SEED_PASSWORD", "DATABASE_URL"):
+            secret = os.environ.get(key)
+            if secret:
+                value = value.replace(secret, "[redacted]")
     return value
 
 

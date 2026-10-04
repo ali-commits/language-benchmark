@@ -74,6 +74,6 @@ Stop `compose.load.yaml` and `compose.aws.yaml` services on their respective hos
 uv run -m bench.cli recover --fixture artifacts/full-fixture/manifest.json --database language_benchmark
 ```
 
-Verify fingerprints, session absence and service state before restarting a campaign. A host crash can leave a remote generator running; stop it explicitly. Retain completed and partial artifacts. Host lock files use advisory locking and are not proof of cross-host isolation; use the dedicated DB/campaign scope.
+Verify fingerprints, session absence and service state before restarting a campaign. A host crash can leave a remote generator running; stop it explicitly. Retain completed and partial artifacts. The runner holds both a local host lock and a PostgreSQL advisory campaign lock, so another cooperating orchestrator cannot run against the same database concurrently.
 
 After collecting evidence, remove transient token files, stop containers, and terminate dedicated EC2/RDS resources through the AWS account workflow. Preserve encrypted canonical fixtures/results if required. The repository never provisions or destroys cloud resources automatically.

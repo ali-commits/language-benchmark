@@ -1,9 +1,11 @@
 """Deterministic logical data; password hashes use real random salts."""
 
 import csv
+import json
 import os
 import random
 from concurrent.futures import ProcessPoolExecutor
+from dataclasses import asdict
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -135,6 +137,10 @@ def seed_database(dsn: str, spec: FixtureSpec) -> dict[str, int]:
         }
         if counts != expected:
             raise ValueError("incorrect seed counts")
+        c.execute(
+            "UPDATE benchmark_identity SET fixture_spec=%s::jsonb WHERE singleton",
+            (json.dumps(asdict(spec)),),
+        )
         return counts
 
 

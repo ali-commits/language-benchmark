@@ -9,7 +9,7 @@ import psycopg
 
 from .transport import execute
 
-HOST_PROBE = "import json,pathlib,time; print(json.dumps({'time':time.time(),'stat':pathlib.Path('/proc/stat').read_text(),'meminfo':pathlib.Path('/proc/meminfo').read_text(),'netdev':pathlib.Path('/proc/net/dev').read_text(),'loadavg':pathlib.Path('/proc/loadavg').read_text()}))"
+HOST_PROBE = "import json,pathlib,time; print(json.dumps({'time':time.time(),'stat':pathlib.Path('/proc/stat').read_text(),'meminfo':pathlib.Path('/proc/meminfo').read_text(),'netdev':pathlib.Path('/proc/net/dev').read_text(),'loadavg':pathlib.Path('/proc/loadavg').read_text(),'cpuinfo':pathlib.Path('/proc/cpuinfo').read_text(),'vmstat':pathlib.Path('/proc/vmstat').read_text()}))"
 
 
 class Collector:
@@ -31,6 +31,16 @@ class Collector:
                             execute(host, ["python3", "-c", HOST_PROBE], timeout=10).stdout
                         )
                         if name == "backend":
+                            read = "import pathlib,json,os; print(json.dumps([json.loads(p.read_text()) for p in pathlib.Path(os.environ['RUNTIME']).glob('*.metrics')]))"
+                            if host.get("runtime_dir"):
+                                entry["worker_pools"] = json.loads(
+                                    execute(
+                                        host,
+                                        ["python3", "-c", read],
+                                        {"RUNTIME": host["runtime_dir"]},
+                                        timeout=10,
+                                    ).stdout
+                                )
                             entry["docker"] = execute(
                                 host,
                                 ["docker", "stats", "--no-stream", "--format", "{{json .}}"],

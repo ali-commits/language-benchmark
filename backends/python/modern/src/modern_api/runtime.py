@@ -8,6 +8,8 @@ import sys
 import sysconfig
 from pathlib import Path
 
+from psycopg import pq
+
 
 def runtime_snapshot() -> dict:
     jit = getattr(sys, "_jit", None)
@@ -22,6 +24,8 @@ def runtime_snapshot() -> dict:
         jit=bool(jit and jit.is_enabled()),
         compiler=platform.python_compiler(),
         config_args=sysconfig.get_config_var("CONFIG_ARGS"),
+        postgres_driver=pq.__impl__,
+        libpq_version=pq.version(),
         dependencies={d.metadata["Name"]: d.version for d in importlib.metadata.distributions()},
     )
 

@@ -3,7 +3,7 @@ FROM ghcr.io/astral-sh/uv:0.12.22@sha256:f513a91fc62fe7c17567eee97230dd198e43edb
 FROM ${RUNTIME_IMAGE} AS wheels
 USER root
 COPY --from=uv /uv /usr/local/bin/uv
-RUN apt-get update && apt-get install -y --no-install-recommends curl build-essential libffi-dev && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends curl build-essential libffi-dev libpq-dev && rm -rf /var/lib/apt/lists/*
 COPY runtimes/python/rust-lock.json /tmp/rust-lock.json
 RUN python3 -c "import json,urllib.request,hashlib,tarfile,subprocess; d=json.load(open('/tmp/rust-lock.json')); urllib.request.urlretrieve(d['url'],'/tmp/rust.tar.xz'); assert hashlib.sha256(open('/tmp/rust.tar.xz','rb').read()).hexdigest()==d['sha256']; t=tarfile.open('/tmp/rust.tar.xz'); t.extractall('/tmp'); subprocess.run(['sh','/tmp/rust-'+d['version']+'-x86_64-unknown-linux-gnu/install.sh','--prefix=/opt/rust','--components=rustc,cargo,rust-std-x86_64-unknown-linux-gnu','--disable-ldconfig'],check=True)"
 ENV PATH=/opt/rust/bin:$PATH

@@ -51,3 +51,11 @@ def test_oversized_and_chunked_body_is_rejected(api_client):
         "/api/v1/auth/register", content=b"x" * 17000, headers={"Content-Type": "application/json"}
     )
     assert r.status_code == 413
+
+
+def test_connection_metrics_record_real_database_checkout(api_client):
+    api_client.post("/api/v1/auth/register", json={"username": "alice", "password": PASSWORD})
+    metrics = api_client.get("/health/metrics")
+    assert metrics.status_code == 200
+    assert metrics.json()["connection_acquires"] >= 1
+    assert metrics.json()["connection_acquire_ms"] >= 0

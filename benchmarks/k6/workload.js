@@ -10,7 +10,7 @@ const pairs=new SharedArray('pairs',()=>JSON.parse(open(path)).like_pairs);
 const expiry=cfg.expires_at;
 if(!cfg.rate||cfg.rate<1||!cfg.vus||cfg.vus<1||cfg.duration<1)throw new Error('invalid bounded scenario');
 if(expiry*1000<Date.now()+(cfg.duration+60)*1000)throw new Error('tokens expire during run');
-if(pairs.length<cfg.rate*cfg.duration)throw new Error('mutation pairs insufficient for offered operations');
+if(pairs.length<cfg.rate*cfg.duration+cfg.vus)throw new Error('mutation pairs insufficient for offered operations');
 export const options={scenarios:{capacity:{executor:'constant-arrival-rate',rate:cfg.rate,timeUnit:'1s',duration:cfg.duration+'s',preAllocatedVUs:cfg.vus,maxVUs:cfg.vus,gracefulStop:'20s'}},summaryTrendStats:['avg','med','p(50)','p(95)','p(99)','max'],systemTags:['status','method','name','scenario'],thresholds:{operation_duration:['p(95)<200','p(99)<500'],operations_failed:['count==0'],dropped_iterations:['count==0']}};
 let pendingUnlike=null;
 export default function() {

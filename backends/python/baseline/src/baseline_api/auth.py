@@ -14,7 +14,7 @@ from .security import DUMMY_HASH, decode_token, hash_password, issue_token, veri
 
 router = APIRouter(prefix="/api/v1")
 bearer = HTTPBearer(auto_error=False)
-Session = Annotated[AsyncSession, Depends(session)]
+Session = Annotated[AsyncSession, Depends(session, scope="function")]
 
 
 async def identity(

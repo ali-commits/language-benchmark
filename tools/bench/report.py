@@ -34,7 +34,7 @@ def percentile(values: list[float], percent: float) -> float:
 def read_metrics(path: Path) -> dict:
     durations = []
     per = {}
-    metrics = {"attempted": 0, "succeeded": 0, "dropped": 0}
+    metrics = {"attempted": 0, "succeeded": 0, "dropped": 0, "http_requests": 0}
     with gzip.open(path, "rt") as f:
         for line in f:
             point = json.loads(line)
@@ -54,6 +54,8 @@ def read_metrics(path: Path) -> dict:
             if name == "operations_succeeded":
                 metrics["succeeded"] += value
                 bucket["succeeded"] += value
+            if name == "http_reqs":
+                metrics["http_requests"] += value
             if name == "dropped_iterations":
                 metrics["dropped"] += value
     if durations:
@@ -153,6 +155,7 @@ def summarize_campaign(results_dir: Path) -> dict:
                 "reasons": reasons,
                 "metrics": metrics,
                 "achieved_operations_s": metrics.get("attempted", 0) / seconds,
+                "achieved_http_requests_s": metrics.get("http_requests", 0) / seconds,
                 "successful_operations_s": metrics.get("succeeded", 0) / seconds,
                 "artifact": str(p.parent),
             }

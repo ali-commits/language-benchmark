@@ -55,3 +55,20 @@ def test_second_campaign_cannot_acquire_lock(tmp_path):
         with pytest.raises(RuntimeError):
             with campaign_lock(tmp_path / "lock"):
                 pass
+
+
+def test_transport_preserves_failed_command_output():
+    import sys
+
+    from bench.transport import CommandFailure, execute
+
+    with pytest.raises(CommandFailure) as error:
+        execute({}, [sys.executable, "-c", "import sys; print('partial result'); sys.exit(99)"])
+    assert error.value.returncode == 99 and "partial result" in error.value.stdout
+
+
+def test_nested_error_strings_redact_environment_secrets(monkeypatch):
+    monkeypatch.setenv("JWT_SECRET", "unique-private-signing-value")
+    assert "unique-private-signing-value" not in str(
+        redact({"reasons": ["invalid settings unique-private-signing-value"]})
+    )

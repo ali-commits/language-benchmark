@@ -1,7 +1,7 @@
 fastapi==0.142.2
-pydantic==2.13.5
+pydantic==2.14.0b2
 pydantic-settings==2.15.0
-psycopg[binary,pool]==3.3.6
+psycopg[c,pool]==3.3.6
 uvicorn==0.54.0
 argon2-cffi==25.1.0
 PyJWT==2.15.1

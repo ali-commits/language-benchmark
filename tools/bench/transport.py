@@ -9,6 +9,14 @@ from pathlib import Path
 REMOTE = "import sys,json,subprocess,os; d=json.load(sys.stdin); r=subprocess.run(d['argv'],cwd=d['cwd'],env={**os.environ,**d['env']}); sys.exit(r.returncode)"
 
 
+class CommandFailure(RuntimeError):
+    def __init__(self, result):
+        self.returncode = result.returncode
+        self.stdout = result.stdout
+        self.stderr = result.stderr
+        super().__init__(f"operation failed (exit {result.returncode}): " + result.stderr[-4000:])
+
+
 def execute(
     host: dict, argv: list[str], env: dict | None = None, timeout: int = 1800
 ) -> subprocess.CompletedProcess:
@@ -32,7 +40,7 @@ def execute(
             timeout=timeout,
         )
     if result.returncode:
-        raise RuntimeError(f"operation failed (exit {result.returncode}): " + result.stderr[-4000:])
+        raise CommandFailure(result)
     return result
 
 

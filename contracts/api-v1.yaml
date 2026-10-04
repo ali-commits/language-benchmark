@@ -1,0 +1,553 @@
+openapi: 3.1.0
+info:
+  title: Python baseline social API
+  version: 1.0.0
+paths:
+  /api/v1/auth/register:
+    post:
+      summary: Register
+      operationId: register_api_v1_auth_register_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Credentials'
+        required: true
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/auth/login:
+    post:
+      summary: Login
+      operationId: login_api_v1_auth_login_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Login'
+        required: true
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Token'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/users/me:
+    get:
+      summary: Me
+      operationId: me_api_v1_users_me_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+      security:
+      - HTTPBearer: []
+  /api/v1/posts:
+    post:
+      summary: Create Post
+      operationId: create_post_api_v1_posts_post
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PostInput'
+        required: true
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Post'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+      security:
+      - HTTPBearer: []
+  /api/v1/posts/{post_id}:
+    get:
+      summary: Detail
+      operationId: detail_api_v1_posts__post_id__get
+      security:
+      - HTTPBearer: []
+      parameters:
+      - name: post_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Post Id
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Post'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/feed:
+    get:
+      summary: Feed
+      operationId: feed_api_v1_feed_get
+      security:
+      - HTTPBearer: []
+      parameters:
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 100
+          minimum: 1
+          default: 20
+          title: Limit
+      - name: cursor
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Cursor
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PostPage'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/users/{target_id}/follow:
+    put:
+      summary: Follow
+      operationId: follow_api_v1_users__target_id__follow_put
+      security:
+      - HTTPBearer: []
+      parameters:
+      - name: target_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Target Id
+      responses:
+        '204':
+          description: Successful Response
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    delete:
+      summary: Unfollow
+      operationId: unfollow_api_v1_users__target_id__follow_delete
+      security:
+      - HTTPBearer: []
+      parameters:
+      - name: target_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Target Id
+      responses:
+        '204':
+          description: Successful Response
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/posts/{post_id}/like:
+    put:
+      summary: Like
+      operationId: like_api_v1_posts__post_id__like_put
+      security:
+      - HTTPBearer: []
+      parameters:
+      - name: post_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Post Id
+      responses:
+        '204':
+          description: Successful Response
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    delete:
+      summary: Unlike
+      operationId: unlike_api_v1_posts__post_id__like_delete
+      security:
+      - HTTPBearer: []
+      parameters:
+      - name: post_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Post Id
+      responses:
+        '204':
+          description: Successful Response
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /api/v1/posts/{post_id}/comments:
+    post:
+      summary: Create Comment
+      operationId: create_comment_api_v1_posts__post_id__comments_post
+      security:
+      - HTTPBearer: []
+      parameters:
+      - name: post_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Post Id
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CommentInput'
+      responses:
+        '201':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Comment'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+    get:
+      summary: Comments
+      operationId: comments_api_v1_posts__post_id__comments_get
+      security:
+      - HTTPBearer: []
+      parameters:
+      - name: post_id
+        in: path
+        required: true
+        schema:
+          type: integer
+          title: Post Id
+      - name: limit
+        in: query
+        required: false
+        schema:
+          type: integer
+          maximum: 100
+          minimum: 1
+          default: 20
+          title: Limit
+      - name: cursor
+        in: query
+        required: false
+        schema:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Cursor
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommentPage'
+        '422':
+          description: Validation Error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HTTPValidationError'
+  /health/live:
+    get:
+      summary: Live
+      operationId: live_health_live_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+  /health/ready:
+    get:
+      summary: Ready
+      operationId: ready_health_ready_get
+      responses:
+        '200':
+          description: Successful Response
+          content:
+            application/json:
+              schema: {}
+components:
+  schemas:
+    Comment:
+      properties:
+        id:
+          type: integer
+          title: Id
+        content:
+          type: string
+          title: Content
+        created_at:
+          type: string
+          format: date-time
+          title: Created At
+        author:
+          $ref: '#/components/schemas/User'
+      type: object
+      required:
+      - id
+      - content
+      - created_at
+      - author
+      title: Comment
+    CommentInput:
+      properties:
+        content:
+          type: string
+          maxLength: 1000
+          minLength: 1
+          title: Content
+      additionalProperties: false
+      type: object
+      required:
+      - content
+      title: CommentInput
+    CommentPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/Comment'
+          type: array
+          title: Items
+        next_cursor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Next Cursor
+      type: object
+      required:
+      - items
+      - next_cursor
+      title: CommentPage
+    Credentials:
+      properties:
+        username:
+          type: string
+          maxLength: 32
+          minLength: 3
+          pattern: ^[A-Za-z0-9_]+$
+          title: Username
+        password:
+          type: string
+          maxLength: 128
+          minLength: 12
+          title: Password
+      additionalProperties: false
+      type: object
+      required:
+      - username
+      - password
+      title: Credentials
+    HTTPValidationError:
+      properties:
+        detail:
+          items:
+            $ref: '#/components/schemas/ValidationError'
+          type: array
+          title: Detail
+      type: object
+      title: HTTPValidationError
+    Login:
+      properties:
+        username:
+          type: string
+          maxLength: 32
+          minLength: 3
+          pattern: ^[A-Za-z0-9_]+$
+          title: Username
+        password:
+          type: string
+          maxLength: 128
+          minLength: 1
+          title: Password
+      additionalProperties: false
+      type: object
+      required:
+      - username
+      - password
+      title: Login
+    Post:
+      properties:
+        id:
+          type: integer
+          title: Id
+        content:
+          type: string
+          title: Content
+        created_at:
+          type: string
+          format: date-time
+          title: Created At
+        author:
+          $ref: '#/components/schemas/User'
+        like_count:
+          type: integer
+          title: Like Count
+        comment_count:
+          type: integer
+          title: Comment Count
+        liked:
+          type: boolean
+          title: Liked
+      type: object
+      required:
+      - id
+      - content
+      - created_at
+      - author
+      - like_count
+      - comment_count
+      - liked
+      title: Post
+    PostInput:
+      properties:
+        content:
+          type: string
+          maxLength: 280
+          minLength: 1
+          title: Content
+      additionalProperties: false
+      type: object
+      required:
+      - content
+      title: PostInput
+    PostPage:
+      properties:
+        items:
+          items:
+            $ref: '#/components/schemas/Post'
+          type: array
+          title: Items
+        next_cursor:
+          anyOf:
+          - type: string
+          - type: 'null'
+          title: Next Cursor
+      type: object
+      required:
+      - items
+      - next_cursor
+      title: PostPage
+    Token:
+      properties:
+        access_token:
+          type: string
+          title: Access Token
+        token_type:
+          type: string
+          title: Token Type
+          default: bearer
+        expires_in:
+          type: integer
+          title: Expires In
+      type: object
+      required:
+      - access_token
+      - expires_in
+      title: Token
+    User:
+      properties:
+        id:
+          type: integer
+          title: Id
+        username:
+          type: string
+          title: Username
+      type: object
+      required:
+      - id
+      - username
+      title: User
+    ValidationError:
+      properties:
+        loc:
+          items:
+            anyOf:
+            - type: string
+            - type: integer
+          type: array
+          title: Location
+        msg:
+          type: string
+          title: Message
+        type:
+          type: string
+          title: Error Type
+        input:
+          title: Input
+        ctx:
+          type: object
+          title: Context
+      type: object
+      required:
+      - loc
+      - msg
+      - type
+      title: ValidationError
+  securitySchemes:
+    HTTPBearer:
+      type: http
+      scheme: bearer

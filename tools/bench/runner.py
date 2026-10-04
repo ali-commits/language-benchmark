@@ -7,15 +7,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import httpx
+import psycopg
 
 from .load_data import prepare_load_data
 from .manifest import atomic_json, collect_manifest
 from .models import RuntimeCell
 from .reset import restore_fixture
-from .runtime import validate_worker_snapshots
+from .runtime import validate_dependency_inventory, validate_worker_snapshots
 from .schedule import schedule_trials
 from .telemetry import Collector, rds_metrics
-from .transport import copy_from, copy_to, execute
+from .transport import CommandFailure, copy_from, copy_to, execute
 
 
 @contextmanager
@@ -83,6 +84,13 @@ def run_trial(campaign: dict, trial: dict, output_dir: Path) -> dict:
             ["docker", "compose", "-f", "compose.load.yaml", "down"],
             {"INPUT_DIR": inputs, "OUTPUT_DIR": outputs},
         )
+        try:
+            logs = execute(backend, compose + ["logs", "--no-color"], env, timeout=30)
+            from .manifest import redact
+
+            (output_dir / "backend.log").write_text(redact(logs.stdout + "\n" + logs.stderr))
+        except Exception:
+            result["reasons"].append("backend logs unavailable")
         execute(backend, compose + ["down"], env)
 
     def reset():
@@ -111,7 +119,9 @@ def run_trial(campaign: dict, trial: dict, output_dir: Path) -> dict:
             ):
                 break
             time.sleep(1)
-        reasons = validate_worker_snapshots(cell, snapshots)
+        reasons = validate_worker_snapshots(cell, snapshots) + validate_dependency_inventory(
+            cell, snapshots
+        )
         if reasons:
             raise ValueError("; ".join(reasons))
         manifest["workers"] = snapshots
@@ -127,7 +137,9 @@ def run_trial(campaign: dict, trial: dict, output_dir: Path) -> dict:
         secret_inputs = output_dir / "private"
         secret_inputs.mkdir(mode=0o700)
         required = campaign["warmup_seconds"] + campaign["measure_seconds"] + 120
-        os.environ["PAIR_BUDGET"] = str(trial["rate"] * campaign["measure_seconds"])
+        os.environ["PAIR_BUDGET"] = str(
+            trial["rate"] * campaign["measure_seconds"] + campaign["vus"]
+        )
         load_metadata = prepare_load_data(
             base, Path(campaign["credentials"]), secret_inputs / "load-data.json", required
         )
@@ -158,7 +170,9 @@ def run_trial(campaign: dict, trial: dict, output_dir: Path) -> dict:
         }
         load_compose = ["docker", "compose", "-f", "compose.load.yaml", "run", "--rm", "k6", "run"]
         with Collector(
-            {"backend": backend, "generator": load}, dsn, output_dir / "telemetry.jsonl"
+            {"backend": {**backend, "runtime_dir": runtime}, "generator": load},
+            dsn,
+            output_dir / "telemetry.jsonl",
         ) as collect:
             if campaign["warmup_seconds"]:
                 w = execute(
@@ -169,6 +183,7 @@ def run_trial(campaign: dict, trial: dict, output_dir: Path) -> dict:
                 )
                 (output_dir / "warmup.log").write_text(w.stdout)
             # Threshold failures are overload evidence, not grounds to discard the run.
+            result["measurement_started_epoch"] = time.time()
             try:
                 measured = execute(
                     load,
@@ -178,8 +193,12 @@ def run_trial(campaign: dict, trial: dict, output_dir: Path) -> dict:
                     timeout=campaign["measure_seconds"] + 120,
                 )
                 (output_dir / "k6.log").write_text(measured.stdout)
-            except RuntimeError as e:
-                result["reasons"].append(str(e))
+            except CommandFailure as e:
+                (output_dir / "k6.log").write_text(e.stdout + "\n" + e.stderr)
+                result["k6_exit_code"] = e.returncode
+                if e.returncode != 99:
+                    result["reasons"].append("k6 execution failed with exit " + str(e.returncode))
+            result["measurement_finished_epoch"] = time.time()
             copy_from(load, outputs, output_dir / "k6")
         result["status"] = "measured"
         if collect.errors:
@@ -236,7 +255,10 @@ def run_campaign(config_path: Path, output_dir: Path) -> list[dict]:
     cfg = json.loads(config_path.read_text())
     trials = schedule_trials(cfg)
     results = []
-    with campaign_lock(Path("artifacts/campaign.lock")):
+    with (
+        campaign_lock(Path("artifacts/campaign.lock")),
+        database_campaign_lock(os.environ["DATABASE_URL"]),
+    ):
         for trial in trials:
             result = run_trial(cfg, trial, output_dir / trial["id"])
             results.append(result)
@@ -268,3 +290,15 @@ def trial_lifecycle(stop, reset, measure) -> dict:
             result["status"] = "failed"
             result["reasons"].append("cleanup failed: " + type(e).__name__ + ": " + str(e))
     return result
+
+
+@contextmanager
+def database_campaign_lock(dsn: str):
+    # Separate from the short reset lock: held throughout the whole campaign.
+    with psycopg.connect(dsn, autocommit=True, application_name="lb-orchestrator") as connection:
+        if not connection.execute("SELECT pg_try_advisory_lock(20261005)").fetchone()[0]:
+            raise RuntimeError("another orchestrator owns this database campaign lock")
+        try:
+            yield
+        finally:
+            connection.execute("SELECT pg_advisory_unlock(20261005)")

@@ -1,0 +1,42 @@
+name: verify
+on: [push, pull_request, workflow_dispatch]
+jobs:
+  contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17.6
+        env:
+          POSTGRES_PASSWORD: benchmark
+          POSTGRES_DB: language_benchmark_test
+        ports: ['55432:5432']
+        options: >-
+          --health-cmd 'pg_isready -U postgres' --health-interval 2s
+          --health-timeout 3s --health-retries 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v7
+        with: {version: '0.12.22'}
+      - run: uv sync --locked
+      - run: uv run -m pytest -q
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:benchmark@127.0.0.1:55432/language_benchmark_test
+          SKIP_DUMP_TEST: '1'
+      - run: uvx ruff==0.16.10 check backends tools tests runtimes
+      - run: docker compose config --quiet
+      - run: docker compose -f compose.aws.yaml config --quiet
+      - run: docker compose -f compose.load.yaml config --quiet
+  source-build:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        release: ['3.10.22','3.11.17','3.12.13','3.13.16','3.14.8','3.15.0rc3']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v7
+        with: {version: '0.12.22'}
+      - run: uv run python runtimes/python/build.py --version '${{ matrix.release }}' --apps

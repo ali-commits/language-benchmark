@@ -26,7 +26,7 @@ uv run python runtimes/python/build.py --version 3.15.0rc3 --mode jit --apps
 uv run python runtimes/python/build.py --version 3.15.0rc3 --mode free-threaded --apps
 ```
 
-The pinned 3.15 release is **3.15.0rc3**, not a stable release. `--smoke` builds use a different image prefix and lack PGO/LTO; do not substitute them for measured images.
+The pinned 3.15 release is **3.15.0rc3**, not a stable release. The modern stack pins **Pydantic 2.14.0b2 / Core 2.49.0** for the new free-threaded ABI; the baseline keeps stable Pydantic 2.13.5 across all versions. `--smoke` builds use a different image prefix and lack PGO/LTO; do not substitute them for measured images.
 
 ## Local first run
 
@@ -75,7 +75,7 @@ Full data: 50,000 users, 500,000 posts, 2,500,000 follows, 1,000,000 likes and 2
 
 ## Verification
 
-Contract tests use a **dedicated disposable** `language_benchmark` database and recreate its public schema for each test. Never point tests at your canonical AWS fixture database. Set `TEST_DATABASE_URL` for the test DB; default is the development verification container port 55432.
+Contract tests use a **dedicated disposable** `language_benchmark_test` database and recreate its public schema for each test. Never point tests at your canonical AWS fixture database. Set `TEST_DATABASE_URL` for the test DB; default is `language_benchmark_test` on the development verification container port 55432. Test database names must end `_test`; ordinary benchmark databases are rejected.
 
 ```sh
 uv run -m pytest -q
