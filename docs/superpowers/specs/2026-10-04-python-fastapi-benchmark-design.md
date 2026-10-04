@@ -1,7 +1,7 @@
 # Python FastAPI benchmark experiment
 
 Date: 2026-10-04
-Status: Written specification for user review; implementation has not started.
+Status: Approved by the user on 2026-10-04; implementation plan pending review.
 
 ## 1. Intent and agreed constraints
 
