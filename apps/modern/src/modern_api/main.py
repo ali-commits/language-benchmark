@@ -4,6 +4,8 @@ from fastapi import FastAPI
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker
 from .settings import Settings
+from .runtime import publish
+from .body_limit import BodyLimit
 from .db import make_engine
 from .auth import router
 from .social import router as social_router
@@ -19,9 +21,11 @@ def create_app() -> FastAPI:
         app.state.sessions=async_sessionmaker(app.state.engine,expire_on_commit=False)
         try:
             async with app.state.engine.connect() as c: await c.execute(text('SELECT 1'))
+            app.state.runtime=publish(cfg)
             yield
         finally: await app.state.engine.dispose()
     app=FastAPI(title='Python modern social API',version='1.0.0',lifespan=lifespan)
+    app.add_middleware(BodyLimit)
     app.include_router(router)
     app.include_router(social_router)
     @app.get('/health/live')

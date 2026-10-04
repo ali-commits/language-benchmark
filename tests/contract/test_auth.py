@@ -22,3 +22,7 @@ def test_unknown_and_wrong_password_are_uniform_401(api_client):
 
 def test_short_password_is_422(api_client):
     assert api_client.post('/api/v1/auth/register',json={'username':'alice','password':'short'}).status_code==422
+
+def test_oversized_and_chunked_body_is_rejected(api_client):
+    r=api_client.post('/api/v1/auth/register',content=b'x'*17000,headers={'Content-Type':'application/json'})
+    assert r.status_code==413
