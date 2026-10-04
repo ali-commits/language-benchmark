@@ -89,7 +89,7 @@ def run_trial(campaign: dict, trial: dict, output_dir: Path) -> dict:
             {"INPUT_DIR": inputs, "OUTPUT_DIR": outputs},
         )
         try:
-            logs = execute(backend, compose + ["logs", "--no-color"], env, timeout=30)
+            logs = execute(backend, compose + ["logs", "--no-color", "--tail", "2000"], env, timeout=30)
             from .manifest import redact
 
             (output_dir / "backend.log").write_text(redact(logs.stdout + "\n" + logs.stderr))
@@ -227,6 +227,7 @@ def run_trial(campaign: dict, trial: dict, output_dir: Path) -> dict:
             "BASE_URL": campaign.get("load_base_url", base),
             "LOAD_UID": uidgid[0],
             "LOAD_GID": uidgid[1],
+            "K6_LOCAL_IPS": campaign.get("generator_local_ips", ""),
             "WARMUP_SECONDS": str(campaign["warmup_seconds"]),
             "PROMETHEUS_URL": campaign.get("prometheus_url", "http://127.0.0.1:9090/api/v1/write"),
         }
@@ -256,7 +257,7 @@ def run_trial(campaign: dict, trial: dict, output_dir: Path) -> dict:
                 measured = execute(
                     load,
                     load_compose
-                    + ["--out", "json=/output/metrics.json.gz"]
+                    + ["--quiet", "--log-output", "none", "--out", "json=/output/metrics.json.gz"]
                     + extra_output
                     + ["/scripts/user-journey.js" if journey else "/scripts/workload.js"],
                     load_env,

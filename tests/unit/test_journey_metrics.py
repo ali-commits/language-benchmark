@@ -109,3 +109,19 @@ def test_journey_diagnostics_include_http_requests_and_completed_cycles(tmp_path
     m = read_journey_metrics(p)
     assert m["http_requests"] == 1 and m["completed_journeys"] == 1
     assert m["authenticated_users"] == 0
+
+
+def test_generator_socket_exhaustion_invalidates_trial_even_if_responses_pass(tmp_path):
+    p = tmp_path / "raw.gz"
+    rows = [
+        point("generator_resource_errors", 1, "ramp"),
+        point("operations_attempted", 100),
+        point("operations_succeeded", 100),
+        point("journey_active_users", 10),
+        point("users_authenticated", 10, "ramp"),
+    ]
+    with gzip.open(p, "wt") as f:
+        f.write("\n".join(json.dumps(x) for x in rows))
+    metrics = read_journey_metrics(p)
+    assert metrics["generator_resource_errors"] == 1
+    assert classify_journey(metrics, 10, []) == "invalid"

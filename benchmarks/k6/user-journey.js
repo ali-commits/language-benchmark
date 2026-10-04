@@ -10,6 +10,8 @@ const attempted=new Counter('operations_attempted');
 const succeeded=new Counter('operations_succeeded');
 const failed=new Counter('operations_failed');
 const timeouts=new Counter('journey_timeouts');
+const resourceErrors=new Counter('generator_resource_errors');
+const networkErrors=new Counter('journey_network_errors');
 const latency=new Trend('operation_duration',true);
 const failure=new Rate('journey_failure_rate');
 const authenticated=new Counter('users_authenticated');
@@ -30,7 +32,8 @@ function request(op,method,path,body,expected){
  const elapsed=Date.now()-start;
  // Slow completed replies count as unresponsive under the explicit per-operation deadline.
  ok=ok&&elapsed<=cfg.timeout_seconds*1000;
- if(res.status===0||elapsed>cfg.timeout_seconds*1000)timeouts.add(1,tags);
+ if(res.error_code===1050||res.error_code===1211||elapsed>cfg.timeout_seconds*1000)timeouts.add(1,tags);
+ if(res.status===0){networkErrors.add(1,{...tags,error_code:String(res.error_code||0)});if(/cannot assign requested address|too many open files|no buffer space|out of memory/i.test(res.error||''))resourceErrors.add(1,tags);}
  latency.add(elapsed,tags);failure.add(!ok,tags);check(res,{'valid response within deadline':()=>ok},tags);
  if(ok)succeeded.add(1,tags);else failed.add(1,tags);
  if(res.status===401&&op!=='login')token=null;

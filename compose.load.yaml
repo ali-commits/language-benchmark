@@ -4,7 +4,10 @@ services:
     image: grafana/k6:1.4.2@sha256:3656673de3f30424e8ebcfa46acd9558d83b6a43612d0f668ffeac953950c6c7
     user: "${LOAD_UID:-1000}:${LOAD_GID:-1000}"
     network_mode: host
+    ulimits:
+      nofile: {soft: 250000, hard: 250000}
     environment:
+      K6_LOCAL_IPS: ${K6_LOCAL_IPS:-}
       BASE_URL: ${BASE_URL:-http://127.0.0.1:8000}
       WARMUP_SECONDS: ${WARMUP_SECONDS:-120}
       LOAD_DATA: /inputs/load-data.json

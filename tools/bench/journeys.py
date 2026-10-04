@@ -33,6 +33,8 @@ def read_journey_metrics(path: Path) -> dict:
         "authenticated_users": 0,
         "active_users_max": 0,
         "timeouts": 0,
+        "generator_resource_errors": 0,
+        "network_errors": 0,
         "ramp_attempted": 0,
         "ramp_succeeded": 0,
         "settle_attempted": 0,
@@ -60,6 +62,8 @@ def read_journey_metrics(path: Path) -> dict:
             activity_times.append(
                 datetime.fromisoformat(d["time"].replace("Z", "+00:00")).timestamp()
             )
+        if metric == "generator_resource_errors" and phase != "drain":
+            m["generator_resource_errors"] += value
         if metric == "users_authenticated" and phase != "drain":
             m["authenticated_users"] += value
         if phase in ("ramp", "settle"):
@@ -79,6 +83,8 @@ def read_journey_metrics(path: Path) -> dict:
             m["attempted"] += value
         if metric == "operations_succeeded":
             m["succeeded"] += value
+        if metric == "journey_network_errors":
+            m["network_errors"] += value
         if metric == "journey_timeouts":
             m["timeouts"] += value
         if metric == "journey_active_users":
@@ -104,7 +110,12 @@ def read_journey_metrics(path: Path) -> dict:
 def classify_journey(
     metrics: dict, users: int, reasons: list[str], success_fraction: float = 0.99
 ) -> str:
-    if reasons or metrics.get("incomplete") or not metrics.get("attempted"):
+    if (
+        reasons
+        or journey_flags(metrics)
+        or metrics.get("incomplete")
+        or not metrics.get("attempted")
+    ):
         return "invalid"
     if metrics.get("active_users_max", 0) < users:
         return "invalid"
@@ -118,3 +129,11 @@ def generator_window(result: dict):
     start = metrics.get("activity_started_epoch", result.get("execution_started_epoch"))
     end = metrics.get("activity_finished_epoch", result.get("execution_finished_epoch"))
     return (start, end) if start is not None and end is not None else (None, None)
+
+
+def journey_flags(metrics: dict) -> list[str]:
+    return (
+        ["generator socket/resource errors observed"]
+        if metrics.get("generator_resource_errors")
+        else []
+    )

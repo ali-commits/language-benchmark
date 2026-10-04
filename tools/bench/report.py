@@ -316,9 +316,10 @@ def read_trial_summary(manifest_path: Path) -> dict:
     if not result.get("reset_verified"):
         reasons.append("final fixture restoration not verified")
     if journey:
-        from .journeys import generator_window
+        from .journeys import generator_window, journey_flags
 
         reasons += generator_flags(p.parent / "telemetry.jsonl", *generator_window(result))
+        reasons += journey_flags(metrics)
     else:
         reasons += generator_flags(p.parent / "telemetry.jsonl")
     if manifest.get("campaign", {}).get("mode") == "aws":

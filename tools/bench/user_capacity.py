@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .capacity import search_capacity
-from .journeys import classify_journey, generator_window
+from .journeys import classify_journey, generator_window, journey_flags
 from .manifest import atomic_json
 from .report import generator_flags
 from .runner import campaign_lock, database_campaign_lock, run_trial
@@ -187,6 +187,7 @@ def run_user_capacity(config_path: Path, output_dir: Path, resume: bool = False)
                     *generator_window(r),
                 )
                 m = r.get("journey_metrics", {})
+                reasons += journey_flags(m)
                 outcome = classify_journey(m, users, reasons, c["success_fraction"])
                 summary = {
                     "outcome": outcome,
