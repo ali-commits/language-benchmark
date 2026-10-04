@@ -11,6 +11,7 @@ import httpx
 import psycopg
 
 from .jit_probe import JIT_PROBE
+from .journeys import prepare_journey_data, read_journey_metrics
 from .load_data import prepare_load_data
 from .manifest import atomic_json, collect_manifest
 from .models import RuntimeCell
@@ -39,6 +40,7 @@ def run_trial(campaign: dict, trial: dict, output_dir: Path) -> dict:
     output_dir.mkdir(parents=True, exist_ok=False)
     cells = json.loads(Path("runtimes/python/lock.json").read_text())["cells"]
     cell = RuntimeCell(**next(c for c in cells if c["id"] == trial["cell"]))
+    journey = campaign.get("operation") == "user-journey"
     manifest = collect_manifest(campaign, trial)
     result = {
         "status": "failed",
@@ -162,28 +164,54 @@ def run_trial(campaign: dict, trial: dict, output_dir: Path) -> dict:
             c.get(base + "/health/ready").raise_for_status()
         secret_inputs = output_dir / "private"
         secret_inputs.mkdir(mode=0o700)
-        required = campaign["warmup_seconds"] + campaign["measure_seconds"] + 120
-        os.environ["PAIR_BUDGET"] = str(
-            trial["rate"] * campaign["measure_seconds"] + campaign["vus"]
-        )
-        load_metadata = prepare_load_data(
-            base, Path(campaign["credentials"]), secret_inputs / "load-data.json", required
-        )
-        scenario = {
-            "rate": trial["rate"],
-            "duration": campaign["measure_seconds"],
-            "vus": campaign["vus"],
-            "seed": trial["seed"],
-            "operation": campaign.get("operation", "mixed"),
-            "expires_at": load_metadata["expires_at"],
-            "tags": {
-                "cell": cell.id,
-                "trial": trial["id"],
-                "campaign": trial["campaign_id"],
-                "workload": campaign.get("operation", "mixed"),
-                "offered_rate": str(trial["rate"]),
-            },
-        }
+        if journey:
+            prepare_journey_data(
+                Path(campaign["credentials"]), trial["users"], secret_inputs / "load-data.json"
+            )
+            scenario = {
+                k: campaign[k]
+                for k in (
+                    "ramp_seconds",
+                    "settle_seconds",
+                    "hold_seconds",
+                    "wait_min",
+                    "wait_max",
+                    "timeout_seconds",
+                )
+            }
+            scenario.update(
+                users=trial["users"],
+                tags={
+                    "cell": cell.id,
+                    "trial": trial["id"],
+                    "campaign": trial["campaign_id"],
+                    "workload": "user-journey",
+                    "target_users": str(trial["users"]),
+                },
+            )
+        else:
+            required = campaign["warmup_seconds"] + campaign["measure_seconds"] + 120
+            os.environ["PAIR_BUDGET"] = str(
+                trial["rate"] * campaign["measure_seconds"] + campaign["vus"]
+            )
+            load_metadata = prepare_load_data(
+                base, Path(campaign["credentials"]), secret_inputs / "load-data.json", required
+            )
+            scenario = {
+                "rate": trial["rate"],
+                "duration": campaign["measure_seconds"],
+                "vus": campaign["vus"],
+                "seed": trial["seed"],
+                "operation": campaign.get("operation", "mixed"),
+                "expires_at": load_metadata["expires_at"],
+                "tags": {
+                    "cell": cell.id,
+                    "trial": trial["id"],
+                    "campaign": trial["campaign_id"],
+                    "workload": campaign.get("operation", "mixed"),
+                    "offered_rate": str(trial["rate"]),
+                },
+            }
         (secret_inputs / "scenario.json").write_text(json.dumps(scenario))
         mkdir = "import pathlib,os; [pathlib.Path(p).mkdir(parents=True,exist_ok=True) for p in (os.environ['INPUTS'],os.environ['OUTPUTS'])]; pathlib.Path(os.environ['INPUTS']).chmod(0o700); print(str(os.getuid())+':'+str(os.getgid()))"
         uidgid = (
@@ -208,7 +236,7 @@ def run_trial(campaign: dict, trial: dict, output_dir: Path) -> dict:
             dsn,
             output_dir / "telemetry.jsonl",
         ) as collect:
-            if campaign["warmup_seconds"]:
+            if campaign["warmup_seconds"] and not journey:
                 w = execute(
                     load,
                     load_compose + ["/scripts/warmup.js"],
@@ -229,7 +257,7 @@ def run_trial(campaign: dict, trial: dict, output_dir: Path) -> dict:
                     load_compose
                     + ["--out", "json=/output/metrics.json.gz"]
                     + extra_output
-                    + ["/scripts/workload.js"],
+                    + ["/scripts/user-journey.js" if journey else "/scripts/workload.js"],
                     load_env,
                     timeout=campaign["measure_seconds"] + 120,
                 )
@@ -242,6 +270,12 @@ def run_trial(campaign: dict, trial: dict, output_dir: Path) -> dict:
             result["measurement_finished_epoch"] = time.time()
             copy_from(load, outputs, output_dir / "k6")
         result["status"] = "measured"
+        if journey:
+            result["journey_metrics"] = read_journey_metrics(output_dir / "k6/metrics.json.gz")
+            jm = result["journey_metrics"]
+            if jm.get("steady_started_epoch"):
+                result["measurement_started_epoch"] = jm["steady_started_epoch"]
+                result["measurement_finished_epoch"] = jm["steady_finished_epoch"]
         if collect.errors:
             result["reasons"].append(
                 "telemetry collection incomplete: " + ",".join(set(collect.errors))

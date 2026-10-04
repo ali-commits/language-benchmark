@@ -282,6 +282,94 @@
       }
     },
     {
+      "id": 30,
+      "title": "Concurrent active users",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 0,
+        "y": 40,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "benchmark-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "k6_journey_active_users{cell=~\"$cell\",trial=~\"$trial\"}",
+          "legendFormat": "{{cell}} {{trial}}"
+        }
+      ]
+    },
+    {
+      "id": 31,
+      "title": "Authenticated unique users",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 12,
+        "y": 40,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "benchmark-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (cell,trial) (k6_users_authenticated_total{cell=~\"$cell\",trial=~\"$trial\"})",
+          "legendFormat": "{{cell}} {{trial}}"
+        }
+      ]
+    },
+    {
+      "id": 32,
+      "title": "User response timeouts",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 0,
+        "y": 48,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "benchmark-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (cell,trial) (k6_journey_timeouts_total{cell=~\"$cell\",trial=~\"$trial\"})",
+          "legendFormat": "{{cell}} {{trial}}"
+        }
+      ]
+    },
+    {
+      "id": 33,
+      "title": "Historical concurrent-user capacity probes",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 12,
+        "y": 48,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "benchmark-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "benchmark_target_users{cell=~\"$cell\",trial=~\"$trial\"}",
+          "legendFormat": "{{cell}} {{trial}}"
+        }
+      ]
+    },
+    {
       "id": 20,
       "title": "RDS CPU",
       "type": "timeseries",

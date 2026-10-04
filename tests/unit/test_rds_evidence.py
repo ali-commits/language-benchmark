@@ -33,3 +33,12 @@ def test_failover_event_is_flagged():
 
 def test_complete_quiet_measurement_evidence_is_accepted():
     assert not validate_rds_evidence(complete(), 100, 200)
+
+
+def test_cloudwatch_queries_align_to_complete_minute_buckets():
+    from bench.telemetry import cloudwatch_window
+
+    start = datetime.fromtimestamp(125, timezone.utc)
+    end = datetime.fromtimestamp(157, timezone.utc)
+    a, b = cloudwatch_window(start, end)
+    assert a.timestamp() == 120 and b.timestamp() == 180

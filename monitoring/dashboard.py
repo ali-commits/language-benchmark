@@ -78,6 +78,33 @@ def build_dashboard():
                 "fieldConfig": {"defaults": {"unit": unit}, "overrides": []},
             }
         )
+    for index, (title, expr) in enumerate(
+        [
+            ("Concurrent active users", 'k6_journey_active_users{cell=~"$cell",trial=~"$trial"}'),
+            (
+                "Authenticated unique users",
+                'sum by (cell,trial) (k6_users_authenticated_total{cell=~"$cell",trial=~"$trial"})',
+            ),
+            (
+                "User response timeouts",
+                'sum by (cell,trial) (k6_journey_timeouts_total{cell=~"$cell",trial=~"$trial"})',
+            ),
+            (
+                "Historical concurrent-user capacity probes",
+                'benchmark_target_users{cell=~"$cell",trial=~"$trial"}',
+            ),
+        ]
+    ):
+        panels.append(
+            {
+                "id": 30 + index,
+                "title": title,
+                "type": "timeseries",
+                "gridPos": {"x": (index % 2) * 12, "y": 40 + (index // 2) * 8, "w": 12, "h": 8},
+                "datasource": {"type": "prometheus", "uid": "benchmark-prometheus"},
+                "targets": [{"refId": "A", "expr": expr, "legendFormat": "{{cell}} {{trial}}"}],
+            }
+        )
     for index, (title, metric, unit) in enumerate(
         [
             ("RDS CPU", "CPUUtilization", "percent"),

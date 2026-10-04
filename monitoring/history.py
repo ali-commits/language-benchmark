@@ -45,18 +45,26 @@ class Handler(BaseHTTPRequestHandler):
                     "cell": t["cell"],
                     "trial": t["id"],
                     "campaign": t["campaign_id"],
-                    "offered_rate": str(t["rate"]),
+                    "offered_rate": str(t.get("rate", 0)),
+                    "target_users": str(t.get("users", 0)),
                     "workload": m["campaign"].get("operation", "mixed"),
                 }
                 label = ",".join(k + "=" + json.dumps(x) for k, x in labels.items())
                 valid = row["qualification"]
                 values = {
                     "benchmark_successful_ops_per_second": v.get("succeeded", 0)
-                    / m["campaign"]["measure_seconds"],
+                    / m["campaign"].get("hold_seconds", m["campaign"]["measure_seconds"]),
                     "benchmark_latency_p95_ms": v.get("p95", 0),
                     "benchmark_latency_p99_ms": v.get("p99", 0),
                     "benchmark_trial_qualified": {"pass": 1, "fail": 0, "unknown": -1}[valid],
                 }
+                if t.get("users"):
+                    values.update(
+                        benchmark_target_users=t["users"],
+                        benchmark_authenticated_users=v.get("authenticated_users", 0),
+                        benchmark_active_users=v.get("active_users_max", 0),
+                        benchmark_user_timeouts=v.get("timeouts", 0),
+                    )
                 for key, value in values.items():
                     lines.append(f"{key}{{{label}}} {value}")
             except (KeyError, ValueError, OSError):

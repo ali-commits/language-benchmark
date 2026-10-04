@@ -89,7 +89,7 @@ def read_metrics(path: Path) -> dict:
     return metrics
 
 
-def generator_flags(path: Path) -> list[str]:
+def generator_flags(path: Path, start: float | None = None, end: float | None = None) -> list[str]:
     if not path.exists():
         return ["host telemetry missing"]
     flags = []
@@ -97,6 +97,8 @@ def generator_flags(path: Path) -> list[str]:
     samples = 0
     for line in path.read_text().splitlines():
         sample = json.loads(line)
+        if start is not None and not start <= sample.get("time", 0) <= end:
+            continue
         host = sample.get("hosts", {}).get("generator", {})
         if "stat" not in host:
             return ["generator telemetry incomplete"]
@@ -263,7 +265,11 @@ def plot_curves(report: dict, output_dir: Path) -> list[Path]:
                     values.append(statistics.median(sample))
             if used:
                 axis.plot(used, values, marker="o", label=cell + " / " + campaign)
-        axis.set_xlabel("Offered operations/s")
+        axis.set_xlabel(
+            "Concurrent users"
+            if any(t.get("workload") == "user-journey" for t in report["trials"])
+            else "Offered operations/s"
+        )
         axis.set_ylabel(label)
         axis.grid(True, alpha=0.25)
         axis.set_title("Trial medians; consult qualification and individual-trial evidence")
@@ -292,8 +298,14 @@ def read_trial_summary(manifest_path: Path) -> dict:
     )
     metrics_path = p.parent / "k6/metrics.json.gz"
     metrics = {}
+    journey = manifest["campaign"].get("operation") == "user-journey"
     if metrics_path.exists():
-        metrics = read_metrics(metrics_path)
+        if journey:
+            from .journeys import read_journey_metrics
+
+            metrics = read_journey_metrics(metrics_path)
+        else:
+            metrics = read_metrics(metrics_path)
     reasons = list(result.get("reasons", []))
     if metrics.get("incomplete"):
         reasons.append("raw metric stream is incomplete or corrupt")
@@ -301,7 +313,11 @@ def read_trial_summary(manifest_path: Path) -> dict:
         reasons.append("trial did not complete measurement lifecycle")
     if not result.get("reset_verified"):
         reasons.append("final fixture restoration not verified")
-    reasons += generator_flags(p.parent / "telemetry.jsonl")
+    reasons += generator_flags(
+        p.parent / "telemetry.jsonl",
+        result.get("measurement_started_epoch") if journey else None,
+        result.get("measurement_finished_epoch") if journey else None,
+    )
     if manifest.get("campaign", {}).get("mode") == "aws":
         evidence = p.parent / "rds.json"
         if not evidence.exists():
@@ -312,16 +328,29 @@ def read_trial_summary(manifest_path: Path) -> dict:
                 result.get("measurement_started_epoch", 0),
                 result.get("measurement_finished_epoch", 0),
             )
-    qualification = qualify(metrics, reasons, manifest["campaign"].get("operation", "mixed"))
+    if journey:
+        from .journeys import classify_journey
+
+        outcome = classify_journey(
+            metrics,
+            result["trial"]["users"],
+            reasons,
+            manifest["campaign"].get("success_fraction", 0.99),
+        )
+        qualification = {"pass": "pass", "fail": "fail", "invalid": "unknown"}[outcome]
+    else:
+        qualification = qualify(metrics, reasons, manifest["campaign"].get("operation", "mixed"))
     login = metrics.get("endpoints", {}).get("login", {})
     if qualification == "pass" and login.get("p95", 0) > 500:
         qualification = "fail"
-    seconds = manifest["campaign"]["measure_seconds"]
+    seconds = manifest["campaign"].get("hold_seconds", manifest["campaign"]["measure_seconds"])
     return {
         "id": result["trial"]["id"],
         "campaign": result["trial"]["campaign_id"],
         "cell": result["trial"]["cell"],
-        "rate": result["trial"]["rate"],
+        "rate": result["trial"].get("users", result["trial"].get("rate")),
+        "target_users": result["trial"].get("users"),
+        "workload": manifest["campaign"].get("operation", "mixed"),
         "label": result.get("label"),
         "status": result["status"],
         "qualification": qualification,

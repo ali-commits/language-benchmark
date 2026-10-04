@@ -81,7 +81,11 @@ def rds_metrics(identifier: str, region: str, start, end) -> dict:
 
     cw = boto3.client("cloudwatch", region_name=region)
     rds = boto3.client("rds", region_name=region)
-    result = {}
+    aligned_start, aligned_end = cloudwatch_window(start, end)
+    result = {
+        "statistics_window": {"start": aligned_start.isoformat(), "end": aligned_end.isoformat()},
+        "measurement_window": {"start": start.isoformat(), "end": end.isoformat()},
+    }
     for name in [
         "CPUUtilization",
         "DatabaseConnections",
@@ -98,8 +102,8 @@ def rds_metrics(identifier: str, region: str, start, end) -> dict:
             Namespace="AWS/RDS",
             MetricName=name,
             Dimensions=[{"Name": "DBInstanceIdentifier", "Value": identifier}],
-            StartTime=start,
-            EndTime=end,
+            StartTime=aligned_start,
+            EndTime=aligned_end,
             Period=60,
             Statistics=["Average", "Maximum"],
         )["Datapoints"]
@@ -180,3 +184,15 @@ def validate_rds_evidence(data: dict, start: float, end: float) -> list[str]:
         ):
             reasons.append("RDS disruptive event during measurement: " + event.get("Message", ""))
     return reasons
+
+
+def cloudwatch_window(start, end):
+    import math
+    from datetime import datetime, timezone
+
+    if end <= start:
+        raise ValueError("invalid measurement interval")
+    return (
+        datetime.fromtimestamp(math.floor(start.timestamp() / 60) * 60, timezone.utc),
+        datetime.fromtimestamp(math.ceil(end.timestamp() / 60) * 60, timezone.utc),
+    )
