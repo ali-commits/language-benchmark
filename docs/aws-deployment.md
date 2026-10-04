@@ -27,20 +27,20 @@ The dashboard is not exposed publicly. Prometheus receives k6 data over private 
 
 ## Current experiment
 
-The AWS smoke workflow succeeded and verified its final database restoration. k6 calibration delivered approximately **5,000 requests/s**, zero dropped iterations, against an independent fixed-response target. This establishes generator headroom for the initial load grid, not application throughput.
+The primary campaign now measures concurrent users performing stateful journeys with random 3–10 second waits. It starts at 10,000 users, adds 10,000 until failure, then bisects the passing/failing bracket to a 100-user interval and confirms both endpoints five times. See [the methodology](user-capacity-methodology.md). All 13 runtime configurations use the same settings; invalid generator or telemetry evidence stops the campaign for attention.
 
-The pilot runs first. `language-benchmark-full.service` waits for it, requires a qualified rate for every baseline interpreter, picks a common grid, and then runs all 13 configurations with five randomized repetitions, 120-second warm-up and 300-second measurement. It will stop rather than launch the full campaign if pilot evidence or cleanup is insufficient.
+The earlier arrival-rate pilot and its failed `language-benchmark-full.service` remain separate evidence. They cannot establish a concurrent-user capacity. The new controller is `language-benchmark-user-capacity.service`, with status/results in `artifacts/results/user-capacity/`.
 
-The full matrix can exceed **38 hours before setup/reset overhead**. The three EC2 machines total approximately **USD 1.03/hour**, and the RDS compute rate is **USD 0.494/hour** in the checked AWS on-demand catalog. Combined compute is about **USD 1.52/hour**, plus EBS/RDS storage and public IPv4 charges. These are estimates at provisioning time, not a billing guarantee.
+Runtime depends on the number of search probes and repetitions and can span multiple days. The three EC2 machines total approximately **USD 1.03/hour**, and the RDS compute rate is **USD 0.494/hour** in the checked AWS on-demand catalog. Combined compute is about **USD 1.52/hour**, plus EBS/RDS storage and public IPv4 charges. These are estimates at provisioning time, not a billing guarantee.
 
 Check progress:
 
 ```sh
 ssh -F artifacts/aws/ssh-config benchmark-monitor \
-  'cat /home/rocky/language-benchmark/artifacts/aws/campaign-status.json; systemctl is-active language-benchmark-pilot language-benchmark-full'
+  'cat /home/rocky/language-benchmark/artifacts/results/user-capacity/capacity-status.json; systemctl is-active language-benchmark-user-capacity'
 ```
 
-Results live on the monitoring host under `/home/rocky/language-benchmark/artifacts/results/`. Final static reports are generated under `artifacts/reports/full/` there. The hourly reminder in this chat notifies on completion, failure, or prolonged idle resources; it does not stop machines automatically.
+Results live on the monitoring host under `/home/rocky/language-benchmark/artifacts/results/`. Concurrent-user brackets are written to `artifacts/results/user-capacity/capacity-results.json` there. The hourly reminder in this chat notifies on completion, failure, or prolonged idle resources; it does not stop machines automatically.
 
 ## Stop to save money
 
@@ -48,7 +48,7 @@ First interrupt the controller gracefully and confirm the backend/load services 
 
 ```sh
 ssh -F artifacts/aws/ssh-config benchmark-monitor \
-  'sudo systemctl kill --signal=SIGINT --kill-whom=all language-benchmark-full; sudo systemctl kill --signal=SIGINT --kill-whom=all language-benchmark-pilot'
+  'sudo systemctl kill --signal=SIGINT --kill-whom=all language-benchmark-user-capacity'
 ```
 
 A hard host failure can require the documented `bench.cli recover` operation. After verified cleanup, stop the tagged resources from this checkout:
