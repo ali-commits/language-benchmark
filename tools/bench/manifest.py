@@ -40,7 +40,9 @@ def collect_manifest(campaign: dict, trial: dict) -> dict:
             "git_revision": rev,
             "dirty": dirty,
             "orchestrator": platform.platform(),
-            "label": "LOCAL SMOKE" if campaign.get("smoke") else campaign["mode"].upper(),
+            "label": (campaign["mode"].upper() + " SMOKE")
+            if campaign.get("smoke")
+            else campaign["mode"].upper(),
             "lock_checksum": hashlib.sha256(
                 Path("runtimes/python/lock.json").read_bytes()
             ).hexdigest(),
