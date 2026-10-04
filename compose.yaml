@@ -1,0 +1,50 @@
+name: language-benchmark-local
+services:
+  db:
+    image: postgres:17.6@sha256:00bc86618629af00d2937fdc5a5d63db3ff8450acf52f0636ec813c7f4902929
+    environment:
+      POSTGRES_DB: language_benchmark
+      POSTGRES_USER: benchmark
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-local-benchmark-only}
+    ports: ["127.0.0.1:${DB_PORT:-55433}:5432"]
+    volumes: ["db-data:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U benchmark -d language_benchmark"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+  baseline:
+    profiles: [baseline]
+    image: ${BASELINE_IMAGE:-lb-baseline:3.10.22}
+    cpus: 2.0
+    mem_limit: 3g
+    memswap_limit: 3g
+    ports: ["127.0.0.1:8000:8000"]
+    environment: &env
+      DATABASE_URL: postgresql://benchmark:${DB_PASSWORD:-local-benchmark-only}@db/language_benchmark
+      JWT_SECRET: ${JWT_SECRET:-}
+      WORKERS: ${WORKERS:-2}
+      MODE: local
+      RUN_DIR: /run/benchmark
+      RUN_ID: ${RUN_ID:-local}
+      EXPECTED_GIL: ${EXPECTED_GIL:-true}
+      EXPECTED_JIT: ${EXPECTED_JIT:-false}
+      PYTHON_JIT: ${PYTHON_JIT:-0}
+    volumes: ["${RUN_DIR_HOST:-./artifacts/runtime}:/run/benchmark"]
+    depends_on:
+      db: {condition: service_healthy}
+  modern:
+    profiles: [modern]
+    image: ${MODERN_IMAGE:-lb-modern:3.15.0rc3-standard}
+    cpus: 2.0
+    mem_limit: 3g
+    memswap_limit: 3g
+    ports: ["127.0.0.1:8000:8000"]
+    environment:
+      <<: *env
+      ADAPTER: ${ADAPTER:-async}
+    volumes: ["${RUN_DIR_HOST:-./artifacts/runtime}:/run/benchmark"]
+    depends_on:
+      db: {condition: service_healthy}
+volumes:
+  db-data:

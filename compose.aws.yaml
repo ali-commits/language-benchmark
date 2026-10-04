@@ -1,0 +1,29 @@
+name: language-benchmark-backend
+services:
+  backend:
+    image: ${BACKEND_IMAGE:-lb-baseline:3.10.22}
+    cpus: 2.0
+    mem_limit: 3g
+    memswap_limit: 3g
+    ports: ["${BIND_IP:-127.0.0.1}:8000:8000"]
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql://placeholder@invalid/language_benchmark}
+      JWT_SECRET: ${JWT_SECRET:-}
+      JWT_TTL_SECONDS: ${JWT_TTL_SECONDS:-3600}
+      MODE: ${MODE:-aws}
+      WORKERS: ${WORKERS:-2}
+      ADAPTER: ${ADAPTER:-async}
+      RUN_ID: ${RUN_ID:-}
+      RUN_DIR: /run/benchmark
+      EXPECTED_GIL: ${EXPECTED_GIL:-true}
+      EXPECTED_JIT: ${EXPECTED_JIT:-false}
+      PYTHON_JIT: ${PYTHON_JIT:-0}
+      # Empty leaves free-threaded default behavior intact; unsafe extensions can re-enable GIL and fail checks.
+    volumes:
+      - ${RUN_DIR_HOST:-./artifacts/runtime}:/run/benchmark
+      - ${RDS_CA_FILE:-./docker/README-ca.txt}:/certs/rds-ca.pem:ro
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready')"]
+      interval: 5s
+      timeout: 5s
+      retries: 12

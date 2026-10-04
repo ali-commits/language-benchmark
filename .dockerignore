@@ -1,0 +1,8 @@
+.git
+.venv*
+.superpowers
+.env*
+artifacts
+fixtures
+**/__pycache__
+.pytest_cache
