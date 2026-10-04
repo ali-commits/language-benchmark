@@ -10,3 +10,13 @@ def database():
         c.execute('DROP SCHEMA public CASCADE; CREATE SCHEMA public')
         c.execute(Path('database/schema.sql').read_text())
     return DSN
+
+@pytest.fixture(params=['baseline_api.main'])
+def api_client(request,database,monkeypatch):
+    import importlib
+    from fastapi.testclient import TestClient
+    monkeypatch.setenv('DATABASE_URL',database)
+    monkeypatch.setenv('JWT_SECRET','test-secret-that-has-at-least-32-bytes')
+    monkeypatch.setenv('WORKERS','1')
+    module=importlib.import_module(request.param)
+    with TestClient(module.create_app()) as c: yield c
