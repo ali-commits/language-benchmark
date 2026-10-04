@@ -11,7 +11,7 @@ def database():
         c.execute(Path('database/schema.sql').read_text())
     return DSN
 
-@pytest.fixture(params=['baseline_api.main'])
+@pytest.fixture(params=['baseline_api.main','modern_api.main','modern_api.threaded'])
 def api_client(request,database,monkeypatch):
     import importlib
     from fastapi.testclient import TestClient
