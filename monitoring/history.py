@@ -5,7 +5,9 @@ import os
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
-from bench.report import qualify, read_metrics
+from bench.report import read_trial_summary
+
+CACHE = {}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -21,10 +23,24 @@ class Handler(BaseHTTPRequestHandler):
             if not result.exists() or not raw.exists():
                 continue
             try:
+                signature = tuple(
+                    (p.stat().st_mtime if p.exists() else 0)
+                    for p in [
+                        manifest,
+                        result,
+                        raw,
+                        manifest.with_name("rds.json"),
+                        manifest.with_name("telemetry.jsonl"),
+                    ]
+                )
+                key = str(manifest)
+                if key not in CACHE or CACHE[key][0] != signature:
+                    CACHE[key] = (signature, read_trial_summary(manifest))
+                row = CACHE[key][1]
                 m = json.loads(manifest.read_text())
                 r = json.loads(result.read_text())
                 t = r["trial"]
-                v = read_metrics(raw)
+                v = row["metrics"]
                 labels = {
                     "cell": t["cell"],
                     "trial": t["id"],
@@ -33,10 +49,7 @@ class Handler(BaseHTTPRequestHandler):
                     "workload": m["campaign"].get("operation", "mixed"),
                 }
                 label = ",".join(k + "=" + json.dumps(x) for k, x in labels.items())
-                reasons = list(r.get("reasons", []))
-                if not r.get("reset_verified") or v.get("incomplete") or r["status"] != "measured":
-                    reasons.append("incomplete")
-                valid = qualify(v, reasons, labels["workload"])
+                valid = row["qualification"]
                 values = {
                     "benchmark_successful_ops_per_second": v.get("succeeded", 0)
                     / m["campaign"]["measure_seconds"],

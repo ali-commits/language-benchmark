@@ -129,63 +129,7 @@ def generator_flags(path: Path) -> list[str]:
 def summarize_campaign(results_dir: Path) -> dict:
     trials = []
     for manifest_path in sorted(results_dir.glob("*/manifest.json")):
-        p = manifest_path.with_name("result.json")
-        manifest = json.loads(manifest_path.read_text())
-        result = (
-            json.loads(p.read_text())
-            if p.exists()
-            else {
-                "trial": manifest["trial"],
-                "status": "incomplete",
-                "label": manifest.get("label"),
-                "reset_verified": False,
-                "reasons": ["trial ended before final result was persisted"],
-            }
-        )
-        metrics_path = p.parent / "k6/metrics.json.gz"
-        metrics = {}
-        if metrics_path.exists():
-            metrics = read_metrics(metrics_path)
-        reasons = list(result.get("reasons", []))
-        if metrics.get("incomplete"):
-            reasons.append("raw metric stream is incomplete or corrupt")
-        if result.get("status") != "measured":
-            reasons.append("trial did not complete measurement lifecycle")
-        if not result.get("reset_verified"):
-            reasons.append("final fixture restoration not verified")
-        reasons += generator_flags(p.parent / "telemetry.jsonl")
-        if manifest.get("campaign", {}).get("mode") == "aws":
-            evidence = p.parent / "rds.json"
-            if not evidence.exists():
-                reasons.append("RDS telemetry missing")
-            else:
-                reasons += validate_rds_evidence(
-                    json.loads(evidence.read_text()),
-                    result.get("measurement_started_epoch", 0),
-                    result.get("measurement_finished_epoch", 0),
-                )
-        qualification = qualify(metrics, reasons, manifest["campaign"].get("operation", "mixed"))
-        login = metrics.get("endpoints", {}).get("login", {})
-        if qualification == "pass" and login.get("p95", 0) > 500:
-            qualification = "fail"
-        seconds = manifest["campaign"]["measure_seconds"]
-        trials.append(
-            {
-                "id": result["trial"]["id"],
-                "campaign": result["trial"]["campaign_id"],
-                "cell": result["trial"]["cell"],
-                "rate": result["trial"]["rate"],
-                "label": result.get("label"),
-                "status": result["status"],
-                "qualification": qualification,
-                "reasons": reasons,
-                "metrics": metrics,
-                "achieved_operations_s": metrics.get("attempted", 0) / seconds,
-                "achieved_http_requests_s": metrics.get("http_requests", 0) / seconds,
-                "successful_operations_s": metrics.get("succeeded", 0) / seconds,
-                "artifact": str(p.parent),
-            }
-        )
+        trials.append(read_trial_summary(manifest_path))
     groups = {}
     for t in trials:
         key = (t["campaign"], t["cell"], t["rate"])
@@ -330,3 +274,61 @@ def plot_curves(report: dict, output_dir: Path) -> list[Path]:
         plt.close(fig)
         paths.append(path)
     return paths
+
+
+def read_trial_summary(manifest_path: Path) -> dict:
+    p = manifest_path.with_name("result.json")
+    manifest = json.loads(manifest_path.read_text())
+    result = (
+        json.loads(p.read_text())
+        if p.exists()
+        else {
+            "trial": manifest["trial"],
+            "status": "incomplete",
+            "label": manifest.get("label"),
+            "reset_verified": False,
+            "reasons": ["trial ended before final result was persisted"],
+        }
+    )
+    metrics_path = p.parent / "k6/metrics.json.gz"
+    metrics = {}
+    if metrics_path.exists():
+        metrics = read_metrics(metrics_path)
+    reasons = list(result.get("reasons", []))
+    if metrics.get("incomplete"):
+        reasons.append("raw metric stream is incomplete or corrupt")
+    if result.get("status") != "measured":
+        reasons.append("trial did not complete measurement lifecycle")
+    if not result.get("reset_verified"):
+        reasons.append("final fixture restoration not verified")
+    reasons += generator_flags(p.parent / "telemetry.jsonl")
+    if manifest.get("campaign", {}).get("mode") == "aws":
+        evidence = p.parent / "rds.json"
+        if not evidence.exists():
+            reasons.append("RDS telemetry missing")
+        else:
+            reasons += validate_rds_evidence(
+                json.loads(evidence.read_text()),
+                result.get("measurement_started_epoch", 0),
+                result.get("measurement_finished_epoch", 0),
+            )
+    qualification = qualify(metrics, reasons, manifest["campaign"].get("operation", "mixed"))
+    login = metrics.get("endpoints", {}).get("login", {})
+    if qualification == "pass" and login.get("p95", 0) > 500:
+        qualification = "fail"
+    seconds = manifest["campaign"]["measure_seconds"]
+    return {
+        "id": result["trial"]["id"],
+        "campaign": result["trial"]["campaign_id"],
+        "cell": result["trial"]["cell"],
+        "rate": result["trial"]["rate"],
+        "label": result.get("label"),
+        "status": result["status"],
+        "qualification": qualification,
+        "reasons": reasons,
+        "metrics": metrics,
+        "achieved_operations_s": metrics.get("attempted", 0) / seconds,
+        "achieved_http_requests_s": metrics.get("http_requests", 0) / seconds,
+        "successful_operations_s": metrics.get("succeeded", 0) / seconds,
+        "artifact": str(p.parent),
+    }
