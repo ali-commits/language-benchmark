@@ -2,12 +2,12 @@
   "mode": "aws",
   "smoke": false,
   "cells": [
-    "baseline-3.10.22",
-    "baseline-3.11.17",
-    "baseline-3.12.13",
-    "baseline-3.13.16",
-    "baseline-3.14.8",
-    "baseline-3.15.0rc3"
+    "python-baseline-3.10.22",
+    "python-baseline-3.11.17",
+    "python-baseline-3.12.13",
+    "python-baseline-3.13.16",
+    "python-baseline-3.14.8",
+    "python-baseline-3.15.0rc3"
   ],
   "rates": [
     25,

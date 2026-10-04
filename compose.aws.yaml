@@ -1,7 +1,7 @@
 name: language-benchmark-backend
 services:
   backend:
-    image: ${BACKEND_IMAGE:-lb-baseline:3.10.22}
+    image: ${BACKEND_IMAGE:-lb-python-baseline:3.10.22}
     cpus: 2.0
     mem_limit: 3g
     memswap_limit: 3g

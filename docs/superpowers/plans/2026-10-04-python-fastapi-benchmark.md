@@ -35,12 +35,12 @@
 
 ## File map and interfaces
 
-- `apps/baseline/pyproject.toml`, `requirements.lock`, `src/baseline_api/{main,settings,security,schemas,db,queries,auth,social,runtime}.py`: independent Python 3.10-compatible application.
-- `apps/modern/pyproject.toml`, `requirements.lock`, `src/modern_api/{main,settings,security,schemas,db,queries,auth,social,runtime,threaded}.py`: independent modern implementation and explicit synchronous threaded adapter.
+- `backends/python/baseline/pyproject.toml`, `requirements.lock`, `src/baseline_api/{main,settings,security,schemas,db,queries,auth,social,runtime}.py`: independent Python 3.10-compatible application.
+- `backends/python/modern/pyproject.toml`, `requirements.lock`, `src/modern_api/{main,settings,security,schemas,db,queries,auth,social,runtime,threaded}.py`: independent modern implementation and explicit synchronous threaded adapter.
 - `contracts/api-v1.yaml`: reviewed OpenAPI contract, including response bodies and error codes; `tests/contract/` verifies each adapter against it.
 - `database/alembic.ini`, `database/env.py`, `database/versions/0001_social_schema.py`: single schema/migration source; both applications map to it.
 - `tools/bench/{models,compatibility,runtime,seed,fixture,reset,load_data,manifest,schedule,transport,telemetry,runner,report,cli}.py`: a small Python 3.10-compatible tools package, runnable as `python -m bench.cli` after installation. Keep modules limited to responsibilities needed by this experiment.
-- `docker/{python.Dockerfile,app.Dockerfile,tools.Dockerfile}`, `docker/entrypoint.py`, `docker/runtime-lock.json`, `docker/k6-lock.env`: source/runtime builds, worker launch, immutable inputs.
+- `docker/{python.Dockerfile,app.Dockerfile,tools.Dockerfile}`, `backends/python/entrypoint.py`, `runtimes/python/lock.json`, `docker/k6-lock.env`: source/runtime builds, worker launch, immutable inputs.
 - `compose.yaml`, `compose.aws.yaml`, `compose.load.yaml`, `.env.example`: local backend/DB, external-RDS backend, separate generator. Profiles select one active local backend.
 - `benchmarks/{campaign.example.json,smoke.json}`, `benchmarks/k6/{workload,warmup,journey,calibrate}.js`, `benchmarks/k6/lib/{selection,metrics,requests}.js`: campaign parameters and k6 workloads.
 - `tests/{unit,integration,contract,smoke}/`: isolated meaningful tests; `tests/conftest.py` provides explicit fixture DSNs and temporary artifact directories.
@@ -53,7 +53,7 @@ Every task uses the same cycle: add its named failing tests; run the listed comm
 
 ## Task 1: Resolve compatibility and capture immutable build inputs
 
-**Files:** Create both application dependency files, `tools/bench/{__init__,compatibility,models}.py`, tools/test dependency files, `docker/runtime-lock.json`, `docs/runtime-support.md`, `.gitignore`; test `tests/unit/test_compatibility.py`.
+**Files:** Create both application dependency files, `tools/bench/{__init__,compatibility,models}.py`, tools/test dependency files, `runtimes/python/lock.json`, `docs/runtime-support.md`, `.gitignore`; test `tests/unit/test_compatibility.py`.
 
 **Interfaces:** Produce `probe_cell(cell: RuntimeCell) -> dict` with `supported`, `reasons`, release/build identity and import inventory. Produce `validate_runtime_lock(data: dict) -> dict`; introduce `RuntimeCell`. Application modules are not imported until they exist; rerun the complete probe in Task 6.
 
@@ -113,7 +113,7 @@ Every task uses the same cycle: add its named failing tests; run the listed comm
 
 ## Task 6: Verify runtime mode and every worker's readiness
 
-**Files:** Create both app `runtime.py` files, `tools/bench/runtime.py`, `docker/entrypoint.py`; test `tests/unit/test_runtime.py`, `tests/integration/test_worker_readiness.py`.
+**Files:** Create both app `runtime.py` files, `tools/bench/runtime.py`, `backends/python/entrypoint.py`; test `tests/unit/test_runtime.py`, `tests/integration/test_worker_readiness.py`.
 
 **Interfaces:** Produce app `runtime_snapshot() -> dict`; tool `validate_worker_snapshots(cell: RuntimeCell, snapshots: list[dict]) -> list[str]`. Workers write unique PID-specific snapshots/readiness records to a mounted run directory, atomically, after lifespan/import completion; the launcher clears stale records before startup. Runner reads all expected worker records rather than relying on repeatedly requesting one health URL.
 

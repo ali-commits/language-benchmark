@@ -83,4 +83,4 @@ def prepare_load_data(
     fd = os.open(output_path, os.O_CREAT | os.O_TRUNC | os.O_WRONLY, 0o600)
     with os.fdopen(fd, "w") as f:
         json.dump(data, f)
-    return {"actors": len(actors), "pairs": len(pairs)}
+    return {"actors": len(actors), "pairs": len(pairs), "expires_at": data["expires_at"]}

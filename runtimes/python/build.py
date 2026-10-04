@@ -12,7 +12,7 @@ p.add_argument("--jobs", type=int, default=4)
 p.add_argument("--smoke", action="store_true")
 p.add_argument("--apps", action="store_true")
 a = p.parse_args()
-lock = json.loads(Path("docker/runtime-lock.json").read_text())
+lock = json.loads(Path("runtimes/python/lock.json").read_text())
 for s in lock["runtimes"]:
     if a.version and s["version"] not in a.version:
         continue
@@ -24,7 +24,7 @@ for s in lock["runtimes"]:
         "docker",
         "build",
         "-f",
-        "docker/python.Dockerfile",
+        "runtimes/python/Dockerfile",
         "-t",
         tag,
         "--build-arg",
@@ -43,8 +43,12 @@ for s in lock["runtimes"]:
     ]
     subprocess.run(argv, check=True)
     if a.apps:
-        for app in ["baseline", "modern"] if s["version"].startswith("3.15") else ["baseline"]:
-            name = f"lb-{app}{'-smoke' if a.smoke else ''}:{s['version']}" + (
+        for app in (
+            ["modern"]
+            if a.mode != "standard"
+            else (["baseline", "modern"] if s["version"].startswith("3.15") else ["baseline"])
+        ):
+            name = f"lb-python-{app}{'-smoke' if a.smoke else ''}:{s['version']}" + (
                 "-" + a.mode if app == "modern" else ""
             )
             subprocess.run(
@@ -52,7 +56,7 @@ for s in lock["runtimes"]:
                     "docker",
                     "build",
                     "-f",
-                    "docker/app.Dockerfile",
+                    "backends/python/Dockerfile",
                     "-t",
                     name,
                     "--build-arg",

@@ -15,7 +15,7 @@ services:
       retries: 30
   baseline:
     profiles: [baseline]
-    image: ${BASELINE_IMAGE:-lb-baseline:3.10.22}
+    image: ${BASELINE_IMAGE:-lb-python-baseline:3.10.22}
     cpus: 2.0
     mem_limit: 3g
     memswap_limit: 3g
@@ -35,7 +35,7 @@ services:
       db: { condition: service_healthy }
   modern:
     profiles: [modern]
-    image: ${MODERN_IMAGE:-lb-modern:3.15.0rc3-standard}
+    image: ${MODERN_IMAGE:-lb-python-modern:3.15.0rc3-standard}
     cpus: 2.0
     mem_limit: 3g
     memswap_limit: 3g

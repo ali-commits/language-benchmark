@@ -15,7 +15,7 @@ The source video could not be retrieved; this experiment does not claim to repro
 
 ## 2. Deliverables and boundaries
 
-- Two independent applications in `apps/baseline` and `apps/modern`, with their own dependencies and Docker build inputs.
+- Two independent applications in `backends/python/baseline` and `backends/python/modern`, with their own dependencies and Docker build inputs.
 - A shared, versioned HTTP contract and database schema, migrations, deterministic seed tooling, reset tooling, and correctness tests. Sharing these controls keeps application behavior comparable; application implementations remain separate.
 - Compose configurations for local development, AWS backend execution against external RDS, and an independent k6 load-generator host.
 - A manifest-driven runner for preflight, reset, warm-up, measurement, collection, and report generation.

@@ -93,17 +93,17 @@ def generator_flags(path: Path) -> list[str]:
         if "stat" not in host:
             return ["generator telemetry incomplete"]
         mem = dict(
-            (l.split(":")[0], int(l.split(":")[1].strip().split()[0]))
-            for l in host["meminfo"].splitlines()
+            (line.split(":")[0], int(line.split(":")[1].strip().split()[0]))
+            for line in host["meminfo"].splitlines()
         )
         if mem.get("SwapTotal", 0) > mem.get("SwapFree", 0):
             flags.append(
                 "generator has swap allocated; verify paging/activity before qualification"
             )
         cpus = [
-            [int(x) for x in l.split()[1:9]]
-            for l in host["stat"].splitlines()
-            if l.startswith("cpu")
+            [int(x) for x in line.split()[1:9]]
+            for line in host["stat"].splitlines()
+            if line.startswith("cpu")
         ]
         if last:
             for old, new in zip(last, cpus):

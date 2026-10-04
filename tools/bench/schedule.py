@@ -10,7 +10,7 @@ def validate_campaign(c: dict) -> dict:
     if (
         not c.get("cells")
         or not c.get("rates")
-        or any(type(r) != int or not 1 <= r <= c.get("max_rate", 3200) for r in c["rates"])
+        or any(type(r) is not int or not 1 <= r <= c.get("max_rate", 3200) for r in c["rates"])
     ):
         raise ValueError("invalid finite rates")
     if not 1 <= c.get("vus", 0) <= 10000:

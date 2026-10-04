@@ -19,7 +19,7 @@ from .seed import seed_database
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     sub = p.add_subparsers(dest="command", required=True)
-    migrate = sub.add_parser("migrate")
+    sub.add_parser("migrate")
     mark = sub.add_parser("mark")
     mark.add_argument("--database", required=True)
     seed = sub.add_parser("seed")
@@ -107,7 +107,7 @@ def main():
     elif a.command == "report":
         write_report(a.results, a.output)
     elif a.command == "compatibility":
-        lock = validate_runtime_lock(json.loads(Path("docker/runtime-lock.json").read_text()))
+        lock = validate_runtime_lock(json.loads(Path("runtimes/python/lock.json").read_text()))
         if a.cell:
             print(
                 json.dumps(

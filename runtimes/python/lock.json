@@ -34,49 +34,49 @@
   ],
   "cells": [
     {
-      "id": "baseline-3.10.22",
+      "id": "python-baseline-3.10.22",
       "python": "3.10.22",
       "app": "baseline",
-      "dependency_lock": "apps/baseline/requirements.lock",
-      "image": "lb-baseline:3.10.22"
+      "dependency_lock": "backends/python/baseline/requirements.lock",
+      "image": "lb-python-baseline:3.10.22"
     },
     {
-      "id": "baseline-3.11.17",
+      "id": "python-baseline-3.11.17",
       "python": "3.11.17",
       "app": "baseline",
-      "dependency_lock": "apps/baseline/requirements.lock",
-      "image": "lb-baseline:3.11.17"
+      "dependency_lock": "backends/python/baseline/requirements.lock",
+      "image": "lb-python-baseline:3.11.17"
     },
     {
-      "id": "baseline-3.12.13",
+      "id": "python-baseline-3.12.13",
       "python": "3.12.13",
       "app": "baseline",
-      "dependency_lock": "apps/baseline/requirements.lock",
-      "image": "lb-baseline:3.12.13"
+      "dependency_lock": "backends/python/baseline/requirements.lock",
+      "image": "lb-python-baseline:3.12.13"
     },
     {
-      "id": "baseline-3.13.16",
+      "id": "python-baseline-3.13.16",
       "python": "3.13.16",
       "app": "baseline",
-      "dependency_lock": "apps/baseline/requirements.lock",
-      "image": "lb-baseline:3.13.16"
+      "dependency_lock": "backends/python/baseline/requirements.lock",
+      "image": "lb-python-baseline:3.13.16"
     },
     {
-      "id": "baseline-3.14.8",
+      "id": "python-baseline-3.14.8",
       "python": "3.14.8",
       "app": "baseline",
-      "dependency_lock": "apps/baseline/requirements.lock",
-      "image": "lb-baseline:3.14.8"
+      "dependency_lock": "backends/python/baseline/requirements.lock",
+      "image": "lb-python-baseline:3.14.8"
     },
     {
-      "id": "baseline-3.15.0rc3",
+      "id": "python-baseline-3.15.0rc3",
       "python": "3.15.0rc3",
       "app": "baseline",
-      "dependency_lock": "apps/baseline/requirements.lock",
-      "image": "lb-baseline:3.15.0rc3"
+      "dependency_lock": "backends/python/baseline/requirements.lock",
+      "image": "lb-python-baseline:3.15.0rc3"
     },
     {
-      "id": "modern-standard-jit0-gil1-async",
+      "id": "python-modern-standard-jit0-gil1-async",
       "python": "3.15.0rc3",
       "app": "modern",
       "build": "standard",
@@ -84,11 +84,11 @@
       "gil": true,
       "adapter": "async",
       "workers": 2,
-      "dependency_lock": "apps/modern/requirements.lock",
-      "image": "lb-modern:3.15.0rc3-standard"
+      "dependency_lock": "backends/python/modern/requirements.lock",
+      "image": "lb-python-modern:3.15.0rc3-standard"
     },
     {
-      "id": "modern-jit-jit0-gil1-async",
+      "id": "python-modern-jit-jit0-gil1-async",
       "python": "3.15.0rc3",
       "app": "modern",
       "build": "jit",
@@ -96,11 +96,11 @@
       "gil": true,
       "adapter": "async",
       "workers": 2,
-      "dependency_lock": "apps/modern/requirements.lock",
-      "image": "lb-modern:3.15.0rc3-jit"
+      "dependency_lock": "backends/python/modern/requirements.lock",
+      "image": "lb-python-modern:3.15.0rc3-jit"
     },
     {
-      "id": "modern-jit-jit1-gil1-async",
+      "id": "python-modern-jit-jit1-gil1-async",
       "python": "3.15.0rc3",
       "app": "modern",
       "build": "jit",
@@ -108,11 +108,11 @@
       "gil": true,
       "adapter": "async",
       "workers": 2,
-      "dependency_lock": "apps/modern/requirements.lock",
-      "image": "lb-modern:3.15.0rc3-jit"
+      "dependency_lock": "backends/python/modern/requirements.lock",
+      "image": "lb-python-modern:3.15.0rc3-jit"
     },
     {
-      "id": "modern-free-threaded-jit0-gil1-async",
+      "id": "python-modern-free-threaded-jit0-gil1-async",
       "python": "3.15.0rc3",
       "app": "modern",
       "build": "free-threaded",
@@ -120,11 +120,11 @@
       "gil": true,
       "adapter": "async",
       "workers": 2,
-      "dependency_lock": "apps/modern/requirements.lock",
-      "image": "lb-modern:3.15.0rc3-free-threaded"
+      "dependency_lock": "backends/python/modern/requirements.lock",
+      "image": "lb-python-modern:3.15.0rc3-free-threaded"
     },
     {
-      "id": "modern-free-threaded-jit0-gil0-async",
+      "id": "python-modern-free-threaded-jit0-gil0-async",
       "python": "3.15.0rc3",
       "app": "modern",
       "build": "free-threaded",
@@ -132,11 +132,11 @@
       "gil": false,
       "adapter": "async",
       "workers": 2,
-      "dependency_lock": "apps/modern/requirements.lock",
-      "image": "lb-modern:3.15.0rc3-free-threaded"
+      "dependency_lock": "backends/python/modern/requirements.lock",
+      "image": "lb-python-modern:3.15.0rc3-free-threaded"
     },
     {
-      "id": "modern-free-threaded-jit0-gil1-threaded",
+      "id": "python-modern-free-threaded-jit0-gil1-threaded",
       "python": "3.15.0rc3",
       "app": "modern",
       "build": "free-threaded",
@@ -144,11 +144,11 @@
       "gil": true,
       "adapter": "threaded",
       "workers": 1,
-      "dependency_lock": "apps/modern/requirements.lock",
-      "image": "lb-modern:3.15.0rc3-free-threaded"
+      "dependency_lock": "backends/python/modern/requirements.lock",
+      "image": "lb-python-modern:3.15.0rc3-free-threaded"
     },
     {
-      "id": "modern-free-threaded-jit0-gil0-threaded",
+      "id": "python-modern-free-threaded-jit0-gil0-threaded",
       "python": "3.15.0rc3",
       "app": "modern",
       "build": "free-threaded",
@@ -156,8 +156,8 @@
       "gil": false,
       "adapter": "threaded",
       "workers": 1,
-      "dependency_lock": "apps/modern/requirements.lock",
-      "image": "lb-modern:3.15.0rc3-free-threaded"
+      "dependency_lock": "backends/python/modern/requirements.lock",
+      "image": "lb-python-modern:3.15.0rc3-free-threaded"
     }
   ],
   "build_policy": {

@@ -7,7 +7,7 @@ const path=__ENV.LOAD_DATA||'/inputs/load-data.json';
 const actors=new SharedArray('actors',()=>JSON.parse(open(path)).actors);
 const posts=new SharedArray('posts',()=>JSON.parse(open(path)).posts);
 const pairs=new SharedArray('pairs',()=>JSON.parse(open(path)).like_pairs);
-const expiry=JSON.parse(open(path)).expires_at;
+const expiry=cfg.expires_at;
 if(!cfg.rate||cfg.rate<1||!cfg.vus||cfg.vus<1||cfg.duration<1)throw new Error('invalid bounded scenario');
 if(expiry*1000<Date.now()+(cfg.duration+60)*1000)throw new Error('tokens expire during run');
 if(pairs.length<cfg.rate*cfg.duration)throw new Error('mutation pairs insufficient for offered operations');

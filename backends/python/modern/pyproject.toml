@@ -19,3 +19,7 @@ dependencies = [
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.ruff]
+extend = "../../../pyproject.toml"
+target-version = "py315"

@@ -34,7 +34,7 @@ def collect_manifest(campaign: dict, trial: dict) -> dict:
             "orchestrator": platform.platform(),
             "label": "LOCAL SMOKE" if campaign.get("smoke") else campaign["mode"].upper(),
             "lock_checksum": hashlib.sha256(
-                Path("docker/runtime-lock.json").read_bytes()
+                Path("runtimes/python/lock.json").read_bytes()
             ).hexdigest(),
         }
     )

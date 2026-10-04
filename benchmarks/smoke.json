@@ -2,7 +2,7 @@
   "mode": "local",
   "smoke": true,
   "cells": [
-    "baseline-3.15.0rc3"
+    "python-baseline-3.15.0rc3"
   ],
   "rates": [
     5

@@ -34,7 +34,7 @@ def campaign_lock(path: Path):
 
 def run_trial(campaign: dict, trial: dict, output_dir: Path) -> dict:
     output_dir.mkdir(parents=True, exist_ok=False)
-    cells = json.loads(Path("docker/runtime-lock.json").read_text())["cells"]
+    cells = json.loads(Path("runtimes/python/lock.json").read_text())["cells"]
     cell = RuntimeCell(**next(c for c in cells if c["id"] == trial["cell"]))
     manifest = collect_manifest(campaign, trial)
     result = {
@@ -75,7 +75,6 @@ def run_trial(campaign: dict, trial: dict, output_dir: Path) -> dict:
         "RDS_CA_FILE": os.environ.get("RDS_CA_FILE", str(Path("docker/README-ca.txt").resolve())),
     }
     compose = ["docker", "compose", "-f", "compose.aws.yaml"]
-    collect = None
     start = datetime.now(timezone.utc)
 
     def stop():
@@ -129,7 +128,7 @@ def run_trial(campaign: dict, trial: dict, output_dir: Path) -> dict:
         secret_inputs.mkdir(mode=0o700)
         required = campaign["warmup_seconds"] + campaign["measure_seconds"] + 120
         os.environ["PAIR_BUDGET"] = str(trial["rate"] * campaign["measure_seconds"])
-        prepare_load_data(
+        load_metadata = prepare_load_data(
             base, Path(campaign["credentials"]), secret_inputs / "load-data.json", required
         )
         scenario = {
@@ -138,6 +137,7 @@ def run_trial(campaign: dict, trial: dict, output_dir: Path) -> dict:
             "vus": campaign["vus"],
             "seed": trial["seed"],
             "operation": campaign.get("operation", "mixed"),
+            "expires_at": load_metadata["expires_at"],
         }
         (secret_inputs / "scenario.json").write_text(json.dumps(scenario))
         mkdir = "import pathlib,os; [pathlib.Path(p).mkdir(parents=True,exist_ok=True) for p in (os.environ['INPUTS'],os.environ['OUTPUTS'])]; pathlib.Path(os.environ['INPUTS']).chmod(0o700); print(str(os.getuid())+':'+str(os.getgid()))"

@@ -25,7 +25,7 @@ def test_baseline_dependencies_do_not_vary_by_python():
     import json
     from pathlib import Path
 
-    data = json.loads(Path("docker/runtime-lock.json").read_text())
+    data = json.loads(Path("runtimes/python/lock.json").read_text())
     cells = [c for c in data["cells"] if c["app"] == "baseline"]
     assert len({c["dependency_lock"] for c in cells}) == 1
     assert {c["python"].split(".")[1] for c in cells} == {"10", "11", "12", "13", "14", "15"}
