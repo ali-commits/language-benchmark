@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 from .settings import Settings
 from .db import make_engine
 from .auth import router
+from .social import router as social_router
 
 
 def create_app() -> FastAPI:
@@ -22,6 +23,7 @@ def create_app() -> FastAPI:
         finally: await app.state.engine.dispose()
     app=FastAPI(title='Python baseline social API',version='1.0.0',lifespan=lifespan)
     app.include_router(router)
+    app.include_router(social_router)
     @app.get('/health/live')
     async def live(): return {'status':'ok'}
     @app.get('/health/ready')
