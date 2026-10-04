@@ -48,6 +48,7 @@ def main():
     capacity = sub.add_parser("user-capacity")
     capacity.add_argument("--config", type=Path, required=True)
     capacity.add_argument("--output", type=Path, required=True)
+    capacity.add_argument("--resume", action="store_true")
     report = sub.add_parser("report")
     report.add_argument("--results", type=Path, required=True)
     report.add_argument("--output", type=Path, required=True)
@@ -103,7 +104,7 @@ def main():
     elif a.command == "user-capacity":
         from .user_capacity import run_user_capacity
 
-        print(json.dumps(run_user_capacity(a.config, a.output), indent=2))
+        print(json.dumps(run_user_capacity(a.config, a.output, resume=a.resume), indent=2))
     elif a.command == "report":
         write_report(a.results, a.output)
     elif a.command == "compatibility":

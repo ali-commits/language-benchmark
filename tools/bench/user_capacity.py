@@ -87,7 +87,13 @@ def await_rds(c: dict, result: dict, directory: Path):
         time.sleep(30)
 
 
-def run_user_capacity(config_path: Path, output_dir: Path) -> dict:
+def next_start_users(previous: dict | None, default: int) -> int:
+    if previous and previous.get("status") in ("bracket_found", "ceiling_reached"):
+        return previous.get("passing_users") or default
+    return default
+
+
+def run_user_capacity(config_path: Path, output_dir: Path, resume: bool = False) -> dict:
     c = json.loads(config_path.read_text())
     validate_config(c)
     c.update(
@@ -96,14 +102,57 @@ def run_user_capacity(config_path: Path, output_dir: Path) -> dict:
         measure_seconds=c["ramp_seconds"] + c["settle_seconds"] + c["hold_seconds"],
     )
     c["campaign_instance"] = uuid.uuid4().hex
-    output_dir.mkdir(parents=True, exist_ok=False)
+    if resume:
+        if not (output_dir / "capacity-results.json").exists():
+            raise ValueError("resume requires completed runtime results")
+        manifests = sorted(output_dir.glob("*/manifest.json"))
+        if not manifests:
+            raise ValueError("resume requires original trial manifests")
+        original = json.loads(manifests[0].read_text())
+        for key in (
+            "cells",
+            "start_users",
+            "step_users",
+            "max_users",
+            "resolution_users",
+            "ramp_seconds",
+            "settle_seconds",
+            "hold_seconds",
+            "wait_min",
+            "wait_max",
+            "timeout_seconds",
+            "success_fraction",
+            "confirmation_repeats",
+            "seed",
+            "fixture",
+        ):
+            if original["campaign"].get(key) != c.get(key):
+                raise ValueError("resume configuration differs: " + key)
+        c["campaign_instance"] = original["trial"]["campaign_id"]
+    else:
+        output_dir.mkdir(parents=True, exist_ok=False)
     results = {}
     ordinal = 0
+    previous = None
     with (
         campaign_lock(Path("artifacts/campaign.lock")),
         database_campaign_lock(os.environ["DATABASE_URL"]),
     ):
+        if resume:
+            results = json.loads((output_dir / "capacity-results.json").read_text())
+            if any(
+                r["status"] not in ("bracket_found", "ceiling_reached") for r in results.values()
+            ):
+                raise ValueError("cannot resume an invalid or unstable boundary")
+            ordinal = 1 + max(
+                int(json.loads(p.read_text())["trial"]["id"].rsplit("-", 1)[1])
+                for p in output_dir.glob("*/manifest.json")
+            )
         for cell in c["cells"]:
+            if cell in results:
+                previous = results[cell]
+                continue
+            start_users = next_start_users(previous, c["start_users"])
 
             def probe(users):
                 nonlocal ordinal
@@ -149,7 +198,7 @@ def run_user_capacity(config_path: Path, output_dir: Path) -> dict:
                 return summary
 
             result = search_capacity(
-                probe, c["start_users"], c["step_users"], c["max_users"], c["resolution_users"]
+                probe, start_users, c["step_users"], c["max_users"], c["resolution_users"]
             )
             # Search is exploratory; repeated endpoints determine whether the bracket is stable.
             if result["status"] == "bracket_found":
@@ -172,7 +221,9 @@ def run_user_capacity(config_path: Path, output_dir: Path) -> dict:
                 ) and all(r["outcome"] == "fail" for r in confirmations.get("failing_users", []))
                 if not stable:
                     result["status"] = "unstable_or_invalid_boundary"
+            result["starting_users"] = start_users
             results[cell] = result
+            previous = result
             atomic_json(output_dir / "capacity-results.json", results)
             if result["status"] in ("invalid", "unstable_or_invalid_boundary"):
                 break
