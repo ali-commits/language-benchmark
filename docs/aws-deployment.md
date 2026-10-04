@@ -48,7 +48,7 @@ First interrupt the controller gracefully and confirm the backend/load services 
 
 ```sh
 ssh -F artifacts/aws/ssh-config benchmark-monitor \
-  'sudo systemctl kill --signal=SIGINT --kill-whom=main language-benchmark-full; sudo systemctl kill --signal=SIGINT --kill-whom=main language-benchmark-pilot'
+  'sudo systemctl kill --signal=SIGINT --kill-whom=all language-benchmark-full; sudo systemctl kill --signal=SIGINT --kill-whom=all language-benchmark-pilot'
 ```
 
 A hard host failure can require the documented `bench.cli recover` operation. After verified cleanup, stop the tagged resources from this checkout:
