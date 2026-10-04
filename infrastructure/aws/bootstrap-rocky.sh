@@ -4,6 +4,26 @@ exec > >(tee -a /var/log/language-benchmark-bootstrap.log) 2>&1
 if [ "${SKIP_UPGRADE:-0}" != 1 ]; then dnf -y upgrade; fi
 dnf -y install dnf-plugins-core curl git tar unzip zstd python3 gnupg2 chrony policycoreutils-python-utils
 systemctl enable --now chronyd
+dnf -y install kernel-modules-extra
+latest_kernel=$(rpm -q kernel-core --qf '%{VERSION}-%{RELEASE}.%{ARCH}\n' | sort -V | tail -1)
+if [ "$(uname -r)" != "$latest_kernel" ] && [ "${SKIP_UPGRADE:-0}" != 1 ]; then
+  cp "$0" /usr/local/sbin/language-benchmark-bootstrap
+  chmod 700 /usr/local/sbin/language-benchmark-bootstrap
+  cat > /etc/systemd/system/language-benchmark-bootstrap.service <<'UNIT'
+[Unit]
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=!/var/lib/language-benchmark/bootstrap-complete
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/env SKIP_UPGRADE=1 /usr/local/sbin/language-benchmark-bootstrap
+[Install]
+WantedBy=multi-user.target
+UNIT
+  systemctl enable language-benchmark-bootstrap.service
+  shutdown -r +1 'Boot updated Rocky kernel before Docker setup'
+  exit 0
+fi
 curl -fsSL https://download.docker.com/linux/rhel/docker-ce.repo -o /etc/yum.repos.d/docker-ce.repo
 curl -fsSL https://download.docker.com/linux/rhel/gpg -o /tmp/docker.gpg
 gpg --show-keys --with-colons /tmp/docker.gpg | grep -q '060A61C51B558A7F742B77AAC52FEB6B621E9F35'

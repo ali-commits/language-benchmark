@@ -221,7 +221,7 @@
     {
       "id": 7,
       "title": "Historical successful throughput by offered rate",
-      "type": "timeseries",
+      "type": "table",
       "gridPos": {
         "x": 0,
         "y": 24,
@@ -236,7 +236,9 @@
         {
           "refId": "A",
           "expr": "benchmark_successful_ops_per_second{cell=~\"$cell\",trial=~\"$trial\"}",
-          "legendFormat": "{{cell}} {{operation}} {{job}}"
+          "legendFormat": "{{cell}} {{operation}} {{job}}",
+          "instant": true,
+          "format": "table"
         }
       ],
       "fieldConfig": {
@@ -275,6 +277,86 @@
       "fieldConfig": {
         "defaults": {
           "unit": "ms"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 20,
+      "title": "RDS CPU",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 0,
+        "y": 32,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "cloudwatch",
+        "uid": "benchmark-cloudwatch"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "queryMode": "Metrics",
+          "namespace": "AWS/RDS",
+          "metricName": "CPUUtilization",
+          "statistic": "Average",
+          "dimensions": {
+            "DBInstanceIdentifier": [
+              "language-benchmark"
+            ]
+          },
+          "region": "ap-southeast-1",
+          "period": "60",
+          "matchExact": true,
+          "metricQueryType": 0,
+          "metricEditorMode": 0
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 21,
+      "title": "RDS connections",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 12,
+        "y": 32,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "cloudwatch",
+        "uid": "benchmark-cloudwatch"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "queryMode": "Metrics",
+          "namespace": "AWS/RDS",
+          "metricName": "DatabaseConnections",
+          "statistic": "Average",
+          "dimensions": {
+            "DBInstanceIdentifier": [
+              "language-benchmark"
+            ]
+          },
+          "region": "ap-southeast-1",
+          "period": "60",
+          "matchExact": true,
+          "metricQueryType": 0,
+          "metricEditorMode": 0
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
         },
         "overrides": []
       }

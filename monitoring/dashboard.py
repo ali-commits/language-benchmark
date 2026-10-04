@@ -78,6 +78,39 @@ def build_dashboard():
                 "fieldConfig": {"defaults": {"unit": unit}, "overrides": []},
             }
         )
+    for index, (title, metric, unit) in enumerate(
+        [
+            ("RDS CPU", "CPUUtilization", "percent"),
+            ("RDS connections", "DatabaseConnections", "short"),
+        ]
+    ):
+        panels.append(
+            {
+                "id": 20 + index,
+                "title": title,
+                "type": "timeseries",
+                "gridPos": {"x": index * 12, "y": 32, "w": 12, "h": 8},
+                "datasource": {"type": "cloudwatch", "uid": "benchmark-cloudwatch"},
+                "targets": [
+                    {
+                        "refId": "A",
+                        "queryMode": "Metrics",
+                        "namespace": "AWS/RDS",
+                        "metricName": metric,
+                        "statistic": "Average",
+                        "dimensions": {"DBInstanceIdentifier": ["language-benchmark"]},
+                        "region": "ap-southeast-1",
+                        "period": "60",
+                        "matchExact": True,
+                        "metricQueryType": 0,
+                        "metricEditorMode": 0,
+                    }
+                ],
+                "fieldConfig": {"defaults": {"unit": unit}, "overrides": []},
+            }
+        )
+    panels[6]["type"] = "table"
+    panels[6]["targets"][0].update(instant=True, format="table")
     variables = [
         {
             "name": name,
