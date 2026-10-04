@@ -2,7 +2,7 @@
 set -euo pipefail
 exec > >(tee -a /var/log/language-benchmark-bootstrap.log) 2>&1
 if [ "${SKIP_UPGRADE:-0}" != 1 ]; then dnf -y upgrade; fi
-dnf -y install dnf-plugins-core curl git tar unzip zstd python3 gnupg2 chrony policycoreutils-python-utils gdisk
+dnf -y install dnf-plugins-core curl git tar unzip zstd python3 gnupg2 chrony policycoreutils-python-utils
 systemctl enable --now chronyd
 curl -fsSL https://download.docker.com/linux/rhel/docker-ce.repo -o /etc/yum.repos.d/docker-ce.repo
 curl -fsSL https://download.docker.com/linux/rhel/gpg -o /tmp/docker.gpg
