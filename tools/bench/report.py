@@ -187,7 +187,9 @@ def write_report(results_dir: Path, output_path: Path) -> None:
             for x in [
                 "Label",
                 "Cell",
-                "Offered ops/s",
+                "Concurrent users"
+                if any(t.get("workload") == "user-journey" for t in report["trials"])
+                else "Offered ops/s",
                 "Successful ops/s",
                 "p95 ms",
                 "p99 ms",
@@ -313,11 +315,12 @@ def read_trial_summary(manifest_path: Path) -> dict:
         reasons.append("trial did not complete measurement lifecycle")
     if not result.get("reset_verified"):
         reasons.append("final fixture restoration not verified")
-    reasons += generator_flags(
-        p.parent / "telemetry.jsonl",
-        result.get("measurement_started_epoch") if journey else None,
-        result.get("measurement_finished_epoch") if journey else None,
-    )
+    if journey:
+        from .journeys import generator_window
+
+        reasons += generator_flags(p.parent / "telemetry.jsonl", *generator_window(result))
+    else:
+        reasons += generator_flags(p.parent / "telemetry.jsonl")
     if manifest.get("campaign", {}).get("mode") == "aws":
         evidence = p.parent / "rds.json"
         if not evidence.exists():

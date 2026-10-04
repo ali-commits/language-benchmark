@@ -37,10 +37,13 @@ def read_journey_metrics(path: Path) -> dict:
         "ramp_succeeded": 0,
         "settle_attempted": 0,
         "settle_succeeded": 0,
+        "http_requests": 0,
+        "completed_journeys": 0,
     }
     status = {"incomplete": False}
     durations = []
     times = []
+    activity_times = []
     for line in metric_lines(path, status):
         try:
             p = json.loads(line)
@@ -53,7 +56,11 @@ def read_journey_metrics(path: Path) -> dict:
         metric = p["metric"]
         value = d["value"]
         phase = d.get("tags", {}).get("phase")
-        if metric == "users_authenticated":
+        if phase in ("ramp", "settle", "steady") and d.get("time"):
+            activity_times.append(
+                datetime.fromisoformat(d["time"].replace("Z", "+00:00")).timestamp()
+            )
+        if metric == "users_authenticated" and phase != "drain":
             m["authenticated_users"] += value
         if phase in ("ramp", "settle"):
             if metric == "operations_attempted":
@@ -64,6 +71,10 @@ def read_journey_metrics(path: Path) -> dict:
             continue
         if d.get("time"):
             times.append(datetime.fromisoformat(d["time"].replace("Z", "+00:00")).timestamp())
+        if metric == "http_reqs":
+            m["http_requests"] += value
+        if metric == "user_journeys_completed":
+            m["completed_journeys"] += value
         if metric == "operations_attempted":
             m["attempted"] += value
         if metric == "operations_succeeded":
@@ -74,6 +85,10 @@ def read_journey_metrics(path: Path) -> dict:
             m["active_users_max"] = max(m["active_users_max"], value)
         if metric == "operation_duration":
             durations.append(value)
+    if activity_times:
+        m.update(
+            activity_started_epoch=min(activity_times), activity_finished_epoch=max(activity_times)
+        )
     m["incomplete"] = status["incomplete"]
     if durations:
         m.update(
@@ -96,3 +111,10 @@ def classify_journey(
     if metrics.get("authenticated_users", 0) < users * success_fraction:
         return "fail"
     return "pass" if metrics["succeeded"] / metrics["attempted"] >= success_fraction else "fail"
+
+
+def generator_window(result: dict):
+    metrics = result.get("journey_metrics", {})
+    start = metrics.get("activity_started_epoch", result.get("execution_started_epoch"))
+    end = metrics.get("activity_finished_epoch", result.get("execution_finished_epoch"))
+    return (start, end) if start is not None and end is not None else (None, None)

@@ -13,6 +13,17 @@ Two real social APIs and a controlled Docker/k6 experiment. The API implements p
 
 See the [live AWS deployment and dashboard](docs/aws-deployment.md), [repository layout](docs/file-structure.md), [verification evidence](docs/verification.md), [implementation decisions](docs/implementation-decisions.md), [methodology](docs/methodology.md), [AWS runbook](docs/aws-runbook.md), [runtime support](docs/runtime-support.md), the [approved specification](docs/superpowers/specs/2026-10-04-python-fastapi-benchmark-design.md), and [implementation plan](docs/superpowers/plans/2026-10-04-python-fastapi-benchmark.md).
 
+## Concurrent-user experiment
+
+The primary experiment uses distinct logged-in users, each fetching a following feed, waiting a random 3–10 seconds, liking and replying. It starts at 10,000 concurrent users, increases by 10,000 until a response failure, then searches the bracket to within 100 users. Every probe restores the canonical database. See [concurrent-user methodology](docs/user-capacity-methodology.md) for response deadlines, generator qualification and repeated boundary confirmation.
+
+```sh
+PYTHONPATH=tools uv run -m bench.cli user-capacity \
+  --config artifacts/aws/user-capacity.json --output artifacts/results/user-capacity
+```
+
+This requires the private AWS configuration and 50,000 unique login credentials. Arrival-rate pilot results describe a different workload and must not be presented as concurrent-user capacity. If all 50,000 users pass, the result is a lower bound at the fixture ceiling.
+
 ## Prerequisites
 
 Linux, Docker Engine/Compose, uv, and PostgreSQL client tools matching the database major version. Published source images target x86-64. Docker builds can take several minutes per interpreter; Python 3.15 also builds Pydantic Core with a pinned Rust toolchain. Build resources are independent of the measured two-vCPU runtime limit.

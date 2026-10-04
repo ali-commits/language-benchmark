@@ -246,7 +246,8 @@ def run_trial(campaign: dict, trial: dict, output_dir: Path) -> dict:
                 (output_dir / "warmup.log").write_text(w.stdout)
             # Threshold failures are overload evidence, not grounds to discard the run.
             result["status"] = "measuring"
-            result["measurement_started_epoch"] = time.time()
+            result["execution_started_epoch"] = time.time()
+            result["measurement_started_epoch"] = result["execution_started_epoch"]
             atomic_json(output_dir / "result.json", result)
             extra_output = (
                 ["--out", "experimental-prometheus-rw"] if campaign.get("prometheus_url") else []
@@ -267,7 +268,8 @@ def run_trial(campaign: dict, trial: dict, output_dir: Path) -> dict:
                 result["k6_exit_code"] = e.returncode
                 if e.returncode != 99:
                     result["reasons"].append("k6 execution failed with exit " + str(e.returncode))
-            result["measurement_finished_epoch"] = time.time()
+            result["execution_finished_epoch"] = time.time()
+            result["measurement_finished_epoch"] = result["execution_finished_epoch"]
             copy_from(load, outputs, output_dir / "k6")
         result["status"] = "measured"
         if journey:

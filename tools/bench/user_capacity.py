@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .capacity import search_capacity
-from .journeys import classify_journey
+from .journeys import classify_journey, generator_window
 from .manifest import atomic_json
 from .report import generator_flags
 from .runner import campaign_lock, database_campaign_lock, run_trial
@@ -54,7 +54,12 @@ def validate_config(c: dict):
 
 
 def await_rds(c: dict, result: dict, directory: Path):
-    if c["mode"] != "aws" or not result.get("measurement_started_epoch"):
+    if (
+        c["mode"] != "aws"
+        or result.get("status") != "measured"
+        or not result.get("measurement_started_epoch")
+        or not result.get("measurement_finished_epoch")
+    ):
         return
     start = result["measurement_started_epoch"]
     end = result["measurement_finished_epoch"]
@@ -130,8 +135,7 @@ def run_user_capacity(config_path: Path, output_dir: Path) -> dict:
                     reasons.append("measurement or cleanup incomplete")
                 reasons += generator_flags(
                     directory / "telemetry.jsonl",
-                    r.get("measurement_started_epoch"),
-                    r.get("measurement_finished_epoch"),
+                    *generator_window(r),
                 )
                 m = r.get("journey_metrics", {})
                 outcome = classify_journey(m, users, reasons, c["success_fraction"])

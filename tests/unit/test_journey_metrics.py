@@ -73,3 +73,39 @@ def test_insufficient_credentials_are_rejected(tmp_path):
 
     with pytest.raises(ValueError):
         prepare_journey_data(p, 2, tmp_path / "out.json")
+
+
+def test_generator_window_covers_authentication_and_steady_activity():
+    from bench.journeys import generator_window
+
+    result = {
+        "measurement_started_epoch": 300,
+        "measurement_finished_epoch": 600,
+        "journey_metrics": {"activity_started_epoch": 100, "activity_finished_epoch": 610},
+    }
+    assert generator_window(result) == (100, 610)
+
+
+def test_missing_interval_on_interrupted_probe_is_safe():
+    from bench.journeys import generator_window
+    from bench.user_capacity import await_rds
+
+    result = {"status": "interrupted", "measurement_started_epoch": 100}
+    assert generator_window(result) == (None, None)
+    await_rds({"mode": "aws"}, result, __import__("pathlib").Path("/not-needed"))
+
+
+def test_journey_diagnostics_include_http_requests_and_completed_cycles(tmp_path):
+    p = tmp_path / "raw.gz"
+    rows = [
+        point("http_reqs", 1),
+        point("user_journeys_completed", 1),
+        point("operations_attempted", 1),
+        point("operations_succeeded", 1),
+        point("users_authenticated", 1, "drain"),
+    ]
+    with gzip.open(p, "wt") as f:
+        f.write("\n".join(json.dumps(x) for x in rows))
+    m = read_journey_metrics(p)
+    assert m["http_requests"] == 1 and m["completed_journeys"] == 1
+    assert m["authenticated_users"] == 0
