@@ -1,0 +1,170 @@
+{
+  "base": "debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a",
+  "runtimes": [
+    {
+      "version": "3.10.22",
+      "url": "https://www.python.org/ftp/python/3.10.22/Python-3.10.22.tar.xz",
+      "sha256": "c61fe9b1a1a7ec2a0b0388e664187c378a5325a89e3606d220abf5bdfccb2543"
+    },
+    {
+      "version": "3.11.17",
+      "url": "https://www.python.org/ftp/python/3.11.17/Python-3.11.17.tar.xz",
+      "sha256": "bfb74ad39efae27cda510f134ab408e00f9992c56851cfc0b1cdb5646da11599"
+    },
+    {
+      "version": "3.12.13",
+      "url": "https://www.python.org/ftp/python/3.12.13/Python-3.12.13.tar.xz",
+      "sha256": "c08bc65a81971c1dd5783182826503369466c7e67374d1646519adf05207b684"
+    },
+    {
+      "version": "3.13.16",
+      "url": "https://www.python.org/ftp/python/3.13.16/Python-3.13.16.tar.xz",
+      "sha256": "f4b1bfb3c79b5bb11b8d228a12504163b4c0dab4d679828d8f5f26b6cb6ab35d"
+    },
+    {
+      "version": "3.14.8",
+      "url": "https://www.python.org/ftp/python/3.14.8/Python-3.14.8.tar.xz",
+      "sha256": "c2215904f02b175596dc49351585104f4bc20341e1c47378b26a2c274360ce73"
+    },
+    {
+      "version": "3.15.0rc3",
+      "url": "https://www.python.org/ftp/python/3.15.0/Python-3.15.0rc3.tar.xz",
+      "sha256": "506630aa66d5441188f34df22c0760bfe87fc92212630493ebc9ff3b3a7a1d49"
+    }
+  ],
+  "cells": [
+    {
+      "id": "baseline-3.10.22",
+      "python": "3.10.22",
+      "app": "baseline",
+      "dependency_lock": "apps/baseline/requirements.lock",
+      "image": "lb-baseline:3.10.22"
+    },
+    {
+      "id": "baseline-3.11.17",
+      "python": "3.11.17",
+      "app": "baseline",
+      "dependency_lock": "apps/baseline/requirements.lock",
+      "image": "lb-baseline:3.11.17"
+    },
+    {
+      "id": "baseline-3.12.13",
+      "python": "3.12.13",
+      "app": "baseline",
+      "dependency_lock": "apps/baseline/requirements.lock",
+      "image": "lb-baseline:3.12.13"
+    },
+    {
+      "id": "baseline-3.13.16",
+      "python": "3.13.16",
+      "app": "baseline",
+      "dependency_lock": "apps/baseline/requirements.lock",
+      "image": "lb-baseline:3.13.16"
+    },
+    {
+      "id": "baseline-3.14.8",
+      "python": "3.14.8",
+      "app": "baseline",
+      "dependency_lock": "apps/baseline/requirements.lock",
+      "image": "lb-baseline:3.14.8"
+    },
+    {
+      "id": "baseline-3.15.0rc3",
+      "python": "3.15.0rc3",
+      "app": "baseline",
+      "dependency_lock": "apps/baseline/requirements.lock",
+      "image": "lb-baseline:3.15.0rc3"
+    },
+    {
+      "id": "modern-standard-jit0-gil1-async",
+      "python": "3.15.0rc3",
+      "app": "modern",
+      "build": "standard",
+      "jit": false,
+      "gil": true,
+      "adapter": "async",
+      "workers": 2,
+      "dependency_lock": "apps/modern/requirements.lock",
+      "image": "lb-modern:3.15.0rc3-standard"
+    },
+    {
+      "id": "modern-jit-jit0-gil1-async",
+      "python": "3.15.0rc3",
+      "app": "modern",
+      "build": "jit",
+      "jit": false,
+      "gil": true,
+      "adapter": "async",
+      "workers": 2,
+      "dependency_lock": "apps/modern/requirements.lock",
+      "image": "lb-modern:3.15.0rc3-jit"
+    },
+    {
+      "id": "modern-jit-jit1-gil1-async",
+      "python": "3.15.0rc3",
+      "app": "modern",
+      "build": "jit",
+      "jit": true,
+      "gil": true,
+      "adapter": "async",
+      "workers": 2,
+      "dependency_lock": "apps/modern/requirements.lock",
+      "image": "lb-modern:3.15.0rc3-jit"
+    },
+    {
+      "id": "modern-free-threaded-jit0-gil1-async",
+      "python": "3.15.0rc3",
+      "app": "modern",
+      "build": "free-threaded",
+      "jit": false,
+      "gil": true,
+      "adapter": "async",
+      "workers": 2,
+      "dependency_lock": "apps/modern/requirements.lock",
+      "image": "lb-modern:3.15.0rc3-free-threaded"
+    },
+    {
+      "id": "modern-free-threaded-jit0-gil0-async",
+      "python": "3.15.0rc3",
+      "app": "modern",
+      "build": "free-threaded",
+      "jit": false,
+      "gil": false,
+      "adapter": "async",
+      "workers": 2,
+      "dependency_lock": "apps/modern/requirements.lock",
+      "image": "lb-modern:3.15.0rc3-free-threaded"
+    },
+    {
+      "id": "modern-free-threaded-jit0-gil1-threaded",
+      "python": "3.15.0rc3",
+      "app": "modern",
+      "build": "free-threaded",
+      "jit": false,
+      "gil": true,
+      "adapter": "threaded",
+      "workers": 1,
+      "dependency_lock": "apps/modern/requirements.lock",
+      "image": "lb-modern:3.15.0rc3-free-threaded"
+    },
+    {
+      "id": "modern-free-threaded-jit0-gil0-threaded",
+      "python": "3.15.0rc3",
+      "app": "modern",
+      "build": "free-threaded",
+      "jit": false,
+      "gil": false,
+      "adapter": "threaded",
+      "workers": 1,
+      "dependency_lock": "apps/modern/requirements.lock",
+      "image": "lb-modern:3.15.0rc3-free-threaded"
+    }
+  ],
+  "build_policy": {
+    "compiler": "gcc 14 (Debian trixie)",
+    "pgo": true,
+    "lto": true,
+    "llvm_major": 21,
+    "note": "APT package versions and compiler identity must be captured per built image; source build evidence pending"
+  }
+}
