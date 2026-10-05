@@ -1,0 +1,14 @@
+[Unit]
+Description=Language benchmark guarded capacity controller
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=rocky
+WorkingDirectory=/home/rocky/language-benchmark
+ExecStart=/bin/bash -lc 'source artifacts/aws/monitor.env; export PATH=/home/rocky/.local/bin:$PATH; exec uv run -m bench.cli user-capacity --resume --retry-invalid --config artifacts/aws/user-capacity.json --output artifacts/results/user-capacity >> artifacts/aws/user-capacity.log 2>&1'
+KillSignal=SIGINT
+KillMode=control-group
+TimeoutStopSec=600
+Restart=no

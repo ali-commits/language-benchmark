@@ -122,6 +122,9 @@ def run_trial(campaign: dict, trial: dict, output_dir: Path) -> dict:
         restore_fixture(dsn, fixture, campaign["database_allowlist"])
 
     def measure():
+        from .images import ensure_backend_image, verify_backend_limits
+
+        ensure_backend_image(campaign, cell, output_dir)
         execute(
             backend,
             [
@@ -132,6 +135,7 @@ def run_trial(campaign: dict, trial: dict, output_dir: Path) -> dict:
             {"TARGET": runtime},
         )
         execute(backend, compose + ["up", "-d"], env, timeout=120)
+        verify_backend_limits(backend, compose, env)
         deadline = time.monotonic() + 120
         snapshots = []
         while time.monotonic() < deadline:

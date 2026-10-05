@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .capacity import search_capacity
+from .control import qualified_cache, recover_hosts, retry_probe
 from .journeys import classify_journey, generator_window, journey_flags
 from .manifest import atomic_json
 from .report import generator_flags
@@ -48,6 +49,15 @@ def validate_config(c: dict):
         raise ValueError("invalid response target/confirmations")
     if not c.get("database_allowlist", "").startswith("language_benchmark"):
         raise ValueError("dedicated benchmark database required")
+    if (
+        type(c.get("infrastructure_attempts", 1)) is not int
+        or not 1 <= c.get("infrastructure_attempts", 1) <= 3
+        or type(c.get("recovery_delay_seconds", 30)) is not int
+        or not 0 <= c.get("recovery_delay_seconds", 30) <= 120
+    ):
+        raise ValueError("invalid bounded recovery settings")
+    if type(c.get("auto_build_images", False)) is not bool:
+        raise ValueError("auto_build_images must be boolean")
     fixture = json.loads(Path(c["fixture"]).read_text())
     if fixture["counts"]["users"] < c["max_users"]:
         raise ValueError("fixture cannot provide enough unique accounts")
@@ -101,7 +111,9 @@ def invalid_boundary(result: dict) -> bool:
     )
 
 
-def run_user_capacity(config_path: Path, output_dir: Path, resume: bool = False) -> dict:
+def run_user_capacity(
+    config_path: Path, output_dir: Path, resume: bool = False, retry_invalid: bool = False
+) -> dict:
     c = json.loads(config_path.read_text())
     validate_config(c)
     c.update(
@@ -111,8 +123,6 @@ def run_user_capacity(config_path: Path, output_dir: Path, resume: bool = False)
     )
     c["campaign_instance"] = uuid.uuid4().hex
     if resume:
-        if not (output_dir / "capacity-results.json").exists():
-            raise ValueError("resume requires completed runtime results")
         manifests = sorted(output_dir.glob("*/manifest.json"))
         if not manifests:
             raise ValueError("resume requires original trial manifests")
@@ -143,14 +153,18 @@ def run_user_capacity(config_path: Path, output_dir: Path, resume: bool = False)
     ordinal = 0
     previous = None
     previous_upper = None
+    cached = qualified_cache(output_dir) if resume else {}
     with (
         campaign_lock(Path("artifacts/campaign.lock")),
         database_campaign_lock(os.environ["DATABASE_URL"]),
     ):
         if resume:
-            results = json.loads((output_dir / "capacity-results.json").read_text())
+            results_file = output_dir / "capacity-results.json"
+            results = json.loads(results_file.read_text()) if results_file.exists() else {}
             if any(invalid_boundary(r) for r in results.values()):
-                raise ValueError("cannot resume invalid evidence without resolving its cause")
+                if not retry_invalid:
+                    raise ValueError("cannot resume invalid evidence without resolving its cause")
+                results = {cell: r for cell, r in results.items() if not invalid_boundary(r)}
             ordinal = 1 + max(
                 int(json.loads(p.read_text())["trial"]["id"].rsplit("-", 1)[1])
                 for p in output_dir.glob("*/manifest.json")
@@ -163,7 +177,7 @@ def run_user_capacity(config_path: Path, output_dir: Path, resume: bool = False)
                 continue
             start_users = next_start_users(previous, c["start_users"])
 
-            def probe(users):
+            def probe_once(users):
                 nonlocal ordinal
                 trial = {
                     "id": c["campaign_instance"][:12] + f"-{ordinal:04d}",
@@ -200,12 +214,25 @@ def run_user_capacity(config_path: Path, output_dir: Path, resume: bool = False)
                 outcome = classify_journey(m, users, reasons, c["success_fraction"])
                 summary = {
                     "outcome": outcome,
+                    "lifecycle_status": r.get("status"),
                     "reasons": sorted(set(reasons)),
                     "metrics": m,
                     "trial_id": trial["id"],
                 }
                 atomic_json(directory / "capacity-outcome.json", summary)
                 return summary
+
+            def probe(users):
+                queue = cached.get((cell, users))
+                if queue:
+                    return {**queue.popleft(), "reused_after_restart": True}
+                return retry_probe(
+                    probe_once,
+                    users,
+                    lambda: recover_hosts(c),
+                    attempts=c.get("infrastructure_attempts", 1),
+                    delay=c.get("recovery_delay_seconds", 30),
+                )
 
             result = search_capacity(
                 probe,

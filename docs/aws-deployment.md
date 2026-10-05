@@ -48,7 +48,7 @@ First interrupt the controller gracefully and confirm the backend/load services 
 
 ```sh
 ssh -F artifacts/aws/ssh-config benchmark-monitor \
-  'sudo systemctl kill --signal=SIGINT --kill-whom=all language-benchmark-user-capacity'
+  'sudo systemctl stop language-benchmark-supervisor; sudo systemctl stop language-benchmark-user-capacity'
 ```
 
 A hard host failure can require the documented `bench.cli recover` operation. After verified cleanup, stop the tagged resources from this checkout:
@@ -66,3 +66,29 @@ Private deployment identifiers, SSH configuration/key and credentials are under 
 The generator was enlarged to c7i.8xlarge after the first concurrent-user trial exhausted source ports and saturated generator CPU. It uses four VPC source addresses, a 1024–65535 ephemeral port range, TCP TIME_WAIT reuse and a 250,000-file-descriptor container limit, following Grafana’s [large-test guidance](https://grafana.com/docs/k6/latest/testing-guides/running-large-tests/). The backend remains c7i.large with Docker enforcing 2 CPUs and 3 GiB memory. No backend CPU allocation changed.
 
 k6 records socket/resource failures separately from request timeouts. Warning-per-request logs are suppressed to prevent an overload log flood; raw counters retain failure evidence. Backend log collection retains the last 2,000 lines plus container exit/OOM and CPU/memory limits. The invalid initial campaign remains in `artifacts/results/user-capacity-invalid-20261004/` after the replacement starts.
+
+## Automatic controller supervision
+
+`language-benchmark-supervisor.service` runs on the monitoring machine and watches `language-benchmark-user-capacity.service`. It adopts an existing controller without interrupting its trial. If that controller crashes or the old controller stops with invalid evidence, the supervisor starts the updated controller with `--resume --retry-invalid`. Supervisor state and its persisted three-start recovery budget are in `artifacts/aws/supervisor-status.json`; controller output remains in `artifacts/aws/user-capacity.log`.
+
+The updated runner retries an invalid probe up to three times, each in its own preserved trial directory. It starts an inactive Docker daemon when reachable, stops the old backend/load containers, restores the canonical fixture, and redeploys before each attempt. Expected overload failures and explicit interruptions are not retried. Generator/telemetry failures never move capacity bounds. Persistent invalid evidence exhausts the budget and requires attention instead of looping indefinitely.
+
+Valid completed probe artifacts are replayed after a controller restart, including an unfinished runtime's search and confirmation probes. Invalid or unrestored trials are excluded. Resume rejects changes to workload, fixture, runtime ordering, response deadlines and confirmation settings.
+
+With `auto_build_images` enabled, missing locked Python images are built on the load generator before the timed window, transferred to the backend, and checked against the build host's image ID. Existing images are reused. Runtime/dependency checks still run before load starts, and Docker limits must remain exactly 2 CPUs, 3 GiB memory and no swap. No build runs on the measured backend.
+
+Both services are configured on the monitor, and the supervisor starts on reboot. It exits when the campaign is complete and never stops, deletes, resizes, or starts AWS instances or RDS. Check both services and supervisor state when diagnosing progress:
+
+```sh
+ssh -F artifacts/aws/ssh-config benchmark-monitor \
+  'systemctl status language-benchmark-supervisor language-benchmark-user-capacity --no-pager; cat /home/rocky/language-benchmark/artifacts/aws/supervisor-status.json'
+```
+
+Before shutting down AWS, stop supervision first, then gracefully stop the controller so recovery cannot restart it:
+
+```sh
+ssh -F artifacts/aws/ssh-config benchmark-monitor \
+  'sudo systemctl stop language-benchmark-supervisor; sudo systemctl stop language-benchmark-user-capacity'
+```
+
+Verify the last trial's `reset_verified` and that backend/load containers are stopped, then use the existing checked AWS shutdown command. To retry after repairing an exhausted recovery budget, stop the supervisor, remove only `artifacts/aws/supervisor-status.json` on the monitor, and start the supervisor again. Keep trial artifacts and capacity results.
