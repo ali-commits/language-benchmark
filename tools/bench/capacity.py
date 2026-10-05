@@ -10,9 +10,12 @@ def search_capacity(
     ceiling: int = 50000,
     resolution: int = 100,
     next_candidate: int | None = None,
+    growth_strategy: str = "adaptive",
 ) -> dict:
     if not 1 <= start <= ceiling or step < 1 or resolution < 1:
         raise ValueError("invalid finite search bounds")
+    if growth_strategy not in ("adaptive", "geometric"):
+        raise ValueError("unknown search growth strategy")
     lower = 0
     upper = None
     observations = []
@@ -44,6 +47,8 @@ def search_capacity(
             break
         if adaptive and candidate == start:
             candidate = next_candidate
+        elif growth_strategy == "geometric":
+            candidate = min(max(candidate + resolution, candidate * 2), ceiling)
         else:
             if adaptive:
                 growth = min(step, growth * 2)

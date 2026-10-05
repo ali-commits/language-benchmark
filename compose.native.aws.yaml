@@ -1,0 +1,24 @@
+name: language-benchmark-backend
+services:
+  backend:
+    image: ${BACKEND_IMAGE:?verified native image required}
+    cpus: 2.0
+    mem_limit: 3g
+    memswap_limit: 3g
+    network_mode: host
+    stop_grace_period: 45s
+    labels:
+      org.language-benchmark.run-id: ${RUN_ID:?fresh run nonce required}
+      org.language-benchmark.cell-id: ${BACKEND_CELL_ID:?locked cell required}
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?backend database URL required}
+      JWT_SECRET: ${JWT_SECRET:?JWT secret required}
+      JWT_TTL_SECONDS: ${JWT_TTL_SECONDS:-3600}
+      MODE: ${MODE:-aws}
+      BIND_IP: ${BIND_IP:-127.0.0.1}
+      PORT: 8000
+      RUN_ID: ${RUN_ID}
+      RUN_DIR: /run/benchmark
+    volumes:
+      - ${RUN_DIR_HOST:?runtime artifact directory required}:/run/benchmark:Z
+      - ${RDS_CA_FILE:?RDS CA file required}:/certs/rds-ca.pem:ro,Z

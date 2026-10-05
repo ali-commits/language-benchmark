@@ -60,6 +60,13 @@ def validate_config(c: dict):
             or type(policy.get("stop_on_contradiction")) is not bool
         ):
             raise ValueError("invalid confirmation execution policy")
+    if c.get("growth_strategy", "adaptive") not in ("adaptive", "geometric"):
+        raise ValueError("unknown search growth strategy")
+    hint = c.get("initial_failing_hint")
+    if hint is not None and (
+        type(hint) is not int or not c["start_users"] < hint <= c["max_users"]
+    ):
+        raise ValueError("invalid measured starting hint")
     if not c.get("database_allowlist", "").startswith("language_benchmark"):
         raise ValueError("dedicated benchmark database required")
     if (
@@ -195,16 +202,27 @@ def run_user_capacity(
             "confirmation_repeats",
             "seed",
             "fixture",
+            "expected_image_ids",
         ):
             if original["campaign"].get(key) != c.get(key):
                 raise ValueError("resume configuration differs: " + key)
+        from .models import NativeCell
+        from .native_runtime import load_runtime_cell, registry_metadata
+
+        for manifest_path in manifests:
+            stored = json.loads(manifest_path.read_text())
+            lock = stored.get("runtime_lock")
+            if lock:
+                runtime = load_runtime_cell(stored["trial"]["cell"])
+                if not isinstance(runtime, NativeCell) or lock != registry_metadata(runtime):
+                    raise ValueError("resume native runtime registry differs from measured binary")
         c["campaign_instance"] = original["trial"]["campaign_id"]
     else:
         output_dir.mkdir(parents=True, exist_ok=False)
     results = {}
     ordinal = 0
     previous = None
-    previous_upper = None
+    previous_upper = c.get("initial_failing_hint")
     cached = qualified_cache(output_dir) if resume else {}
     prior_trials = {key: list(queue) for key, queue in cached.items()}
     with (
@@ -294,6 +312,7 @@ def run_user_capacity(
                 c["max_users"],
                 c["resolution_users"],
                 next_candidate=previous_upper,
+                **({"growth_strategy": c["growth_strategy"]} if "growth_strategy" in c else {}),
             )
             # Search is exploratory; repeated endpoints determine whether the bracket is stable.
             if result["status"] == "bracket_found":

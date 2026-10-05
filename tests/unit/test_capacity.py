@@ -202,3 +202,61 @@ def test_faster_policy_does_not_hide_existing_contradictory_trials():
         {"passing_repeats": 0, "failing_repeats": 1, "stop_on_contradiction": True},
     )
     assert result["status"] == "unstable_boundary"
+
+
+def test_geometric_growth_uses_measured_hint_then_doubles_for_unfamiliar_stack():
+    calls = []
+
+    def probe(users):
+        calls.append(users)
+        return {"outcome": "pass" if users <= 18000 else "fail"}
+
+    result = search_capacity(probe, start=1309, next_candidate=1409, growth_strategy="geometric")
+    assert calls[:6] == [1309, 1409, 2818, 5636, 11272, 22544]
+    assert result["passing_users"] <= 18000 < result["failing_users"]
+    assert result["failing_users"] - result["passing_users"] <= 100
+    assert len(calls) == len(set(calls))
+
+
+def test_other_runtime_hint_is_not_assumed_to_pass():
+    calls = []
+
+    def probe(users):
+        calls.append(users)
+        return {"outcome": "pass" if users <= 750 else "fail"}
+
+    result = search_capacity(probe, start=1309, next_candidate=1409, growth_strategy="geometric")
+    assert calls[:2] == [1309, 654]
+    assert 1409 not in calls
+    assert result["passing_users"] <= 750 < result["failing_users"]
+
+
+def test_resume_refuses_changed_native_binary_before_reusing_measurements(tmp_path, monkeypatch):
+    import json
+
+    from bench import user_capacity
+
+    config = {
+        "mode": "local",
+        "cells": ["go-net-http"],
+        "start_users": 1309,
+        "step_users": 10000,
+        "max_users": 50000,
+        "resolution_users": 100,
+        "ramp_seconds": 300,
+        "settle_seconds": 120,
+        "hold_seconds": 300,
+        "expected_image_ids": {"go-net-http": "sha256:" + "a" * 64},
+    }
+    original = {**config, "expected_image_ids": {"go-net-http": "sha256:" + "b" * 64}}
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps(config))
+    output = tmp_path / "results"
+    trial = output / "nonce-0000"
+    trial.mkdir(parents=True)
+    (trial / "manifest.json").write_text(
+        json.dumps({"campaign": original, "trial": {"id": "nonce-0000", "campaign_id": "nonce"}})
+    )
+    monkeypatch.setattr(user_capacity, "validate_config", lambda _: None)
+    with pytest.raises(ValueError, match="expected_image_ids"):
+        user_capacity.run_user_capacity(path, output, resume=True)

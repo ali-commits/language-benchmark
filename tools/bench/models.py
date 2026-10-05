@@ -68,3 +68,56 @@ class FixtureManifest:
     fingerprints: dict
     generator_version: str = "1"
     spec: dict = field(default_factory=dict)
+
+
+@dataclass
+class NativeCell:
+    """One locked, locally verified language/framework topology."""
+
+    id: str
+    language: str
+    runtime_version: str
+    framework: str
+    framework_version: str
+    image: str
+    dockerfile: str
+    workers: int
+    connections_per_worker: int
+    topology: str
+    upstream: str = ""
+    pool_budget: int = 20
+    supported: bool = True
+    reasons: list[str] = field(default_factory=list)
+
+    def __post_init__(self):
+        expected = {
+            "java": ("spring-boot", 1, 20),
+            "php": ("laravel", 20, 1),
+            "go": ("net-http", 1, 20),
+            "rust": ("axum", 1, 20),
+            "node": ("express", 2, 10),
+            "bun": ("express", 2, 10),
+        }
+        if self.language not in expected:
+            raise ValueError("unknown native language")
+        framework, workers, connections = expected[self.language]
+        if (
+            self.framework != framework
+            or type(self.workers) is not int
+            or type(self.connections_per_worker) is not int
+            or (self.workers, self.connections_per_worker) != (workers, connections)
+            or self.pool_budget != 20
+            or self.workers * self.connections_per_worker != self.pool_budget
+        ):
+            raise ValueError("uncontrolled native resource settings")
+        if not all(
+            (self.id, self.runtime_version, self.framework_version, self.image, self.topology)
+        ):
+            raise ValueError("native runtime identity is incomplete")
+        from pathlib import PurePosixPath
+
+        path = PurePosixPath(self.dockerfile)
+        if path.is_absolute() or ".." in path.parts or path.parts[:1] != ("backends",):
+            raise ValueError("native Dockerfile must be inside backends")
+        if not self.supported and not self.reasons:
+            raise ValueError("unsupported cells require reasons")

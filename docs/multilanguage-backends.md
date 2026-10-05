@@ -1,6 +1,6 @@
 # Additional backend stacks
 
-Six local staging cells use one latest stable runtime/framework release each, verified on 2026-10-05. They implement the shared API and PostgreSQL schema. They are not enrolled in the running AWS Python campaign.
+Six local staging cells use one latest stable runtime/framework release each, verified on 2026-10-05. They implement the shared API and PostgreSQL schema. They are enrolled in a separate native AWS campaign after the completed Python campaign.
 
 | Cell/profile | Runtime | Framework/data access | Production topology |
 | --- | --- | --- | --- |
@@ -53,4 +53,4 @@ docker compose -f compose.languages.yaml stop go
 
 The local database password is a test-only default; override LANGUAGE_DB_PASSWORD for local data you wish to preserve. Change LANGUAGE_PORT/LANGUAGE_DB_PORT if occupied. Apps never migrate or seed on startup. Use the existing guarded fixture tools when preparing the full50,000-user/500,000-post dataset for a later experiment.
 
-The local staging registry is separate from the Python controller's worker/GIL/JIT metadata protocol. Enrolling these cells in an AWS performance campaign requires the native-runtime preflight/build adapter and an explicit campaign selection after the current experiment. No new capacity numbers are inferred from these functional tests.
+The native controller uses exact verified image IDs, locked runtime/topology labels, fresh container nonces and HTTP database readiness rather than Python GIL/JIT worker attestations. The separate native AWS campaign is managed by language-benchmark-native-capacity and language-benchmark-native-supervisor. Functional verification alone does not establish capacity.

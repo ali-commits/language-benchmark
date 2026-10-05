@@ -9,6 +9,12 @@ RUN MAVEN_CMD=/opt/maven/bin/mvn ./verify-lock.sh
 COPY backends/java/spring-boot/src ./src
 RUN /opt/maven/bin/mvn -B -q verify
 FROM eclipse-temurin:27_35-jre-resolute@sha256:9274ccf4c2bb3dd950acee56da64c00a8333e847ebd6b7e031d1d15dec575020
+LABEL org.language-benchmark.language="java" \
+    org.language-benchmark.runtime-version="27" \
+    org.language-benchmark.framework="spring-boot" \
+    org.language-benchmark.framework-version="4.1.1" \
+    org.language-benchmark.workers="1" \
+    org.language-benchmark.connections-per-worker="20"
 WORKDIR /app
 COPY --from=build /build/target/social-api-1.0.0.jar /app/api.jar
 RUN useradd --uid 10001 --no-create-home benchmark

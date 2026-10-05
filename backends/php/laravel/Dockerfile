@@ -1,4 +1,10 @@
 FROM php:8.5.11-fpm-bookworm@sha256:53eab56a8f43f51a92119f6c29b3448af98eec288ff17f92829354a4b4c9ca05 AS base
+LABEL org.language-benchmark.language="php" \
+    org.language-benchmark.runtime-version="8.5.11" \
+    org.language-benchmark.framework="laravel" \
+    org.language-benchmark.framework-version="13.34.0" \
+    org.language-benchmark.workers="20" \
+    org.language-benchmark.connections-per-worker="1"
 RUN apt-get update && apt-get install -y --no-install-recommends libpq-dev nginx unzip && docker-php-ext-install pdo_pgsql && rm -rf /var/lib/apt/lists/*
 COPY --from=composer:2.10.3@sha256:af98f42dfff7c68ba8d53c2164fd9fde1087b7d449514baa38c418b1f6bc4bac /usr/bin/composer /usr/local/bin/composer
 WORKDIR /app

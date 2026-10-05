@@ -14,7 +14,14 @@ from .jit_probe import JIT_PROBE
 from .journeys import prepare_journey_data, read_journey_metrics
 from .load_data import prepare_load_data
 from .manifest import atomic_json, collect_manifest
-from .models import RuntimeCell
+from .models import NativeCell
+from .native_runtime import (
+    expected_image_id,
+    load_runtime_cell,
+    native_collector_hosts,
+    native_preflight,
+    registry_metadata,
+)
 from .reset import restore_fixture
 from .runtime import validate_dependency_inventory, validate_worker_snapshots
 from .schedule import schedule_trials
@@ -38,8 +45,9 @@ def campaign_lock(path: Path):
 
 def run_trial(campaign: dict, trial: dict, output_dir: Path) -> dict:
     output_dir.mkdir(parents=True, exist_ok=False)
-    cells = json.loads(Path("runtimes/python/lock.json").read_text())["cells"]
-    cell = RuntimeCell(**next(c for c in cells if c["id"] == trial["cell"]))
+    cell = load_runtime_cell(trial["cell"])
+    native = isinstance(cell, NativeCell)
+    expected_native_image = expected_image_id(campaign, cell) if native else None
     journey = campaign.get("operation") == "user-journey"
     manifest = collect_manifest(campaign, trial)
     result = {
@@ -68,19 +76,27 @@ def run_trial(campaign: dict, trial: dict, output_dir: Path) -> dict:
     env = {
         "BACKEND_IMAGE": cell.image,
         "MODE": campaign["mode"],
-        "WORKERS": str(cell.workers),
-        "ADAPTER": cell.adapter,
         "RUN_ID": runtime_identity,
         "RUN_DIR_HOST": runtime,
-        "EXPECTED_GIL": str(cell.gil).lower(),
-        "EXPECTED_JIT": str(cell.jit).lower(),
-        "PYTHON_JIT": str(int(cell.jit)),
         "DATABASE_URL": campaign.get("backend_database_url", dsn),
         "JWT_SECRET": os.environ["JWT_SECRET"],
         "BIND_IP": campaign.get("bind_ip", "127.0.0.1"),
         "RDS_CA_FILE": os.environ.get("RDS_CA_FILE", str(Path("docker/README-ca.txt").resolve())),
     }
-    compose = ["docker", "compose", "-f", "compose.aws.yaml"]
+    if native:
+        env["BACKEND_CELL_ID"] = cell.id
+        compose = ["docker", "compose", "-f", "compose.native.aws.yaml"]
+        manifest["runtime_lock"] = registry_metadata(cell)
+        manifest["lock_checksum"] = manifest["runtime_lock"]["sha256"]
+    else:
+        env.update(
+            WORKERS=str(cell.workers),
+            ADAPTER=cell.adapter,
+            EXPECTED_GIL=str(cell.gil).lower(),
+            EXPECTED_JIT=str(cell.jit).lower(),
+            PYTHON_JIT=str(int(cell.jit)),
+        )
+        compose = ["docker", "compose", "-f", "compose.aws.yaml"]
 
     def stop():
         execute(
@@ -134,55 +150,73 @@ def run_trial(campaign: dict, trial: dict, output_dir: Path) -> dict:
             ],
             {"TARGET": runtime},
         )
-        execute(backend, compose + ["up", "-d"], env, timeout=120)
-        verify_backend_limits(backend, compose, env)
-        deadline = time.monotonic() + 120
-        snapshots = []
-        while time.monotonic() < deadline:
-            code = "import pathlib,json,os; print(json.dumps([json.loads(p.read_text()) for p in pathlib.Path(os.environ['TARGET']).glob('*.json')]))"
-            snapshots = json.loads(
-                execute(backend, ["python3", "-c", code], {"TARGET": runtime}).stdout
-            )
-            if len(snapshots) == cell.workers and all(
-                s["run_id"] == runtime_identity for s in snapshots
-            ):
-                break
-            time.sleep(1)
-        reasons = validate_worker_snapshots(cell, snapshots) + validate_dependency_inventory(
-            cell, snapshots
+        execute(
+            backend,
+            compose + (["up", "-d", "--force-recreate"] if native else ["up", "-d"]),
+            env,
+            timeout=120,
         )
-        if reasons:
-            raise ValueError("; ".join(reasons))
-        manifest["workers"] = snapshots
-        if cell.build == "jit":
-            probe = execute(
+        if native:
+            attestation = native_preflight(
                 backend,
-                [
-                    "docker",
-                    "run",
-                    "--rm",
-                    "--cpus",
-                    "2",
-                    "--memory",
-                    "128m",
-                    "--memory-swap",
-                    "128m",
-                    "--entrypoint",
-                    "python3",
-                    "-e",
-                    "PYTHON_JIT=" + str(int(cell.jit)),
-                    cell.image,
-                    "-c",
-                    JIT_PROBE,
-                ],
-                timeout=30,
+                cell,
+                compose,
+                env,
+                base,
+                runtime_identity,
+                expected_native_image,
             )
-            manifest["jit_engine_probe"] = json.loads(probe.stdout)
-        manifest["image"] = json.loads(
-            execute(
-                backend, ["docker", "image", "inspect", cell.image, "--format", "{{json .}}"]
-            ).stdout
-        )
+            manifest["native_runtime"] = attestation
+            manifest["image"] = attestation["image"]
+        else:
+            verify_backend_limits(backend, compose, env)
+            deadline = time.monotonic() + 120
+            snapshots = []
+            while time.monotonic() < deadline:
+                code = "import pathlib,json,os; print(json.dumps([json.loads(p.read_text()) for p in pathlib.Path(os.environ['TARGET']).glob('*.json')]))"
+                snapshots = json.loads(
+                    execute(backend, ["python3", "-c", code], {"TARGET": runtime}).stdout
+                )
+                if len(snapshots) == cell.workers and all(
+                    s["run_id"] == runtime_identity for s in snapshots
+                ):
+                    break
+                time.sleep(1)
+            reasons = validate_worker_snapshots(cell, snapshots) + validate_dependency_inventory(
+                cell, snapshots
+            )
+            if reasons:
+                raise ValueError("; ".join(reasons))
+            manifest["workers"] = snapshots
+            if cell.build == "jit":
+                probe = execute(
+                    backend,
+                    [
+                        "docker",
+                        "run",
+                        "--rm",
+                        "--cpus",
+                        "2",
+                        "--memory",
+                        "128m",
+                        "--memory-swap",
+                        "128m",
+                        "--entrypoint",
+                        "python3",
+                        "-e",
+                        "PYTHON_JIT=" + str(int(cell.jit)),
+                        cell.image,
+                        "-c",
+                        JIT_PROBE,
+                    ],
+                    timeout=30,
+                )
+                manifest["jit_engine_probe"] = json.loads(probe.stdout)
+            manifest["image"] = json.loads(
+                execute(
+                    backend, ["docker", "image", "inspect", cell.image, "--format", "{{json .}}"]
+                ).stdout
+            )
         manifest["fixture"] = json.loads(fixture.read_text())
         atomic_json(output_dir / "manifest.json", manifest)
         with httpx.Client(timeout=10) as c:
@@ -258,7 +292,9 @@ def run_trial(campaign: dict, trial: dict, output_dir: Path) -> dict:
         }
         load_compose = ["docker", "compose", "-f", "compose.load.yaml", "run", "--rm", "k6", "run"]
         with Collector(
-            {"backend": {**backend, "runtime_dir": runtime}, "generator": load},
+            native_collector_hosts(backend, load)
+            if native
+            else {"backend": {**backend, "runtime_dir": runtime}, "generator": load},
             dsn,
             output_dir / "telemetry.jsonl",
         ) as collect:

@@ -44,3 +44,9 @@ A monitor-host supervisor can recover controller/infrastructure failures using b
 The active faster execution policy is confirmation_policy={passing_repeats:0,failing_repeats:1,stop_on_contradiction:true}. The legacy confirmation_repeats field remains unchanged in an existing campaign for checkpoint compatibility; the explicit policy is recorded in new manifests and runtime results. This changes the number of repeats, not user behavior, login ramp, settling, response deadline, measured window, hardware or fixture resets. It provides less repeatability evidence than the original five runs. Existing valid contradictory endpoint trials remain flagged on resume; they are not hidden by the faster rule.
 
 The controller adopts this policy after the current probe is saved and a graceful supervised restart. All qualified previous probes are reused. Confirmation overhead drops from ten additional trials (about130minutes) to one (about13minutes); search trials still take about13minutes each.
+
+## Cross-language search
+
+The native campaign starts at the last valid Python result (1309users) and uses its failed-count hint (1409users) only as a candidate to retest. Previous-language outcomes never establish a new language's bound. The native growth_strategy=geometric doubles the population after a passing hint, caps it at the50000-account fixture ceiling, and then binary-searches a measured passing/failing bracket to width100. Only the final failing endpoint is rerun once. Invalid generator/telemetry or cleanup evidence is separately retried with bounded recovery and never moves bounds.
+
+Image IDs and per-language runtime-lock checksums are checkpoint provenance: changing either prohibits reuse of previous measurements. Existing Python results and policies remain separate. Trial windows, real password logins, random3–10s waits, pool budgets,2CPU/3GiB/no-swap, RDS evidence and before/after fixture restoration remain unchanged.

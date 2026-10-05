@@ -92,3 +92,17 @@ ssh -F artifacts/aws/ssh-config benchmark-monitor \
 ```
 
 Verify the last trial's `reset_verified` and that backend/load containers are stopped, then use the existing checked AWS shutdown command. To retry after repairing an exhausted recovery budget, stop the supervisor, remove only `artifacts/aws/supervisor-status.json` on the monitor, and start the supervisor again. Keep trial artifacts and capacity results.
+
+## Native campaign automation
+
+After Python completes, the six native stacks run sequentially under language-benchmark-native-capacity.service and language-benchmark-native-supervisor.service. Configuration is private artifacts/aws/native-capacity.json; status/results are artifacts/results/native-capacity/capacity-status.json and capacity-results.json. Native supervisor state is artifacts/aws/native-supervisor-status.json and logs are artifacts/aws/native-capacity.log. Python results stay in their original folder.
+
+The first language rechecks1309users and the1409failure hint from Python; later stacks start from measured prior-language results. Geometric growth avoids repeated small steps across unfamiliar capacity ranges, followed by width100 binary search and one failing-endpoint retest. All six verified images are preloaded on the backend and generator so execution does not depend on the PC. An equivalent-looking rebuild with a different image ID cannot silently reuse old measurements. Native model preflight enforces exact image/platform/locked labels, a fresh container nonce,2CPU/3GiB/no-swap, read-only CA and database readiness.
+
+The supervisor starts on monitor reboot, recovers crashed controllers from valid checkpoints, retries invalid probes at most three times and advances through all six cells. Persistent invalid evidence requires attention rather than fabricating capacity. No AWS resources are stopped automatically.
+
+Check progress:
+
+    ssh -F artifacts/aws/ssh-config benchmark-monitor 'systemctl status language-benchmark-native-supervisor language-benchmark-native-capacity --no-pager; cat /home/rocky/language-benchmark/artifacts/results/native-capacity/capacity-status.json'
+
+For graceful shutdown, stop the native supervisor FIRST, then stop the native controller and verify cleanup before using the checked AWS stop command. Stopping the supervisor prevents recovery from restarting an intentionally stopped controller.
