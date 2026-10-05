@@ -143,3 +143,62 @@ def test_invalid_repeat_evidence_stops_but_unstable_backend_repeats_do_not():
     assert not invalid_boundary(r)
     r["confirmations"]["passing_users"].append({"outcome": "invalid"})
     assert invalid_boundary(r)
+
+
+def test_fast_confirmation_retests_only_failure_once():
+    from bench.user_capacity import confirm_boundary
+
+    calls = []
+
+    def probe(users):
+        calls.append(users)
+        return {"outcome": "fail"}
+
+    policy = {"passing_repeats": 0, "failing_repeats": 1, "stop_on_contradiction": True}
+    result = {"status": "bracket_found", "passing_users": 2000, "failing_users": 2075}
+    confirm_boundary(probe, result, policy)
+    assert calls == [2075]
+    assert "passing_users" not in result["confirmations"]
+    assert result["status"] == "bracket_found"
+    assert result["confirmation_policy"] == policy
+
+
+def test_failure_retest_that_passes_marks_boundary_unstable():
+    from bench.user_capacity import confirm_boundary
+
+    result = {"status": "bracket_found", "passing_users": 2000, "failing_users": 2075}
+    confirm_boundary(
+        lambda _: {"outcome": "pass"},
+        result,
+        {"passing_repeats": 0, "failing_repeats": 1, "stop_on_contradiction": True},
+    )
+    assert result["status"] == "unstable_boundary"
+
+
+def test_fast_confirmation_keeps_invalid_evidence_distinct():
+    from bench.user_capacity import confirm_boundary
+
+    result = {"status": "bracket_found", "passing_users": 2000, "failing_users": 2075}
+    confirm_boundary(
+        lambda _: {"outcome": "invalid"},
+        result,
+        {"passing_repeats": 0, "failing_repeats": 1, "stop_on_contradiction": True},
+    )
+    assert result["status"] == "invalid"
+
+
+def test_faster_policy_does_not_hide_existing_contradictory_trials():
+    from bench.user_capacity import confirm_boundary
+
+    result = {
+        "status": "bracket_found",
+        "passing_users": 2000,
+        "failing_users": 2075,
+        "prior_endpoint_trials": {"passing_users": [{"outcome": "pass"}, {"outcome": "fail"}]},
+    }
+    confirm_boundary(
+        lambda _: {"outcome": "fail"},
+        result,
+        {"passing_repeats": 0, "failing_repeats": 1, "stop_on_contradiction": True},
+    )
+    assert result["status"] == "unstable_boundary"

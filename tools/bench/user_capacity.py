@@ -47,6 +47,19 @@ def validate_config(c: dict):
         or not 1 <= c.get("confirmation_repeats", 0) <= 10
     ):
         raise ValueError("invalid response target/confirmations")
+    if "confirmation_policy" in c:
+        policy = c["confirmation_policy"]
+        if (
+            not isinstance(policy, dict)
+            or set(policy) != {"passing_repeats", "failing_repeats", "stop_on_contradiction"}
+            or any(
+                type(policy.get(k)) is not int or not 0 <= policy[k] <= 10
+                for k in ("passing_repeats", "failing_repeats")
+            )
+            or policy["failing_repeats"] < 1
+            or type(policy.get("stop_on_contradiction")) is not bool
+        ):
+            raise ValueError("invalid confirmation execution policy")
     if not c.get("database_allowlist", "").startswith("language_benchmark"):
         raise ValueError("dedicated benchmark database required")
     if (
@@ -111,6 +124,37 @@ def invalid_boundary(result: dict) -> bool:
     )
 
 
+def confirm_boundary(probe, result: dict, policy: dict):
+    result["confirmation_policy"] = dict(policy)
+    confirmations = result["confirmations"] = {}
+    contradictory = False
+    for bound, expected in (("passing_users", "pass"), ("failing_users", "fail")):
+        users = result[bound]
+        repeats = policy["passing_repeats" if bound == "passing_users" else "failing_repeats"]
+        if not users or repeats == 0:
+            continue
+        confirmations[bound] = []
+        for _ in range(repeats):
+            item = probe(users)
+            confirmations[bound].append(item)
+            if item["outcome"] == "invalid":
+                result["status"] = "invalid"
+                return
+            if item["outcome"] != expected:
+                contradictory = True
+                if policy["stop_on_contradiction"]:
+                    result["status"] = "unstable_boundary"
+                    return
+    for bound, expected in (("passing_users", "pass"), ("failing_users", "fail")):
+        if any(
+            item["outcome"] != expected
+            for item in result.get("prior_endpoint_trials", {}).get(bound, [])
+        ):
+            contradictory = True
+    if contradictory:
+        result["status"] = "unstable_boundary"
+
+
 def run_user_capacity(
     config_path: Path, output_dir: Path, resume: bool = False, retry_invalid: bool = False
 ) -> dict:
@@ -120,6 +164,14 @@ def run_user_capacity(
         operation="user-journey",
         warmup_seconds=0,
         measure_seconds=c["ramp_seconds"] + c["settle_seconds"] + c["hold_seconds"],
+    )
+    c.setdefault(
+        "confirmation_policy",
+        {
+            "passing_repeats": c.get("confirmation_repeats", 5),
+            "failing_repeats": c.get("confirmation_repeats", 5),
+            "stop_on_contradiction": False,
+        },
     )
     c["campaign_instance"] = uuid.uuid4().hex
     if resume:
@@ -154,6 +206,7 @@ def run_user_capacity(
     previous = None
     previous_upper = None
     cached = qualified_cache(output_dir) if resume else {}
+    prior_trials = {key: list(queue) for key, queue in cached.items()}
     with (
         campaign_lock(Path("artifacts/campaign.lock")),
         database_campaign_lock(os.environ["DATABASE_URL"]),
@@ -244,27 +297,11 @@ def run_user_capacity(
             )
             # Search is exploratory; repeated endpoints determine whether the bracket is stable.
             if result["status"] == "bracket_found":
-                confirmations = {}
-                for bound in ("passing_users", "failing_users"):
-                    users = result[bound]
-                    if not users:
-                        continue
-                    confirmations[bound] = []
-                    for _ in range(c["confirmation_repeats"]):
-                        item = probe(users)
-                        confirmations[bound].append(item)
-                        if item["outcome"] == "invalid":
-                            break
-                    if any(item["outcome"] == "invalid" for item in confirmations[bound]):
-                        break
-                result["confirmations"] = confirmations
-                stable = all(
-                    r["outcome"] == "pass" for r in confirmations.get("passing_users", [])
-                ) and all(r["outcome"] == "fail" for r in confirmations.get("failing_users", []))
-                if invalid_boundary(result):
-                    result["status"] = "invalid"
-                elif not stable:
-                    result["status"] = "unstable_boundary"
+                result["prior_endpoint_trials"] = {
+                    bound: prior_trials.get((cell, result[bound]), [])
+                    for bound in ("passing_users", "failing_users")
+                }
+                confirm_boundary(probe, result, c["confirmation_policy"])
             result["starting_users"] = start_users
             results[cell] = result
             if result["status"] in ("bracket_found", "ceiling_reached"):
