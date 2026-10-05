@@ -1,0 +1,24 @@
+[package]
+name = "language-benchmark-rust"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+
+[dependencies]
+axum = "=0.8.9"
+tokio = { version = "=1.53.2", features = ["macros", "rt-multi-thread", "signal", "sync", "net"] }
+sqlx = { version = "=0.9.0", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "chrono"] }
+argon2 = "=0.6.0"
+jsonwebtoken = { version = "=11.1.0", default-features = false, features = ["rust_crypto"] }
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = { version="=1.0.151", features=["preserve_order"] }
+chrono = { version = "=0.4.45", features = ["serde"] }
+base64 = "=0.23.1"
+url = "=2.5.8"
+
+[dev-dependencies]
+tower = { version = "=0.5.3", features = ["util"] }
+
+[profile.release]
+codegen-units = 1
+lto = "thin"

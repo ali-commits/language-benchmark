@@ -1,0 +1,25 @@
+{
+  "budget": {
+    "cpus": 2,
+    "memory_bytes": 3221225472,
+    "swap_bytes": 0,
+    "database_connections": 20
+  },
+  "verified_at": "2026-10-05",
+  "status": "local-staging-only",
+  "cells": [
+    {
+      "id": "go-net-http",
+      "language": "go",
+      "runtime_version": "1.27.1",
+      "framework": "net-http",
+      "framework_version": "1.27.1",
+      "image": "lb-go:1.27.1",
+      "dockerfile": "backends/go/Dockerfile",
+      "workers": 1,
+      "connections_per_worker": 20,
+      "topology": "net/http; pgxpool20; GOMAXPROCS2; GOMEMLIMIT2GiB; hash slots2",
+      "upstream": "https://go.dev/dl/"
+    }
+  ]
+}

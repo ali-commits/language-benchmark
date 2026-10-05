@@ -1,0 +1,25 @@
+{
+  "budget": {
+    "cpus": 2,
+    "memory_bytes": 3221225472,
+    "swap_bytes": 0,
+    "database_connections": 20
+  },
+  "verified_at": "2026-10-05",
+  "status": "local-staging-only",
+  "cells": [
+    {
+      "id": "java-spring-boot",
+      "language": "java",
+      "runtime_version": "27",
+      "framework": "spring-boot",
+      "framework_version": "4.1.1",
+      "image": "lb-java-spring:27",
+      "dockerfile": "backends/java/spring-boot/Dockerfile",
+      "workers": 1,
+      "connections_per_worker": 20,
+      "topology": "Virtual threads; Hikari20; hash slots2",
+      "upstream": "https://jdk.java.net/27/"
+    }
+  ]
+}

@@ -1,6 +1,6 @@
-# Python / FastAPI language benchmark
+# Social API language benchmark
 
-Two real social APIs and a controlled Docker/k6 experiment. The API implements password authentication, following feeds, posts, likes and comments. This repository builds the experiment; AWS performance numbers must be collected on the specified AWS hosts.
+A controlled Docker/k6 experiment with Python baseline/modern APIs and six additional language/framework cells. The API implements password authentication, following feeds, posts, likes and comments. This repository builds the experiment; AWS performance numbers must be collected on the specified AWS hosts.
 
 | Directory | Responsibility |
 | --- | --- |
@@ -12,6 +12,17 @@ Two real social APIs and a controlled Docker/k6 experiment. The API implements p
 | `docker` | Matched source-built CPython and uv application images |
 
 See the [live AWS deployment and dashboard](docs/aws-deployment.md), [repository layout](docs/file-structure.md), [verification evidence](docs/verification.md), [implementation decisions](docs/implementation-decisions.md), [methodology](docs/methodology.md), [AWS runbook](docs/aws-runbook.md), [runtime support](docs/runtime-support.md), the [approved specification](docs/superpowers/specs/2026-10-04-python-fastapi-benchmark-design.md), and [implementation plan](docs/superpowers/plans/2026-10-04-python-fastapi-benchmark.md).
+
+## Additional languages
+
+Java/Spring Boot, PHP/Laravel, Go/net-http, Rust/Axum, Node/Express and Bun/Express are available as local staging implementations. Each uses one latest stable version, the same API/schema, two CPU quota,3GiB/no-swap and20 total database connections. Node and Bun share the same Express source. See [versions, production topology and reproducible verification](docs/multilanguage-backends.md).
+
+```sh
+PYTHONPATH=tools uv run -m bench.languages build
+PYTHONPATH=tools uv run -m bench.languages verify --output artifacts/language-check
+```
+
+These staging cells are separate from the active Python AWS campaign; functional verification does not establish capacity results.
 
 ## Concurrent-user experiment
 

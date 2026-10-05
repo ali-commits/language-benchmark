@@ -1,0 +1,25 @@
+{
+  "budget": {
+    "cpus": 2,
+    "memory_bytes": 3221225472,
+    "swap_bytes": 0,
+    "database_connections": 20
+  },
+  "verified_at": "2026-10-05",
+  "status": "local-staging-only",
+  "cells": [
+    {
+      "id": "rust-axum",
+      "language": "rust",
+      "runtime_version": "1.99.0",
+      "framework": "axum",
+      "framework_version": "0.8.9",
+      "image": "lb-rust:1.99.0",
+      "dockerfile": "backends/rust/Dockerfile",
+      "workers": 1,
+      "connections_per_worker": 20,
+      "topology": "Tokio2; SQLx20; bounded blocking hash slots2; release build",
+      "upstream": "https://www.rust-lang.org/"
+    }
+  ]
+}

@@ -1,0 +1,25 @@
+{
+  "budget": {
+    "cpus": 2,
+    "memory_bytes": 3221225472,
+    "swap_bytes": 0,
+    "database_connections": 20
+  },
+  "verified_at": "2026-10-05",
+  "status": "local-staging-only",
+  "cells": [
+    {
+      "id": "node-express",
+      "language": "node",
+      "runtime_version": "26.10.0",
+      "framework": "express",
+      "framework_version": "5.2.1",
+      "image": "lb-node-express:26.10.0",
+      "dockerfile": "backends/node/Dockerfile",
+      "workers": 2,
+      "connections_per_worker": 10,
+      "topology": "Shared Express source; cluster2; pool10/hash1 per worker",
+      "upstream": "https://nodejs.org/en/download/releases/"
+    }
+  ]
+}

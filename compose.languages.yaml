@@ -1,0 +1,62 @@
+name: language-benchmark-staging
+x-backend: &backend
+  cpus: 2.0
+  mem_limit: 3g
+  memswap_limit: 3g
+  ports: ["127.0.0.1:${LANGUAGE_PORT:-8010}:8000"]
+  depends_on:
+    db: {condition: service_healthy}
+  environment: &environment
+    DATABASE_URL: postgresql://benchmark:${LANGUAGE_DB_PASSWORD:-local-language-only}@db/language_benchmark_languages
+    JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET}
+    JWT_TTL_SECONDS: 3600
+    MODE: local
+    BIND_IP: 0.0.0.0
+    PORT: 8000
+    RUN_ID: local-language-staging
+services:
+  db:
+    image: postgres:17.6
+    environment:
+      POSTGRES_DB: language_benchmark_languages
+      POSTGRES_USER: benchmark
+      POSTGRES_PASSWORD: ${LANGUAGE_DB_PASSWORD:-local-language-only}
+    ports: ["127.0.0.1:${LANGUAGE_DB_PORT:-55434}:5432"]
+    volumes: ["language-data:/var/lib/postgresql/data"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U benchmark -d language_benchmark_languages"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+  java:
+    <<: *backend
+    profiles: [java]
+    image: lb-java-spring:27
+    build: {context: ., dockerfile: backends/java/spring-boot/Dockerfile}
+  php:
+    <<: *backend
+    profiles: [php]
+    image: lb-php-laravel:8.5.11
+    build: {context: ., dockerfile: backends/php/laravel/Dockerfile}
+  go:
+    <<: *backend
+    profiles: [go]
+    image: lb-go:1.27.1
+    build: {context: ., dockerfile: backends/go/Dockerfile}
+  rust:
+    <<: *backend
+    profiles: [rust]
+    image: lb-rust:1.99.0
+    build: {context: ., dockerfile: backends/rust/Dockerfile}
+  node:
+    <<: *backend
+    profiles: [node]
+    image: lb-node-express:26.10.0
+    build: {context: ., dockerfile: backends/node/Dockerfile}
+  bun:
+    <<: *backend
+    profiles: [bun]
+    image: lb-bun-express:1.4.2
+    build: {context: ., dockerfile: backends/bun/Dockerfile}
+volumes:
+  language-data:

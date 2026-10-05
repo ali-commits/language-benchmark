@@ -1,0 +1,25 @@
+{
+  "budget": {
+    "cpus": 2,
+    "memory_bytes": 3221225472,
+    "swap_bytes": 0,
+    "database_connections": 20
+  },
+  "verified_at": "2026-10-05",
+  "status": "local-staging-only",
+  "cells": [
+    {
+      "id": "bun-express",
+      "language": "bun",
+      "runtime_version": "1.4.2",
+      "framework": "express",
+      "framework_version": "5.2.1",
+      "image": "lb-bun-express:1.4.2",
+      "dockerfile": "backends/bun/Dockerfile",
+      "workers": 2,
+      "connections_per_worker": 10,
+      "topology": "Same Express source and cluster2; pool10/hash1 per worker",
+      "upstream": "https://github.com/oven-sh/bun/releases"
+    }
+  ]
+}

@@ -1,0 +1,514 @@
+[
+  {
+    "name": "register_missing",
+    "method": "POST",
+    "path": "/api/v1/auth/register",
+    "body": {},
+    "status": 422,
+    "response": {
+      "detail": [
+        {
+          "type": "missing",
+          "loc": [
+            "body",
+            "username"
+          ],
+          "msg": "Field required",
+          "input": {}
+        },
+        {
+          "type": "missing",
+          "loc": [
+            "body",
+            "password"
+          ],
+          "msg": "Field required",
+          "input": {}
+        }
+      ]
+    }
+  },
+  {
+    "name": "register_multiple",
+    "method": "POST",
+    "path": "/api/v1/auth/register",
+    "body": {
+      "username": "ab",
+      "password": "short",
+      "extra": true
+    },
+    "status": 422,
+    "response": {
+      "detail": [
+        {
+          "type": "string_too_short",
+          "loc": [
+            "body",
+            "username"
+          ],
+          "msg": "String should have at least 3 characters",
+          "input": "ab",
+          "ctx": {
+            "min_length": 3
+          }
+        },
+        {
+          "type": "string_too_short",
+          "loc": [
+            "body",
+            "password"
+          ],
+          "msg": "String should have at least 12 characters",
+          "input": "short",
+          "ctx": {
+            "min_length": 12
+          }
+        },
+        {
+          "type": "extra_forbidden",
+          "loc": [
+            "body",
+            "extra"
+          ],
+          "msg": "Extra inputs are not permitted",
+          "input": true
+        }
+      ]
+    }
+  },
+  {
+    "name": "register_types",
+    "method": "POST",
+    "path": "/api/v1/auth/register",
+    "body": {
+      "username": true,
+      "password": 12
+    },
+    "status": 422,
+    "response": {
+      "detail": [
+        {
+          "type": "string_type",
+          "loc": [
+            "body",
+            "username"
+          ],
+          "msg": "Input should be a valid string",
+          "input": true
+        },
+        {
+          "type": "string_type",
+          "loc": [
+            "body",
+            "password"
+          ],
+          "msg": "Input should be a valid string",
+          "input": 12
+        }
+      ]
+    }
+  },
+  {
+    "name": "register_linebreak",
+    "method": "POST",
+    "path": "/api/v1/auth/register",
+    "body": {
+      "username": "alice\n",
+      "password": "correct horse battery staple"
+    },
+    "status": 422,
+    "response": {
+      "detail": [
+        {
+          "type": "string_pattern_mismatch",
+          "loc": [
+            "body",
+            "username"
+          ],
+          "msg": "String should match pattern '^[A-Za-z0-9_]+$'",
+          "input": "alice\n",
+          "ctx": {
+            "pattern": "^[A-Za-z0-9_]+$"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "register_array",
+    "method": "POST",
+    "path": "/api/v1/auth/register",
+    "body": [],
+    "status": 422,
+    "response": {
+      "detail": [
+        {
+          "type": "model_attributes_type",
+          "loc": [
+            "body"
+          ],
+          "msg": "Input should be a valid dictionary or object to extract fields from",
+          "input": []
+        }
+      ]
+    }
+  },
+  {
+    "name": "register_null",
+    "method": "POST",
+    "path": "/api/v1/auth/register",
+    "body": null,
+    "status": 422,
+    "response": {
+      "detail": [
+        {
+          "type": "missing",
+          "loc": [
+            "body"
+          ],
+          "msg": "Field required",
+          "input": null
+        }
+      ]
+    }
+  },
+  {
+    "name": "login_multiple",
+    "method": "POST",
+    "path": "/api/v1/auth/login",
+    "body": {
+      "username": "a",
+      "password": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "extra": true
+    },
+    "status": 422,
+    "response": {
+      "detail": [
+        {
+          "type": "string_too_short",
+          "loc": [
+            "body",
+            "username"
+          ],
+          "msg": "String should have at least 3 characters",
+          "input": "a",
+          "ctx": {
+            "min_length": 3
+          }
+        },
+        {
+          "type": "string_too_long",
+          "loc": [
+            "body",
+            "password"
+          ],
+          "msg": "String should have at most 128 characters",
+          "input": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "ctx": {
+            "max_length": 128
+          }
+        },
+        {
+          "type": "extra_forbidden",
+          "loc": [
+            "body",
+            "extra"
+          ],
+          "msg": "Extra inputs are not permitted",
+          "input": true
+        }
+      ]
+    }
+  },
+  {
+    "name": "login_blank_password",
+    "method": "POST",
+    "path": "/api/v1/auth/login",
+    "body": {
+      "username": "alice",
+      "password": ""
+    },
+    "status": 422,
+    "response": {
+      "detail": [
+        {
+          "type": "string_too_short",
+          "loc": [
+            "body",
+            "password"
+          ],
+          "msg": "String should have at least 1 character",
+          "input": "",
+          "ctx": {
+            "min_length": 1
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "post_blank_extra",
+    "method": "POST",
+    "path": "/api/v1/posts",
+    "body": {
+      "content": " ",
+      "extra": true
+    },
+    "status": 422,
+    "response": {
+      "detail": [
+        {
+          "type": "value_error",
+          "loc": [
+            "body",
+            "content"
+          ],
+          "msg": "Value error, content must not be blank",
+          "input": " ",
+          "ctx": {
+            "error": {}
+          }
+        },
+        {
+          "type": "extra_forbidden",
+          "loc": [
+            "body",
+            "extra"
+          ],
+          "msg": "Extra inputs are not permitted",
+          "input": true
+        }
+      ]
+    }
+  },
+  {
+    "name": "post_missing",
+    "method": "POST",
+    "path": "/api/v1/posts",
+    "body": {},
+    "status": 422,
+    "response": {
+      "detail": [
+        {
+          "type": "missing",
+          "loc": [
+            "body",
+            "content"
+          ],
+          "msg": "Field required",
+          "input": {}
+        }
+      ]
+    }
+  },
+  {
+    "name": "post_null",
+    "method": "POST",
+    "path": "/api/v1/posts",
+    "body": {
+      "content": null
+    },
+    "status": 422,
+    "response": {
+      "detail": [
+        {
+          "type": "string_type",
+          "loc": [
+            "body",
+            "content"
+          ],
+          "msg": "Input should be a valid string",
+          "input": null
+        }
+      ]
+    }
+  },
+  {
+    "name": "post_boolean",
+    "method": "POST",
+    "path": "/api/v1/posts",
+    "body": {
+      "content": true
+    },
+    "status": 422,
+    "response": {
+      "detail": [
+        {
+          "type": "string_type",
+          "loc": [
+            "body",
+            "content"
+          ],
+          "msg": "Input should be a valid string",
+          "input": true
+        }
+      ]
+    }
+  },
+  {
+    "name": "post_controlblank",
+    "method": "POST",
+    "path": "/api/v1/posts",
+    "body": {
+      "content": "\u001c"
+    },
+    "status": 422,
+    "response": {
+      "detail": [
+        {
+          "type": "value_error",
+          "loc": [
+            "body",
+            "content"
+          ],
+          "msg": "Value error, content must not be blank",
+          "input": "\u001c",
+          "ctx": {
+            "error": {}
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "comment_nonbreakingblank",
+    "method": "POST",
+    "path": "/api/v1/posts/1/comments",
+    "body": {
+      "content": "\u00a0\u001f",
+      "extra": []
+    },
+    "status": 422,
+    "response": {
+      "detail": [
+        {
+          "type": "value_error",
+          "loc": [
+            "body",
+            "content"
+          ],
+          "msg": "Value error, content must not be blank",
+          "input": "\u00a0\u001f",
+          "ctx": {
+            "error": {}
+          }
+        },
+        {
+          "type": "extra_forbidden",
+          "loc": [
+            "body",
+            "extra"
+          ],
+          "msg": "Extra inputs are not permitted",
+          "input": []
+        }
+      ]
+    }
+  },
+  {
+    "name": "limit_over",
+    "method": "GET",
+    "path": "/api/v1/feed?limit=101",
+    "body": null,
+    "status": 422,
+    "response": {
+      "detail": [
+        {
+          "type": "less_than_equal",
+          "loc": [
+            "query",
+            "limit"
+          ],
+          "msg": "Input should be less than or equal to 100",
+          "input": "101",
+          "ctx": {
+            "le": 100
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "limit_under",
+    "method": "GET",
+    "path": "/api/v1/feed?limit=0",
+    "body": null,
+    "status": 422,
+    "response": {
+      "detail": [
+        {
+          "type": "greater_than_equal",
+          "loc": [
+            "query",
+            "limit"
+          ],
+          "msg": "Input should be greater than or equal to 1",
+          "input": "0",
+          "ctx": {
+            "ge": 1
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "limit_invalid",
+    "method": "GET",
+    "path": "/api/v1/feed?limit=nope",
+    "body": null,
+    "status": 422,
+    "response": {
+      "detail": [
+        {
+          "type": "int_parsing",
+          "loc": [
+            "query",
+            "limit"
+          ],
+          "msg": "Input should be a valid integer, unable to parse string as an integer",
+          "input": "nope"
+        }
+      ]
+    }
+  },
+  {
+    "name": "path_invalid",
+    "method": "GET",
+    "path": "/api/v1/posts/notint",
+    "body": null,
+    "status": 422,
+    "response": {
+      "detail": [
+        {
+          "type": "int_parsing",
+          "loc": [
+            "path",
+            "post_id"
+          ],
+          "msg": "Input should be a valid integer, unable to parse string as an integer",
+          "input": "notint"
+        }
+      ]
+    }
+  },
+  {
+    "name": "path_zero",
+    "method": "GET",
+    "path": "/api/v1/posts/0",
+    "body": null,
+    "status": 404,
+    "response": {
+      "detail": "not found"
+    }
+  },
+  {
+    "name": "path_negative",
+    "method": "GET",
+    "path": "/api/v1/posts/-1",
+    "body": null,
+    "status": 404,
+    "response": {
+      "detail": "not found"
+    }
+  }
+]

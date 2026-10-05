@@ -1,0 +1,25 @@
+{
+  "budget": {
+    "cpus": 2,
+    "memory_bytes": 3221225472,
+    "swap_bytes": 0,
+    "database_connections": 20
+  },
+  "verified_at": "2026-10-05",
+  "status": "local-staging-only",
+  "cells": [
+    {
+      "id": "php-laravel",
+      "language": "php",
+      "runtime_version": "8.5.11",
+      "framework": "laravel",
+      "framework_version": "13.34.0",
+      "image": "lb-php-laravel:8.5.11",
+      "dockerfile": "backends/php/laravel/Dockerfile",
+      "workers": 20,
+      "connections_per_worker": 1,
+      "topology": "nginx/PHP-FPM20; OPcache; nonpersistent PDO; shared hash slots2",
+      "upstream": "https://www.php.net/releases/"
+    }
+  ]
+}
