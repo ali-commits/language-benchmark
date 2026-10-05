@@ -9,6 +9,7 @@ def search_capacity(
     step: int = 10000,
     ceiling: int = 50000,
     resolution: int = 100,
+    next_candidate: int | None = None,
 ) -> dict:
     if not 1 <= start <= ceiling or step < 1 or resolution < 1:
         raise ValueError("invalid finite search bounds")
@@ -24,6 +25,8 @@ def search_capacity(
         return result["outcome"]
 
     candidate = start
+    adaptive = next_candidate is not None and start < next_candidate <= ceiling
+    growth = max(resolution, next_candidate - start) if adaptive else step
     while candidate <= ceiling:
         outcome = measure(candidate)
         if outcome == "invalid":
@@ -39,7 +42,12 @@ def search_capacity(
         lower = candidate
         if candidate == ceiling:
             break
-        candidate = min(candidate + step, ceiling)
+        if adaptive and candidate == start:
+            candidate = next_candidate
+        else:
+            if adaptive:
+                growth = min(step, growth * 2)
+            candidate = min(candidate + growth, ceiling)
     if upper is None:
         return {
             "status": "ceiling_reached",

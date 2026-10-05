@@ -93,6 +93,14 @@ def next_start_users(previous: dict | None, default: int) -> int:
     return default
 
 
+def invalid_boundary(result: dict) -> bool:
+    return result.get("status") == "invalid" or any(
+        item.get("outcome") == "invalid"
+        for items in result.get("confirmations", {}).values()
+        for item in items
+    )
+
+
 def run_user_capacity(config_path: Path, output_dir: Path, resume: bool = False) -> dict:
     c = json.loads(config_path.read_text())
     validate_config(c)
@@ -134,23 +142,24 @@ def run_user_capacity(config_path: Path, output_dir: Path, resume: bool = False)
     results = {}
     ordinal = 0
     previous = None
+    previous_upper = None
     with (
         campaign_lock(Path("artifacts/campaign.lock")),
         database_campaign_lock(os.environ["DATABASE_URL"]),
     ):
         if resume:
             results = json.loads((output_dir / "capacity-results.json").read_text())
-            if any(
-                r["status"] not in ("bracket_found", "ceiling_reached") for r in results.values()
-            ):
-                raise ValueError("cannot resume an invalid or unstable boundary")
+            if any(invalid_boundary(r) for r in results.values()):
+                raise ValueError("cannot resume invalid evidence without resolving its cause")
             ordinal = 1 + max(
                 int(json.loads(p.read_text())["trial"]["id"].rsplit("-", 1)[1])
                 for p in output_dir.glob("*/manifest.json")
             )
         for cell in c["cells"]:
             if cell in results:
-                previous = results[cell]
+                if results[cell]["status"] in ("bracket_found", "ceiling_reached"):
+                    previous = results[cell]
+                previous_upper = results[cell].get("failing_users")
                 continue
             start_users = next_start_users(previous, c["start_users"])
 
@@ -199,7 +208,12 @@ def run_user_capacity(config_path: Path, output_dir: Path, resume: bool = False)
                 return summary
 
             result = search_capacity(
-                probe, start_users, c["step_users"], c["max_users"], c["resolution_users"]
+                probe,
+                start_users,
+                c["step_users"],
+                c["max_users"],
+                c["resolution_users"],
+                next_candidate=previous_upper,
             )
             # Search is exploratory; repeated endpoints determine whether the bracket is stable.
             if result["status"] == "bracket_found":
@@ -220,19 +234,26 @@ def run_user_capacity(config_path: Path, output_dir: Path, resume: bool = False)
                 stable = all(
                     r["outcome"] == "pass" for r in confirmations.get("passing_users", [])
                 ) and all(r["outcome"] == "fail" for r in confirmations.get("failing_users", []))
-                if not stable:
-                    result["status"] = "unstable_or_invalid_boundary"
+                if invalid_boundary(result):
+                    result["status"] = "invalid"
+                elif not stable:
+                    result["status"] = "unstable_boundary"
             result["starting_users"] = start_users
             results[cell] = result
-            previous = result
+            if result["status"] in ("bracket_found", "ceiling_reached"):
+                previous = result
+            previous_upper = result.get("failing_users")
             atomic_json(output_dir / "capacity-results.json", results)
-            if result["status"] in ("invalid", "unstable_or_invalid_boundary"):
+            if invalid_boundary(result):
                 break
     atomic_json(
         output_dir / "capacity-status.json",
         {
             "status": "complete"
             if all(r["status"] in ("bracket_found", "ceiling_reached") for r in results.values())
+            else "complete_with_unstable_boundaries"
+            if len(results) == len(c["cells"])
+            and not any(invalid_boundary(r) for r in results.values())
             else "needs_attention",
             "updated_epoch": time.time(),
         },

@@ -29,7 +29,7 @@ The dashboard is not exposed publicly. Prometheus receives k6 data over private 
 
 The primary campaign now measures concurrent users performing stateful journeys with random 3–10 second waits. It starts at 10,000 users, adds 10,000 until failure, then bisects the passing/failing bracket to a 100-user interval and confirms both endpoints five times. See [the methodology](user-capacity-methodology.md). All 13 runtime configurations use the same settings; invalid generator or telemetry evidence stops the campaign for attention.
 
-The earlier arrival-rate pilot and its failed `language-benchmark-full.service` remain separate evidence. They cannot establish a concurrent-user capacity. The new controller is `language-benchmark-user-capacity.service`, with status/results in `artifacts/results/user-capacity/`.
+The earlier arrival-rate pilot and its failed `language-benchmark-full.service` remain separate evidence. They cannot establish a concurrent-user capacity. The new controller is `language-benchmark-user-capacity.service`, with status/results in `artifacts/results/user-capacity/`. Valid but unstable boundaries are reported and the remaining configurations continue; invalid evidence still pauses the campaign.
 
 Runtime depends on the number of search probes and repetitions and can span multiple days. The three EC2 machines total approximately **USD 1.85/hour**, and the RDS compute rate is **USD 0.494/hour** in the checked AWS on-demand catalog. Combined compute is about **USD 2.35/hour**, plus EBS/RDS storage and public IPv4 charges. These are estimates at provisioning time, not a billing guarantee.
 

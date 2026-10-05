@@ -1,3 +1,4 @@
+import pytest
 from bench.capacity import search_capacity
 
 
@@ -63,7 +64,10 @@ def test_only_valid_positive_previous_success_seeds_next_runtime():
     assert next_start_users({"status": "ceiling_reached", "passing_users": 50000}, 10000) == 50000
 
 
-def test_resume_preserves_completed_runtime_and_starts_next_at_its_success(tmp_path, monkeypatch):
+@pytest.mark.parametrize("unstable", [False, True])
+def test_resume_preserves_completed_runtime_and_starts_next_at_its_success(
+    tmp_path, monkeypatch, unstable
+):
     import json
     from contextlib import nullcontext
 
@@ -71,7 +75,7 @@ def test_resume_preserves_completed_runtime_and_starts_next_at_its_success(tmp_p
 
     config = {
         "mode": "local",
-        "cells": ["old", "new"],
+        "cells": ["old", "unstable", "new"] if unstable else ["old", "new"],
         "start_users": 10000,
         "step_users": 10000,
         "max_users": 50000,
@@ -89,15 +93,24 @@ def test_resume_preserves_completed_runtime_and_starts_next_at_its_success(tmp_p
         json.dumps({"campaign": config, "trial": {"id": "abc-0003", "campaign_id": "abc"}})
     )
     previous = {"status": "bracket_found", "passing_users": 23000, "failing_users": 23080}
-    (output / "capacity-results.json").write_text(json.dumps({"old": previous}))
+    completed = {"old": previous}
+    if unstable:
+        completed["unstable"] = {
+            "status": "unstable_or_invalid_boundary",
+            "passing_users": 23500,
+            "failing_users": 23600,
+            "confirmations": {"passing_users": [{"outcome": "pass"}, {"outcome": "fail"}]},
+        }
+    (output / "capacity-results.json").write_text(json.dumps(completed))
     monkeypatch.setenv("DATABASE_URL", "unused")
     monkeypatch.setattr(module, "validate_config", lambda _: None)
     monkeypatch.setattr(module, "campaign_lock", lambda _: nullcontext())
     monkeypatch.setattr(module, "database_campaign_lock", lambda _: nullcontext())
     calls = []
 
-    def search(probe, start, step, ceiling, resolution):
+    def search(probe, start, step, ceiling, resolution, next_candidate=None):
         calls.append(start)
+        assert next_candidate == (23600 if unstable else 23080)
         return {"status": "ceiling_reached", "passing_users": ceiling}
 
     monkeypatch.setattr(module, "search_capacity", search)
@@ -105,3 +118,28 @@ def test_resume_preserves_completed_runtime_and_starts_next_at_its_success(tmp_p
     assert calls == [23000]
     assert result["old"] == previous
     assert result["new"]["starting_users"] == 23000
+
+
+def test_previous_boundary_is_retested_and_growth_is_adaptive():
+    calls = []
+
+    def probe(users):
+        calls.append(users)
+        return {"outcome": "pass" if users <= 2900 else "fail"}
+
+    r = search_capacity(probe, start=2031, next_candidate=2265)
+    assert calls[:4] == [2031, 2265, 2733, 3669]
+    assert r["passing_users"] <= 2900 < r["failing_users"]
+    assert r["failing_users"] - r["passing_users"] <= 100
+
+
+def test_invalid_repeat_evidence_stops_but_unstable_backend_repeats_do_not():
+    from bench.user_capacity import invalid_boundary
+
+    r = {
+        "status": "unstable_or_invalid_boundary",
+        "confirmations": {"passing_users": [{"outcome": "pass"}, {"outcome": "fail"}]},
+    }
+    assert not invalid_boundary(r)
+    r["confirmations"]["passing_users"].append({"outcome": "invalid"})
+    assert invalid_boundary(r)
