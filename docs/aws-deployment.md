@@ -130,3 +130,7 @@ ssh -F artifacts/aws/ssh-config benchmark-monitor \
 ```
 
 Then inspect the latest result for verified fixture restoration and confirm backend/load test containers are stopped before using the checked EC2/RDS shutdown commands above. Never stop unrelated resources. The dashboard's history exporter mounts current tool modules and uses finalized saved reductions, avoiding raw-gzip parsing during live scrapes; full canonical offline reports still read raw evidence by default.
+
+## Automatic idle shutdown authorization (2026-10-06)
+
+Ali replaced the hourly notification-only heartbeat with `stop-idle-benchmark-machines`, a12-hour check explicitly authorized to stop the three dedicated benchmark EC2 instances and RDS `language-benchmark` only when no test, preparation or recovery is active and fixture cleanup is verified. This supersedes earlier reminder-only instructions. Uncertain ownership/activity/cleanup must prevent shutdown. Stop applicable supervisors before residual jobs; stop backend/generator/RDS and the monitor last. Never terminate/delete resources or touch unrelated instances or `rds-eb`. Keep the check scheduled to stop RDS again after its automatic seven-day restart; stopped storage remains billed. No capacity search or new suite is authorized by this automation.
