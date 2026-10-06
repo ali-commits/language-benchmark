@@ -5,7 +5,7 @@ A controlled Docker/k6 experiment with Python baseline/modern APIs and six addit
 | Directory | Responsibility |
 | --- | --- |
 | `backends/python/baseline` | Python 3.10-compatible FastAPI / SQLAlchemy async application; one dependency set across 3.10–3.15 |
-| `backends/python/modern` | Python 3.15 FastAPI / native Psycopg async and threaded applications; current typed generic response models |
+| `backends/python/modern` | Python 3.14 stable runtime reference and preserved 3.15 experimental FastAPI / native Psycopg async/threaded controls |
 | `database` | PostgreSQL schema and Alembic migrations |
 | `tools/bench` | Fixture generation, guarded restoration, runtime checks, trial runner and reports |
 | `benchmarks/k6` | Arrival-rate capacity scenarios, mixed operations, warm-up, user journeys and calibration |
@@ -22,11 +22,11 @@ PYTHONPATH=tools uv run -m bench.languages build
 PYTHONPATH=tools uv run -m bench.languages verify --output artifacts/language-check
 ```
 
-These staging cells are separate from the active Python AWS campaign; functional verification does not establish capacity results.
+Local correctness verification and staged profiles remain separate from recorded AWS campaigns; functional verification does not establish capacity results.
 
 ## Concurrent-user experiment
 
-The primary experiment uses distinct logged-in users, each fetching a following feed, waiting a random 3–10 seconds, liking and replying. It starts at 10,000 concurrent users, increases by 10,000 until a response failure, then searches the bracket to within 100 users. Every probe restores the canonical database. See [concurrent-user methodology](docs/user-capacity-methodology.md) for response deadlines, generator qualification and repeated boundary confirmation.
+The primary experiment uses distinct users performing real login, following-feed reads, random 3–10-second waits, likes and replies. New examples use a seven-minute scheduled profile (180/0/240 seconds), 90% valid steady responses within five seconds and a separate authentication gate. Capacity search retests prior hints, expands geometrically and narrows measured bounds to width100; fixed-load mode measures declared populations without searching. Every probe restores the canonical database. Existing AWS timing/thresholds remain unchanged. See [methodology](docs/user-capacity-methodology.md) and [future mixed-language configuration](docs/future-language-campaigns.md).
 
 ```sh
 PYTHONPATH=tools uv run -m bench.cli user-capacity \
@@ -44,11 +44,12 @@ Use uv for environments, locks, installation and commands. Root and application 
 ```sh
 uv sync --locked
 uv run python runtimes/python/build.py --apps
+uv run python runtimes/python/build.py --version 3.14.8 --mode standard --apps
 uv run python runtimes/python/build.py --version 3.15.0rc3 --mode jit --apps
 uv run python runtimes/python/build.py --version 3.15.0rc3 --mode free-threaded --apps
 ```
 
-The pinned 3.15 release is **3.15.0rc3**, not a stable release. The modern stack pins **Pydantic 2.14.0b2 / Core 2.49.0** for the new free-threaded ABI; the baseline keeps stable Pydantic 2.13.5 across all versions. `--smoke` builds use a different image prefix and lack PGO/LTO; do not substitute them for measured images.
+Future mixed-language examples reference modern **Python 3.14.8**, standard build, JIT off/GIL on. The pinned experimental 3.15 release remains **3.15.0rc3**, not a stable release. The modern stack pins **Pydantic 2.14.0b2 / Core 2.49.0** for the new free-threaded ABI; the baseline keeps stable Pydantic 2.13.5 across all versions. `--smoke` builds use a different image prefix and lack PGO/LTO; do not substitute them for measured images.
 
 ## Local first run
 

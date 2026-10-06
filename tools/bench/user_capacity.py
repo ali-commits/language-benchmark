@@ -1,6 +1,7 @@
 """Run stateful concurrent-user probes with guarded resets and bracket confirmation."""
 
 import json
+import math
 import os
 import time
 import uuid
@@ -9,14 +10,32 @@ from pathlib import Path
 
 from .capacity import search_capacity
 from .control import qualified_cache, recover_hosts, retry_probe
+from .evidence import backend_open_file_exhaustion
 from .journeys import classify_journey, generator_window, journey_flags
 from .manifest import atomic_json
+from .profiles import PROFILES, methodology, normalize_config
 from .report import generator_flags
 from .runner import campaign_lock, database_campaign_lock, run_trial
 from .telemetry import rds_metrics, validate_rds_evidence
 
 
+def backend_validity_flags(directory: Path) -> list[str]:
+    log = directory / "backend.log"
+    if log.exists() and backend_open_file_exhaustion(log.read_text(errors="replace")):
+        return ["backend file-descriptor exhaustion invalidates capacity evidence"]
+    return []
+
+
 def validate_config(c: dict):
+    if (
+        type(c.get("backend_nofile_limit", 250000)) is not int
+        or c.get("backend_nofile_limit", 250000) != 250000
+    ):
+        raise ValueError("backend_nofile_limit must be the comparable 250000 policy")
+    if c.get("experiment_type", "capacity") not in ("capacity", "fixed-load"):
+        raise ValueError("unknown experiment_type")
+    if c.get("profile", "legacy") not in PROFILES:
+        raise ValueError("unknown benchmark profile")
     if c.get("mode") not in ("local", "aws") or not c.get("cells"):
         raise ValueError("mode and runtime cells required")
     for key in (
@@ -43,7 +62,12 @@ def validate_config(c: dict):
     ):
         raise ValueError("trial duration exceeds token/runtime bounds")
     if (
-        not 0.9 <= c.get("success_fraction", 0) <= 1
+        type(c.get("success_fraction")) not in (int, float)
+        or not math.isfinite(c["success_fraction"])
+        or not 0.9 <= c["success_fraction"] <= 1
+        or type(c.get("authentication_fraction", c["success_fraction"])) not in (int, float)
+        or not math.isfinite(c.get("authentication_fraction", c["success_fraction"]))
+        or not 0 <= c.get("authentication_fraction", c["success_fraction"]) <= 1
         or not 1 <= c.get("confirmation_repeats", 0) <= 10
     ):
         raise ValueError("invalid response target/confirmations")
@@ -78,8 +102,19 @@ def validate_config(c: dict):
         raise ValueError("invalid bounded recovery settings")
     if type(c.get("auto_build_images", False)) is not bool:
         raise ValueError("auto_build_images must be boolean")
+    population = c["max_users"]
+    if c.get("experiment_type") == "fixed-load":
+        users = c.get("fixed_users")
+        if (
+            not isinstance(users, list)
+            or not users
+            or any(type(n) is not int or not 1 <= n <= 50000 for n in users)
+            or len(set(users)) != len(users)
+        ):
+            raise ValueError("invalid fixed_users")
+        population = max(users)
     fixture = json.loads(Path(c["fixture"]).read_text())
-    if fixture["counts"]["users"] < c["max_users"]:
+    if fixture["counts"]["users"] < population:
         raise ValueError("fixture cannot provide enough unique accounts")
 
 
@@ -162,10 +197,65 @@ def confirm_boundary(probe, result: dict, policy: dict):
         result["status"] = "unstable_boundary"
 
 
+def validate_resume_resource_policy(stored: dict, c: dict, reusable: bool):
+    saved = stored.get("campaign", {}).get("backend_nofile_limit")
+    if type(saved) is not int or saved != c["backend_nofile_limit"]:
+        raise ValueError("resume resource policy missing or differs: backend_nofile_limit")
+    if not reusable:
+        return
+    actual = (
+        stored.get("native_runtime", {}).get("container", {}).get("nofile", stored.get("nofile"))
+    )
+    if (
+        not isinstance(actual, dict)
+        or type(actual.get("soft")) is not int
+        or type(actual.get("hard")) is not int
+        or actual["soft"] != saved
+        or actual["hard"] != saved
+        or type(actual.get("process_samples")) is not int
+        or actual["process_samples"] < 1
+    ):
+        raise ValueError("resume checkpoint lacks matching actual nofile attestation")
+
+
+def _completed_trial_references(root):
+    references = set()
+
+    def walk(value, found):
+        if isinstance(value, dict):
+            if (
+                value.get("outcome") in ("pass", "fail")
+                and isinstance(value.get("trial_id"), str)
+                and value["trial_id"]
+            ):
+                found.add(value["trial_id"])
+            for nested in value.values():
+                walk(nested, found)
+        elif isinstance(value, list):
+            for nested in value:
+                walk(nested, found)
+
+    for name in ("capacity-results.json", "fixed-load-results.json"):
+        path = root / name
+        if not path.exists():
+            continue
+        for result in json.loads(path.read_text()).values():
+            found = set()
+            walk(result, found)
+            if (
+                result.get("status")
+                in ("bracket_found", "ceiling_reached", "unstable_boundary", "fixed_load_complete")
+                and not found
+            ):
+                raise ValueError("completed checkpoint lacks valid trial references")
+            references.update(found)
+    return references
+
+
 def run_user_capacity(
     config_path: Path, output_dir: Path, resume: bool = False, retry_invalid: bool = False
 ) -> dict:
-    c = json.loads(config_path.read_text())
+    c = normalize_config(json.loads(config_path.read_text()))
     validate_config(c)
     c.update(
         operation="user-journey",
@@ -186,7 +276,20 @@ def run_user_capacity(
         if not manifests:
             raise ValueError("resume requires original trial manifests")
         original = json.loads(manifests[0].read_text())
-        for key in (
+        references = _completed_trial_references(output_dir)
+        known_ids = {json.loads(path.read_text()).get("trial", {}).get("id") for path in manifests}
+        if not references <= known_ids:
+            raise ValueError("completed checkpoint references missing original trial manifests")
+        method_keys = (
+            "backend_nofile_limit",
+            "mode",
+            "experiment_type",
+            "profile",
+            "fixed_users",
+            "authentication_fraction",
+            "confirmation_policy",
+            "growth_strategy",
+            "initial_failing_hint",
             "cells",
             "start_users",
             "step_users",
@@ -203,9 +306,19 @@ def run_user_capacity(
             "seed",
             "fixture",
             "expected_image_ids",
-        ):
-            if original["campaign"].get(key) != c.get(key):
-                raise ValueError("resume configuration differs: " + key)
+        )
+        for manifest_path in manifests:
+            stored = json.loads(manifest_path.read_text())
+            result_path = manifest_path.with_name("result.json")
+            measured = json.loads(result_path.read_text()) if result_path.exists() else {}
+            reusable = (
+                measured.get("status") == "measured" and measured.get("reset_verified") is True
+            ) or stored.get("trial", {}).get("id") in references
+            validate_resume_resource_policy(stored, c, reusable)
+            stored_method = normalize_config(stored["campaign"])
+            for key in method_keys:
+                if stored_method.get(key) != c.get(key):
+                    raise ValueError("resume configuration differs: " + key)
         from .models import NativeCell
         from .native_runtime import load_runtime_cell, registry_metadata
 
@@ -224,14 +337,34 @@ def run_user_capacity(
     previous = None
     previous_upper = c.get("initial_failing_hint")
     cached = qualified_cache(output_dir) if resume else {}
+    for key, queue in cached.items():
+        cached[key] = type(queue)(
+            item
+            for item in queue
+            if not backend_validity_flags(output_dir / item.get("trial_id", "missing"))
+        )
     prior_trials = {key: list(queue) for key, queue in cached.items()}
+    results_filename = (
+        "fixed-load-results.json"
+        if c["experiment_type"] == "fixed-load"
+        else "capacity-results.json"
+    )
     with (
         campaign_lock(Path("artifacts/campaign.lock")),
         database_campaign_lock(os.environ["DATABASE_URL"]),
     ):
         if resume:
-            results_file = output_dir / "capacity-results.json"
+            results_file = output_dir / results_filename
             results = json.loads(results_file.read_text()) if results_file.exists() else {}
+            for path in output_dir.glob("*/result.json"):
+                if backend_validity_flags(path.parent):
+                    bad_cell = json.loads(path.read_text()).get("trial", {}).get("cell")
+                    if bad_cell in results:
+                        results[bad_cell] = {
+                            **results[bad_cell],
+                            "status": "invalid",
+                            "reasons": backend_validity_flags(path.parent),
+                        }
             if any(invalid_boundary(r) for r in results.values()):
                 if not retry_invalid:
                     raise ValueError("cannot resume invalid evidence without resolving its cause")
@@ -273,7 +406,7 @@ def run_user_capacity(
                 )
                 r = run_trial(c, trial, directory)
                 await_rds(c, r, directory)
-                reasons = list(r.get("reasons", []))
+                reasons = list(r.get("reasons", [])) + backend_validity_flags(directory)
                 if r.get("status") != "measured" or not r.get("reset_verified"):
                     reasons.append("measurement or cleanup incomplete")
                 reasons += generator_flags(
@@ -282,13 +415,16 @@ def run_user_capacity(
                 )
                 m = r.get("journey_metrics", {})
                 reasons += journey_flags(m)
-                outcome = classify_journey(m, users, reasons, c["success_fraction"])
+                outcome = classify_journey(
+                    m, users, reasons, c["success_fraction"], c["authentication_fraction"]
+                )
                 summary = {
                     "outcome": outcome,
                     "lifecycle_status": r.get("status"),
                     "reasons": sorted(set(reasons)),
                     "metrics": m,
                     "trial_id": trial["id"],
+                    "methodology": r.get("methodology", methodology(c)),
                 }
                 atomic_json(directory / "capacity-outcome.json", summary)
                 return summary
@@ -305,35 +441,55 @@ def run_user_capacity(
                     delay=c.get("recovery_delay_seconds", 30),
                 )
 
-            result = search_capacity(
-                probe,
-                start_users,
-                c["step_users"],
-                c["max_users"],
-                c["resolution_users"],
-                next_candidate=previous_upper,
-                **({"growth_strategy": c["growth_strategy"]} if "growth_strategy" in c else {}),
-            )
-            # Search is exploratory; repeated endpoints determine whether the bracket is stable.
-            if result["status"] == "bracket_found":
-                result["prior_endpoint_trials"] = {
-                    bound: prior_trials.get((cell, result[bound]), [])
-                    for bound in ("passing_users", "failing_users")
+            if c["experiment_type"] == "fixed-load":
+                observations = []
+                for population in c["fixed_users"]:
+                    item = probe(population)
+                    observations.append({"users": population, **item})
+                    if item["outcome"] == "invalid":
+                        break
+                result = {
+                    "status": "invalid"
+                    if any(o["outcome"] == "invalid" for o in observations)
+                    else "fixed_load_complete",
+                    "experiment_type": "fixed-load",
+                    "fixed_users": c["fixed_users"],
+                    "observations": observations,
                 }
-                confirm_boundary(probe, result, c["confirmation_policy"])
-            result["starting_users"] = start_users
-            results[cell] = result
-            if result["status"] in ("bracket_found", "ceiling_reached"):
-                previous = result
-            previous_upper = result.get("failing_users")
-            atomic_json(output_dir / "capacity-results.json", results)
+                results[cell] = result
+            else:
+                result = search_capacity(
+                    probe,
+                    start_users,
+                    c["step_users"],
+                    c["max_users"],
+                    c["resolution_users"],
+                    next_candidate=previous_upper,
+                    **({"growth_strategy": c["growth_strategy"]} if "growth_strategy" in c else {}),
+                )
+                # Search is exploratory; repeated endpoints determine whether the bracket is stable.
+                if result["status"] == "bracket_found":
+                    result["prior_endpoint_trials"] = {
+                        bound: prior_trials.get((cell, result[bound]), [])
+                        for bound in ("passing_users", "failing_users")
+                    }
+                    confirm_boundary(probe, result, c["confirmation_policy"])
+                result["starting_users"] = start_users
+                results[cell] = result
+                if result["status"] in ("bracket_found", "ceiling_reached"):
+                    previous = result
+                previous_upper = result.get("failing_users")
+            atomic_json(output_dir / results_filename, results)
             if invalid_boundary(result):
                 break
     atomic_json(
         output_dir / "capacity-status.json",
         {
             "status": "complete"
-            if all(r["status"] in ("bracket_found", "ceiling_reached") for r in results.values())
+            if all(
+                r["status"] in ("bracket_found", "ceiling_reached", "fixed_load_complete")
+                for r in results.values()
+            )
             else "complete_with_unstable_boundaries"
             if len(results) == len(c["cells"])
             and not any(invalid_boundary(r) for r in results.values())

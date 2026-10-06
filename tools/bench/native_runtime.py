@@ -12,6 +12,7 @@ import httpx
 from .models import NativeCell, RuntimeCell
 from .transport import execute
 
+NOFILE_LIMIT = 250000
 LANGUAGES = ("java", "php", "go", "rust", "node", "bun")
 LABEL_PREFIX = "org.language-benchmark."
 BUDGET = {"cpus": 2, "memory_bytes": 3221225472, "swap_bytes": 0, "database_connections": 20}
@@ -26,7 +27,7 @@ LABEL_FIELDS = (
 CONTAINER_FORMAT = (
     '{"id":{{json .Id}},"image":{{json .Image}},"running":{{json .State.Running}},'
     '"nano_cpus":{{.HostConfig.NanoCpus}},"memory":{{.HostConfig.Memory}},'
-    '"memory_swap":{{.HostConfig.MemorySwap}},"network_mode":{{json .HostConfig.NetworkMode}},'
+    '"ulimits":{{json .HostConfig.Ulimits}},"memory_swap":{{.HostConfig.MemorySwap}},"network_mode":{{json .HostConfig.NetworkMode}},'
     '"run_id":{{json (index .Config.Labels "org.language-benchmark.run-id")}},'
     '"cell_id":{{json (index .Config.Labels "org.language-benchmark.cell-id")}},'
     '"mounts":[{{range $i,$m := .Mounts}}{{if $i}},{{end}}'
@@ -121,6 +122,13 @@ def validate_native_container(data, cell, run_id, image):
         3221225472,
     ] or data.get("network_mode") != "host":
         raise ValueError("native backend must enforce 2 CPUs, 3 GiB, no swap and host networking")
+    limits = [limit for limit in data.get("ulimits", []) if limit.get("Name") == "nofile"]
+    if (
+        len(limits) != 1
+        or limits[0].get("Soft") != NOFILE_LIMIT
+        or limits[0].get("Hard") != NOFILE_LIMIT
+    ):
+        raise ValueError("native backend must enforce nofile=250000:250000")
     mounts = data.get("mounts", [])
     if not any(
         m.get("Destination") == "/certs/rds-ca.pem" and m.get("RW") is False for m in mounts
@@ -176,6 +184,48 @@ def wait_native_ready(base_url, timeout=120):
     raise RuntimeError("native backend readiness did not become healthy")
 
 
+def validate_process_nofile(text):
+    matches = re.findall(r"Max open files\s+(\d+)\s+(\d+)\s+files", text)
+    if not matches or any(
+        (int(soft), int(hard)) != (NOFILE_LIMIT, NOFILE_LIMIT) for soft, hard in matches
+    ):
+        raise ValueError("native process nofile limit is missing or inconsistent")
+    return {"soft": NOFILE_LIMIT, "hard": NOFILE_LIMIT, "process_samples": len(matches)}
+
+
+def verify_runtime_nofile(backend, compose, env):
+    ids = execute(backend, compose + ["ps", "--quiet"], env, timeout=30).stdout.split()
+    if len(ids) != 1:
+        raise ValueError("exactly one measured backend container required")
+    limits = json.loads(
+        execute(
+            backend,
+            ["docker", "inspect", "--format", "{{json .HostConfig.Ulimits}}", ids[0]],
+            timeout=30,
+        ).stdout
+    )
+    nofile = [item for item in limits or [] if item.get("Name") == "nofile"]
+    if (
+        len(nofile) != 1
+        or nofile[0].get("Soft") != NOFILE_LIMIT
+        or nofile[0].get("Hard") != NOFILE_LIMIT
+    ):
+        raise ValueError("backend must enforce nofile=250000:250000")
+    text = execute(
+        backend,
+        [
+            "docker",
+            "exec",
+            ids[0],
+            "sh",
+            "-c",
+            'for path in /proc/[0-9]*/limits; do cat "$path" 2>/dev/null || true; done',
+        ],
+        timeout=30,
+    ).stdout
+    return validate_process_nofile(text)
+
+
 def native_preflight(backend, cell, compose, env, base_url, run_id, expected):
     wait_native_ready(base_url)
     ids = execute(backend, compose + ["ps", "--quiet"], env, timeout=30).stdout.split()
@@ -187,6 +237,19 @@ def native_preflight(backend, cell, compose, env, base_url, run_id, expected):
         ).stdout
     )
     safe_container = validate_native_container(container, cell, run_id, expected)
+    process_limits = execute(
+        backend,
+        [
+            "docker",
+            "exec",
+            ids[0],
+            "sh",
+            "-c",
+            'for path in /proc/[0-9]*/limits; do cat "$path" 2>/dev/null || true; done',
+        ],
+        timeout=30,
+    ).stdout
+    safe_container["nofile"] = validate_process_nofile(process_limits)
     raw_image = json.loads(
         execute(
             backend,

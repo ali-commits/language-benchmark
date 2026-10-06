@@ -46,7 +46,11 @@ for s in lock["runtimes"]:
         for app in (
             ["modern"]
             if a.mode != "standard"
-            else (["baseline", "modern"] if s["version"].startswith("3.15") else ["baseline"])
+            else (
+                ["baseline", "modern"]
+                if s["version"].startswith(("3.14", "3.15"))
+                else ["baseline"]
+            )
         ):
             name = f"lb-python-{app}{'-smoke' if a.smoke else ''}:{s['version']}" + (
                 "-" + a.mode if app == "modern" else ""

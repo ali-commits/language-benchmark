@@ -66,6 +66,8 @@ def read_metrics(path: Path) -> dict:
     metrics["incomplete"] = status["incomplete"]
     if durations:
         metrics.update(
+            mean=statistics.fmean(durations),
+            p999=percentile(durations, 0.999),
             p50=percentile(durations, 0.5),
             p95=percentile(durations, 0.95),
             p99=percentile(durations, 0.99),
@@ -75,6 +77,8 @@ def read_metrics(path: Path) -> dict:
             **{k: b[k] for k in ["attempted", "succeeded"]},
             **(
                 {
+                    "mean": statistics.fmean(b["durations"]),
+                    "p999": percentile(b["durations"], 0.999),
                     "p50": percentile(b["durations"], 0.5),
                     "p95": percentile(b["durations"], 0.95),
                     "p99": percentile(b["durations"], 0.99),
@@ -138,15 +142,17 @@ def summarize_campaign(results_dir: Path) -> dict:
         groups.setdefault(key, []).append(t)
     summary = []
     for (campaign, cell, rate), rows in groups.items():
-        values = [r["successful_operations_s"] for r in rows]
+        values = [
+            r["successful_operations_s"] for r in rows if r["successful_operations_s"] is not None
+        ]
         summary.append(
             {
                 "campaign": campaign,
                 "cell": cell,
                 "offered_rate": rate,
                 "repetitions": len(rows),
-                "successful_ops_s_median": statistics.median(values),
-                "successful_ops_s_range": [min(values), max(values)],
+                "successful_ops_s_median": statistics.median(values) if values else None,
+                "successful_ops_s_range": [min(values), max(values)] if values else None,
                 "all_trials_qualify": all(r["qualification"] == "pass" for r in rows),
             }
         )
@@ -167,9 +173,23 @@ def write_report(results_dir: Path, output_path: Path) -> None:
             t["label"],
             t["cell"],
             t["rate"],
-            round(t["successful_operations_s"], 2),
-            round(m.get("p95", 0), 2),
-            round(m.get("p99", 0), 2),
+            round(t["successful_operations_s"], 2)
+            if t["successful_operations_s"] is not None
+            else "unavailable",
+            round(m["mean"], 2) if m.get("mean") is not None else "unavailable",
+            round(m["p95"], 2) if m.get("p95") is not None else "unavailable",
+            round(m["p99"], 2) if m.get("p99") is not None else "unavailable",
+            round(m["p999"], 2) if m.get("p999") is not None else "unavailable",
+            m.get("success_fraction", "unavailable"),
+            t.get("authentication_fraction", "unavailable"),
+            t.get("resources", {})
+            .get("phases", {})
+            .get("steady", {})
+            .get("cpu_percent_mean", "unavailable"),
+            t.get("resources", {})
+            .get("phases", {})
+            .get("steady", {})
+            .get("memory_working_set_mib_peak", "unavailable"),
             m.get("dropped", "missing"),
             t["qualification"],
             "; ".join(t["reasons"]),
@@ -179,7 +199,7 @@ def write_report(results_dir: Path, output_path: Path) -> None:
         )
     charts = plot_curves(report, output_path.parent)
     output_path.write_text(
-        '<!doctype html><html lang="en"><meta charset="utf-8"><title>Python benchmark report</title><style>body{font:16px system-ui;margin:2rem}table{border-collapse:collapse}td,th{padding:.5rem;border:1px solid #ccc}td:last-child{max-width:30rem}</style><h1>Python FastAPI benchmark</h1><p>'
+        '<!doctype html><html lang="en"><meta charset="utf-8"><title>Language benchmark report</title><style>body{font:16px system-ui;margin:2rem}table{border-collapse:collapse}td,th{padding:.5rem;border:1px solid #ccc}td:last-child{max-width:30rem}</style><h1>Language benchmark</h1><p>'
         + html.escape(report["method"])
         + "</p><table><tr>"
         + "".join(
@@ -191,8 +211,14 @@ def write_report(results_dir: Path, output_path: Path) -> None:
                 if any(t.get("workload") == "user-journey" for t in report["trials"])
                 else "Offered ops/s",
                 "Successful ops/s",
+                "Mean ms (failures included)",
                 "p95 ms",
                 "p99 ms",
+                "p99.9 ms",
+                "Operation success",
+                "Authentication fraction",
+                "Backend CPU % of 2 CPUs",
+                "Sampled peak working set MiB",
                 "Dropped",
                 "Qualification",
                 "Evidence/limitations",
@@ -300,15 +326,24 @@ def read_trial_summary(manifest_path: Path) -> dict:
     )
     metrics_path = p.parent / "k6/metrics.json.gz"
     metrics = {}
+    config = manifest["campaign"]
     journey = manifest["campaign"].get("operation") == "user-journey"
     if metrics_path.exists():
         if journey:
             from .journeys import read_journey_metrics
 
-            metrics = read_journey_metrics(metrics_path)
+            metrics = read_journey_metrics(metrics_path, steady_seconds=config.get("hold_seconds"))
         else:
             metrics = read_metrics(metrics_path)
-    reasons = list(result.get("reasons", []))
+    from .analysis import backend_log_flags, methodology
+    from .resources import (
+        phase_windows,
+        summarize_generator_resources,
+        summarize_rds_resources,
+        summarize_resources,
+    )
+
+    reasons = list(result.get("reasons", [])) + backend_log_flags(p.parent)
     if metrics.get("incomplete"):
         reasons.append("raw metric stream is incomplete or corrupt")
     if result.get("status") != "measured":
@@ -339,15 +374,35 @@ def read_trial_summary(manifest_path: Path) -> dict:
             metrics,
             result["trial"]["users"],
             reasons,
-            manifest["campaign"].get("success_fraction", 0.99),
+            config.get("success_fraction", 0.99),
+            authentication_fraction=config.get("authentication_fraction"),
         )
         qualification = {"pass": "pass", "fail": "fail", "invalid": "unknown"}[outcome]
     else:
         qualification = qualify(metrics, reasons, manifest["campaign"].get("operation", "mixed"))
     login = metrics.get("endpoints", {}).get("login", {})
-    if qualification == "pass" and login.get("p95", 0) > 500:
+    if not journey and qualification == "pass" and login.get("p95", 0) > 500:
         qualification = "fail"
-    seconds = manifest["campaign"].get("hold_seconds", manifest["campaign"]["measure_seconds"])
+    seconds = config.get("hold_seconds") if journey else config.get("measure_seconds")
+    users = result["trial"].get("users")
+    resources = summarize_resources(
+        p.parent / "telemetry.jsonl", phase_windows(result, config, metrics)
+    )
+    method = methodology(config)
+    external_resources = {
+        "generator": summarize_generator_resources(
+            p.parent / "telemetry.jsonl", phase_windows(result, config, metrics)
+        ),
+        "rds": summarize_rds_resources(
+            p.parent / "rds.json",
+            result.get("measurement_started_epoch", 0),
+            result.get("measurement_finished_epoch", 0),
+        ),
+    }
+
+    def rate(count):
+        return count / seconds if seconds else None
+
     return {
         "id": result["trial"]["id"],
         "campaign": result["trial"]["campaign_id"],
@@ -360,8 +415,20 @@ def read_trial_summary(manifest_path: Path) -> dict:
         "qualification": qualification,
         "reasons": reasons,
         "metrics": metrics,
-        "achieved_operations_s": metrics.get("attempted", 0) / seconds,
-        "achieved_http_requests_s": metrics.get("http_requests", 0) / seconds,
-        "successful_operations_s": metrics.get("succeeded", 0) / seconds,
+        "achieved_operations_s": rate(metrics.get("attempted", 0)),
+        "achieved_http_requests_s": rate(metrics.get("http_requests", 0)),
+        "successful_operations_s": rate(metrics.get("succeeded", 0)),
+        "authentication_fraction": metrics.get("authenticated_users", 0) / users if users else None,
+        "authentication_gate": config.get(
+            "authentication_fraction", config.get("success_fraction", 0.99)
+        ),
+        "methodology": method,
+        "resources": resources,
+        "external_resources": external_resources,
+        "evidence": {
+            "generator_telemetry": str(p.parent / "telemetry.jsonl"),
+            "rds_telemetry": str(p.parent / "rds.json"),
+            "backend_logs": str(p.parent / "backend.log"),
+        },
         "artifact": str(p.parent),
     }

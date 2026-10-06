@@ -1,0 +1,32 @@
+{
+  "mode": "aws",
+  "operation": "user-journey",
+  "cells": [
+    "python-baseline-3.10.22"
+  ],
+  "start_users": 10000,
+  "step_users": 10000,
+  "max_users": 50000,
+  "resolution_users": 100,
+  "ramp_seconds": 300,
+  "settle_seconds": 120,
+  "hold_seconds": 300,
+  "wait_min": 3,
+  "wait_max": 10,
+  "timeout_seconds": 5,
+  "success_fraction": 0.99,
+  "confirmation_repeats": 1,
+  "seed": 20261004,
+  "fixture": "artifacts/fixture/manifest.json",
+  "credentials": "artifacts/credentials.json",
+  "database_allowlist": "language_benchmark",
+  "confirmation_policy": {
+    "passing_repeats": 0,
+    "failing_repeats": 1,
+    "stop_on_contradiction": true
+  },
+  "profile": "legacy",
+  "authentication_fraction": 0.99,
+  "experiment_type": "capacity",
+  "backend_nofile_limit": 250000
+}

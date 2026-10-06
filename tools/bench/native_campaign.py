@@ -23,9 +23,10 @@ def main():
         expected_image_id(config, cell)
     resume = bool(list(args.output.glob("*/manifest.json")))
     if args.output.exists() and not resume:
-        if (args.output / "capacity-results.json").exists() or list(
-            args.output.glob("*/result.json")
-        ):
+        if any(
+            (args.output / name).exists()
+            for name in ("capacity-results.json", "fixed-load-results.json")
+        ) or list(args.output.glob("*/result.json")):
             raise RuntimeError("unverified previous results require their original manifests")
         archive = args.output.with_name(
             args.output.name + "-premeasurement-" + uuid.uuid4().hex[:8]

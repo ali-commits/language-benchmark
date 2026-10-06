@@ -1,0 +1,40 @@
+{
+  "mode": "aws",
+  "operation": "user-journey",
+  "cells": [
+    "python-modern-3.14.8-standard-jit0-gil1-async",
+    "java-spring-boot",
+    "php-laravel",
+    "go-net-http",
+    "rust-axum",
+    "node-express",
+    "bun-express"
+  ],
+  "start_users": 10000,
+  "step_users": 10000,
+  "max_users": 50000,
+  "resolution_users": 100,
+  "ramp_seconds": 180,
+  "settle_seconds": 0,
+  "hold_seconds": 240,
+  "wait_min": 3,
+  "wait_max": 10,
+  "timeout_seconds": 5,
+  "success_fraction": 0.9,
+  "confirmation_repeats": 1,
+  "seed": 20261004,
+  "fixture": "artifacts/fixture/manifest.json",
+  "credentials": "artifacts/credentials.json",
+  "database_allowlist": "language_benchmark",
+  "confirmation_policy": {
+    "passing_repeats": 0,
+    "failing_repeats": 1,
+    "stop_on_contradiction": true
+  },
+  "profile": "fast",
+  "authentication_fraction": 0.9,
+  "experiment_type": "capacity",
+  "growth_strategy": "geometric",
+  "expected_image_ids": {},
+  "backend_nofile_limit": 250000
+}

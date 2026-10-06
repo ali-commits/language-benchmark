@@ -22,7 +22,15 @@ def decode_cursor(value: str) -> tuple[datetime, int]:
         )
         if not isinstance(data, list) or len(data) != 2:
             raise ValueError()
-        d = datetime.fromisoformat(data[0])
+        stamp = data[0]
+        if isinstance(stamp, str) and any(
+            len(stamp) > offset + 2
+            and not stamp[offset].isdigit()
+            and stamp[offset + 1 : offset + 3] == "24"
+            for offset in (8, 10)
+        ):
+            raise ValueError()
+        d = datetime.fromisoformat(stamp)
         if (
             d.utcoffset() is None
             or isinstance(data[1], bool)

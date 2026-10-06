@@ -10,6 +10,59 @@ from bench.report import read_trial_summary
 CACHE = {}
 
 
+def metric_values(row):
+    """Policy failures remain technically valid and can pass a lower analysis target."""
+    metrics = row["metrics"]
+    values = {
+        "benchmark_trial_qualified": {"pass": 1, "fail": 0, "unknown": -1}[row["qualification"]],
+        "benchmark_technical_valid": int(row["qualification"] in ("pass", "fail")),
+    }
+    for name, field in (
+        ("benchmark_successful_ops_per_second", "successful_operations_s"),
+        ("benchmark_attempted_ops_per_second", "achieved_operations_s"),
+        ("benchmark_http_requests_per_second", "achieved_http_requests_s"),
+    ):
+        if row.get(field) is not None:
+            values[name] = row[field]
+    for name, field in (
+        ("benchmark_latency_mean_ms", "mean"),
+        ("benchmark_latency_p50_ms", "p50"),
+        ("benchmark_latency_p95_ms", "p95"),
+        ("benchmark_latency_p99_ms", "p99"),
+        ("benchmark_latency_p999_ms", "p999"),
+    ):
+        if metrics.get(field) is not None:
+            values[name] = metrics[field]
+    if metrics.get("attempted"):
+        values["benchmark_operation_success_fraction"] = metrics["succeeded"] / metrics["attempted"]
+    if row.get("target_users"):
+        values.update(
+            benchmark_target_users=row["target_users"],
+            benchmark_authenticated_users=metrics.get("authenticated_users", 0),
+            benchmark_active_users=metrics.get("active_users_max", 0),
+            benchmark_user_timeouts=metrics.get("timeouts", 0),
+        )
+        fraction = row.get(
+            "authentication_fraction", metrics.get("authenticated_users", 0) / row["target_users"]
+        )
+        gate = row.get("authentication_gate", 0.99)
+        values.update(
+            benchmark_authentication_fraction=fraction,
+            benchmark_authentication_gate=gate,
+            benchmark_authentication_gate_satisfied=int(fraction >= gate),
+        )
+    resource = row.get("resources", {}).get("phases", {}).get("steady", {})
+    for field in (
+        "cpu_percent_mean",
+        "cpu_percent_peak",
+        "memory_working_set_mib_mean",
+        "memory_working_set_mib_peak",
+    ):
+        if field in resource:
+            values["benchmark_backend_" + field] = resource[field]
+    return values
+
+
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path != "/metrics":
@@ -40,7 +93,6 @@ class Handler(BaseHTTPRequestHandler):
                 m = json.loads(manifest.read_text())
                 r = json.loads(result.read_text())
                 t = r["trial"]
-                v = row["metrics"]
                 labels = {
                     "cell": t["cell"],
                     "trial": t["id"],
@@ -48,23 +100,17 @@ class Handler(BaseHTTPRequestHandler):
                     "offered_rate": str(t.get("rate", 0)),
                     "target_users": str(t.get("users", 0)),
                     "workload": m["campaign"].get("operation", "mixed"),
+                    "profile": row.get("methodology", {}).get("profile", "historical-unspecified"),
+                    "experiment_type": row.get("methodology", {}).get(
+                        "experiment_type", "capacity"
+                    ),
+                    "methodology": json.dumps(
+                        row.get("methodology", {}), sort_keys=True, separators=(",", ":")
+                    ),
+                    "authentication_policy": str(row.get("authentication_gate", 0.99)),
                 }
                 label = ",".join(k + "=" + json.dumps(x) for k, x in labels.items())
-                valid = row["qualification"]
-                values = {
-                    "benchmark_successful_ops_per_second": v.get("succeeded", 0)
-                    / m["campaign"].get("hold_seconds", m["campaign"]["measure_seconds"]),
-                    "benchmark_latency_p95_ms": v.get("p95", 0),
-                    "benchmark_latency_p99_ms": v.get("p99", 0),
-                    "benchmark_trial_qualified": {"pass": 1, "fail": 0, "unknown": -1}[valid],
-                }
-                if t.get("users"):
-                    values.update(
-                        benchmark_target_users=t["users"],
-                        benchmark_authenticated_users=v.get("authenticated_users", 0),
-                        benchmark_active_users=v.get("active_users_max", 0),
-                        benchmark_user_timeouts=v.get("timeouts", 0),
-                    )
+                values = metric_values(row)
                 for key, value in values.items():
                     lines.append(f"{key}{{{label}}} {value}")
             except (KeyError, ValueError, OSError):

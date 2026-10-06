@@ -50,6 +50,7 @@ def proof():
         "network_mode": "host",
         "run_id": "trial-fresh-nonce",
         "cell_id": c.id,
+        "ulimits": [{"Name": "nofile", "Soft": 250000, "Hard": 250000}],
         "mounts": [{"Destination": "/certs/rds-ca.pem", "RW": False}],
     }
 
@@ -149,6 +150,8 @@ def test_native_preflight_uses_health_and_filtered_inspect_without_python(monkey
         calls.append(command)
         if "ps" in command:
             return SimpleNamespace(stdout="container-one\n")
+        if command[:2] == ["docker", "exec"]:
+            return SimpleNamespace(stdout="Max open files 250000 250000 files\n")
         if command[:3] == ["docker", "image", "inspect"]:
             return SimpleNamespace(
                 stdout=json.dumps(
@@ -296,7 +299,7 @@ def test_native_trial_keeps_fixture_lifecycle_and_never_reads_python_workers(tmp
         lambda *_: pytest.fail("Python dependencies checked on native cell"),
     )
     monkeypatch.setattr(runner, "prepare_journey_data", lambda _, __, path: path.write_text("{}"))
-    monkeypatch.setattr(runner, "read_journey_metrics", lambda *_: {})
+    monkeypatch.setattr(runner, "read_journey_metrics", lambda *_args, **_kw: {})
     monkeypatch.setattr(runner, "copy_to", lambda *_: None)
     monkeypatch.setattr(runner, "copy_from", lambda _, __, target: target.mkdir(exist_ok=True))
 
@@ -339,3 +342,13 @@ def test_native_trial_keeps_fixture_lifecycle_and_never_reads_python_workers(tmp
     manifest = json.loads((directory / "manifest.json").read_text())
     assert manifest["runtime_lock"]["path"] == "runtimes/go/lock.json"
     assert "workers" not in manifest and manifest["image"]["id"] == IMAGE
+
+
+@pytest.mark.parametrize(
+    "text", ["", "Max open files 2048 2097152 files", "Max open files 250000 524288 files"]
+)
+def test_native_process_nofile_must_be_explicit_and_equal(text):
+    from bench.native_runtime import validate_process_nofile
+
+    with pytest.raises(ValueError):
+        validate_process_nofile(text)

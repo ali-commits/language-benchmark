@@ -2,7 +2,7 @@
   "uid": "language-benchmark",
   "title": "Language Benchmark \u2014 live and history",
   "schemaVersion": 39,
-  "version": 1,
+  "version": 2,
   "refresh": "5s",
   "timezone": "browser",
   "time": {
@@ -36,6 +36,19 @@
         "allValue": ".*",
         "multi": true,
         "refresh": 1
+      },
+      {
+        "name": "threshold",
+        "type": "custom",
+        "query": "0.90,0.95,0.99,0.999",
+        "current": {
+          "text": "0.90",
+          "value": "0.90"
+        },
+        "includeAll": false,
+        "multi": false,
+        "allowCustomValue": true,
+        "label": "Operation success threshold"
       }
     ]
   },
@@ -448,11 +461,245 @@
         },
         "overrides": []
       }
+    },
+    {
+      "id": 50,
+      "title": "Historical highest observed passing users (not exact capacity)",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 0,
+        "y": 56,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "benchmark-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "max by (campaign,cell,profile,methodology) ((benchmark_target_users{cell=~\"$cell\",trial=~\"$trial\"} and on (cell,trial,campaign,profile,experiment_type,methodology,authentication_policy,target_users,offered_rate,workload) (benchmark_technical_valid{cell=~\"$cell\",trial=~\"$trial\"} == 1) and on (cell,trial,campaign,profile,experiment_type,methodology,authentication_policy,target_users,offered_rate,workload) (benchmark_authentication_gate_satisfied{cell=~\"$cell\",trial=~\"$trial\"} == 1)) and on (cell,trial,campaign,profile,experiment_type,methodology,authentication_policy,target_users,offered_rate,workload) (benchmark_operation_success_fraction{cell=~\"$cell\",trial=~\"$trial\"} >= $threshold))",
+          "legendFormat": "{{cell}} {{campaign}} {{profile}} {{operation}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 51,
+      "title": "Historical lowest observed failing users (check contradictions in CLI)",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 12,
+        "y": 56,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "benchmark-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "min by (campaign,cell,profile,methodology) (benchmark_target_users{cell=~\"$cell\",trial=~\"$trial\"} and on (cell,trial,campaign,profile,experiment_type,methodology,authentication_policy,target_users,offered_rate,workload) (benchmark_technical_valid{cell=~\"$cell\",trial=~\"$trial\"} == 1) and on (cell,trial,campaign,profile,experiment_type,methodology,authentication_policy,target_users,offered_rate,workload) ((benchmark_operation_success_fraction{cell=~\"$cell\",trial=~\"$trial\"} < $threshold) or (benchmark_authentication_gate_satisfied{cell=~\"$cell\",trial=~\"$trial\"} == 0)))",
+          "legendFormat": "{{cell}} {{campaign}} {{profile}} {{operation}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 52,
+      "title": "Historical mean latency (failed replies included)",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 0,
+        "y": 64,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "benchmark-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "benchmark_latency_mean_ms{cell=~\"$cell\",trial=~\"$trial\"}",
+          "legendFormat": "{{cell}} {{campaign}} {{profile}} {{operation}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 53,
+      "title": "Historical p99.9 latency (raw trial samples)",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 12,
+        "y": 64,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "benchmark-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "benchmark_latency_p999_ms{cell=~\"$cell\",trial=~\"$trial\"}",
+          "legendFormat": "{{cell}} {{campaign}} {{profile}} {{operation}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 54,
+      "title": "Backend container mean CPU: 100% = 2 vCPUs",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 0,
+        "y": 72,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "benchmark-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "benchmark_backend_cpu_percent_mean{cell=~\"$cell\",trial=~\"$trial\"}",
+          "legendFormat": "{{cell}} {{campaign}} {{profile}} {{operation}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 55,
+      "title": "Backend sampled working set (MiB)",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 12,
+        "y": 72,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "benchmark-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "benchmark_backend_memory_working_set_mib_peak{cell=~\"$cell\",trial=~\"$trial\"}",
+          "legendFormat": "{{cell}} {{campaign}} {{profile}} {{operation}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "mebibytes"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 56,
+      "title": "Live operation mean / p99.9 latency (seconds)",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 0,
+        "y": 80,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "benchmark-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "k6_operation_duration_avg{cell=~\"$cell\",trial=~\"$trial\"}",
+          "legendFormat": "{{cell}} {{campaign}} {{profile}} {{operation}}"
+        },
+        {
+          "refId": "B",
+          "expr": "k6_operation_duration_p999{cell=~\"$cell\",trial=~\"$trial\"}",
+          "legendFormat": "p99.9 {{operation}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      }
+    },
+    {
+      "id": 57,
+      "title": "Operation success fraction and chosen threshold",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 12,
+        "y": 80,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "benchmark-prometheus"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "benchmark_operation_success_fraction{cell=~\"$cell\",trial=~\"$trial\"}",
+          "legendFormat": "{{cell}} {{campaign}} {{profile}} {{operation}}"
+        },
+        {
+          "refId": "B",
+          "expr": "$threshold",
+          "legendFormat": "chosen target"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit"
+        },
+        "overrides": []
+      }
     }
   ],
   "tags": [
     "benchmark",
-    "python"
+    "languages"
   ],
-  "description": "Compare equal workloads/rates/fixtures. Never average percentiles across trials. Saved raw artifacts define final qualification."
+  "description": "Compare equal workloads/rates/fixtures. Never average percentiles across trials. Saved raw artifacts define final qualification. Threshold comparisons show observed bounds only; invalid telemetry remains excluded. Authentication uses its saved separate gate. Docker CPU100% means both allocatedCPUs; memory is sampled working set."
 }

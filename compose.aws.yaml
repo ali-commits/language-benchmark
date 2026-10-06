@@ -5,6 +5,10 @@ services:
     cpus: 2.0
     mem_limit: 3g
     memswap_limit: 3g
+    ulimits:
+      nofile:
+        soft: 250000
+        hard: 250000
     network_mode: host
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgresql://placeholder@invalid/language_benchmark}

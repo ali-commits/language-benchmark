@@ -1,0 +1,32 @@
+{
+  "mode": "aws",
+  "operation": "user-journey",
+  "cells": [
+    "python-modern-3.14.8-standard-jit0-gil1-async",
+    "java-spring-boot",
+    "php-laravel",
+    "go-net-http",
+    "rust-axum",
+    "node-express",
+    "bun-express"
+  ],
+  "ramp_seconds": 180,
+  "settle_seconds": 0,
+  "hold_seconds": 240,
+  "wait_min": 3,
+  "wait_max": 10,
+  "timeout_seconds": 5,
+  "success_fraction": 0.9,
+  "seed": 20261004,
+  "fixture": "artifacts/fixture/manifest.json",
+  "credentials": "artifacts/credentials.json",
+  "database_allowlist": "language_benchmark",
+  "profile": "fast",
+  "authentication_fraction": 0.9,
+  "experiment_type": "fixed-load",
+  "expected_image_ids": {},
+  "fixed_users": [
+    100
+  ],
+  "backend_nofile_limit": 250000
+}

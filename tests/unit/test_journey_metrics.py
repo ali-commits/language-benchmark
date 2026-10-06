@@ -140,3 +140,47 @@ def test_activity_windows_keep_extrema_when_points_arrive_out_of_order(tmp_path)
     m = read_journey_metrics(p)
     assert m["activity_finished_epoch"] - m["activity_started_epoch"] == 20
     assert m["steady_finished_epoch"] - m["steady_started_epoch"] == 10
+
+
+def test_phase_endpoint_latency_includes_failures_and_configured_throughput(tmp_path):
+    p = tmp_path / "raw.gz"
+    rows = []
+    for op, phase, value, time in [
+        ("login", "ramp", 100, "2026-10-04T12:00:00Z"),
+        ("feed", "steady", 10, "2026-10-04T12:03:00Z"),
+        ("feed", "steady", 5000, "2026-10-04T12:06:59Z"),
+    ]:
+        for metric, v in [
+            ("operations_attempted", 1),
+            ("operation_duration", value),
+            ("http_reqs", 1),
+        ]:
+            row = point(metric, v, phase, time)
+            row["data"]["tags"]["operation"] = op
+            rows.append(row)
+    for metric, value in [("operations_succeeded", 1), ("journey_active_users", 10)]:
+        rows.append(point(metric, value, time="2026-10-04T12:03:00Z"))
+    rows.append(point("users_authenticated", 10, "ramp"))
+    with gzip.open(p, "wt") as f:
+        f.write("\n".join(json.dumps(x) for x in rows))
+    m = read_journey_metrics(p, steady_seconds=240)
+    assert m["successful_operations_s"] == 1 / 240
+    assert m["attempted_operations_s"] == 2 / 240
+    assert m["mean"] == 2505
+    assert m["p999"] > m["p99"]
+    assert m["endpoints"]["feed"]["mean"] == 2505
+    assert m["phases"]["ramp"]["endpoints"]["login"]["mean"] == 100
+    assert m["phases"]["steady"]["attempted"] == 2
+    assert m["authentication"]["login_attempted"] == 1
+    assert m["steady_seconds"] == 240
+
+
+def test_authentication_gate_independent_of_operation_threshold():
+    metrics = {
+        "attempted": 1000,
+        "succeeded": 980,
+        "authenticated_users": 95,
+        "active_users_max": 100,
+    }
+    assert classify_journey(metrics, 100, [], 0.98, authentication_fraction=0.90) == "pass"
+    assert classify_journey(metrics, 100, [], 0.98, authentication_fraction=0.99) == "fail"

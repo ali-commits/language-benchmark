@@ -1,6 +1,6 @@
 # Verified Python runtime support
 
-Local verification on 2026-10-04 used the actual source-built Docker images, not just uv vendor interpreters. All 13 configured runtime/deployment cells passed the shared HTTP contract tests over an external HTTP connection.
+Historical local verification on 2026-10-04 used the actual source-built Docker images, not just uv vendor interpreters. All 13 runtime/deployment cells configured at that time passed the shared HTTP contract tests over an external HTTP connection.
 
 | Codebase | Releases / modes | Result |
 | --- | --- | --- |
@@ -20,6 +20,29 @@ The modern comparison therefore includes dependency and database-access changes 
 
 Python 3.15 is a release candidate. A later stable-release campaign needs new versioned inputs and must not be pooled with these prerelease cells. Simultaneous JIT/free-threaded mode is excluded; separate supported modes provide the comparisons without forcing unsafe imports.
 
-Verification artifacts are private/ignored under `artifacts/source-contracts`, including each image ID and full test log. The shared contract now checks immediate registration/login over real HTTP and transaction commits before response headers. A full 50,000-user / 500,000-post fixture was generated with real salted Argon2id hashes and its restoration was verified by table fingerprints. Small Docker/k6 workflow trials completed successfully. Actual AWS performance measurements remain to be collected on the specified infrastructure.
+Verification artifacts are private/ignored under `artifacts/source-contracts`, including each image ID and full test log. The shared contract now checks immediate registration/login over real HTTP and transaction commits before response headers. A full 50,000-user / 500,000-post fixture was generated with real salted Argon2id hashes and its restoration was verified by table fingerprints. Small Docker/k6 workflow trials completed successfully. AWS performance evidence is stored separately from these correctness checks; the verification artifacts do not establish capacity rankings.
 
 These are correctness and reproducibility checks, not published throughput rankings. Local report qualification is unknown where concurrent builds, CPU/core utilization or swap allocation limit interpretation.
+
+## Modern Python 3.14.8 reference (2026-10-06)
+
+The registry now adds `python-modern-3.14.8-standard-jit0-gil1-async` alongside the 13 unchanged historical cells. It uses the existing checksum-pinned Python 3.14.8 source and Debian base, standard PGO/LTO build, two async processes, aggregate pool 20, JIT off and GIL on. The actual application image is `lb-python-modern:3.14.8-standard`.
+
+The modern package floor and Ruff syntax target now include Python 3.14. The `uv.lock` was refreshed for that floor: all 26 previously locked package versions remain unchanged; additional Python 3.14 wheel/marker metadata is recorded. The Docker `requirements.lock` hashes are unchanged. Pydantic 2.14.0b2/Core 2.49.0 remains intentional, so this is a **stable interpreter reference with the existing beta-era dependency stack**, not a latest/all-stable dependency claim.
+
+Actual source-built verification passed **62 external HTTP contract/interoperability tests** on disposable PostgreSQL, with two CPU quota, 3 GiB memory, no swap and nofile 250000. Both workers attested Python 3.14.8, native Psycopg C, PGO/LTO, GIL enabled and JIT unavailable/off; the full installed dependency inventory matched the lock. Focused runtime/cursor tests also passed. Image ID: `sha256:1b1cd48584b80cb4179c82bd08b9758b9351543eadba434d4d42fcfd8189e752`. Ignored evidence is in `artifacts/modern314-reference/` (`build.log`, original `contract.log`, `rebuild-strict.log`, `contract-strict.log`, worker snapshots and `proof.json`).
+
+The first image exposed one compatibility difference: Python 3.14 accepts ISO8601 end-of-day `24:00:00`, while the original 3.10 API rejects that cursor. A focused modern-source guard now retains the 00–23 clock-hour range; valid timestamp microseconds, timezone offsets and year bounds are covered. The initial 61-pass/1-failure log is preserved, and the rebuilt image passed all 62 cases. This guard also applies to future rebuilt modern 3.15 images, so their source/image provenance must remain distinct from old recorded3.15 builds. Existing 3.15 registry cells, images running on AWS and historical results were not changed.
+
+Build/verify commands:
+
+```sh
+uv run python runtimes/python/build.py --version 3.14.8 --mode standard --apps --jobs 8
+uv lock --check --directory backends/python/modern --python 3.14.8
+uv run -m pytest tests/unit/test_modern_reference.py tests/unit/test_modern_reference_cursor.py -q
+TARGET_URL=http://127.0.0.1:58044 \
+  TEST_DATABASE_URL=postgresql://benchmark:benchmark@127.0.0.1:55444/language_benchmark_modern314_test \
+  uv run -m pytest tests/contract tests/multilanguage -q
+```
+
+The last command assumes the disposable local database and API are running; never point it at the canonical AWS database. Future mixed-language capacity/fixed-load templates select this reference and use the generic controller. See [future-language-campaigns.md](future-language-campaigns.md). No AWS deployment or performance run was performed for this new cell.

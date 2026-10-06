@@ -75,6 +75,7 @@ def test_resume_preserves_completed_runtime_and_starts_next_at_its_success(
 
     config = {
         "mode": "local",
+        "backend_nofile_limit": 250000,
         "cells": ["old", "unstable", "new"] if unstable else ["old", "new"],
         "start_users": 10000,
         "step_users": 10000,
@@ -90,9 +91,20 @@ def test_resume_preserves_completed_runtime_and_starts_next_at_its_success(
     trial_dir = output / "abc-0003"
     trial_dir.mkdir(parents=True)
     (trial_dir / "manifest.json").write_text(
-        json.dumps({"campaign": config, "trial": {"id": "abc-0003", "campaign_id": "abc"}})
+        json.dumps(
+            {
+                "campaign": config,
+                "trial": {"id": "abc-0003", "campaign_id": "abc", "cell": "old"},
+                "nofile": {"soft": 250000, "hard": 250000, "process_samples": 2},
+            }
+        )
     )
-    previous = {"status": "bracket_found", "passing_users": 23000, "failing_users": 23080}
+    previous = {
+        "status": "bracket_found",
+        "passing_users": 23000,
+        "failing_users": 23080,
+        "observations": [{"outcome": "pass", "trial_id": "abc-0003", "users": 23000}],
+    }
     completed = {"old": previous}
     if unstable:
         completed["unstable"] = {
@@ -238,6 +250,7 @@ def test_resume_refuses_changed_native_binary_before_reusing_measurements(tmp_pa
 
     config = {
         "mode": "local",
+        "backend_nofile_limit": 250000,
         "cells": ["go-net-http"],
         "start_users": 1309,
         "step_users": 10000,

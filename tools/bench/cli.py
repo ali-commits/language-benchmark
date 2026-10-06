@@ -19,6 +19,24 @@ from .runner import run_campaign
 from .seed import seed_database
 
 
+def threshold_argument(value):
+    from .analysis import validate_threshold
+
+    try:
+        return validate_threshold(value)
+    except (TypeError, ValueError) as error:
+        raise argparse.ArgumentTypeError(str(error)) from error
+
+
+def authentication_argument(value):
+    from .analysis import authentication_gate
+
+    try:
+        return authentication_gate(value)
+    except (TypeError, ValueError) as error:
+        raise argparse.ArgumentTypeError(str(error)) from error
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__)
     sub = p.add_subparsers(dest="command", required=True)
@@ -53,6 +71,30 @@ def main():
     report = sub.add_parser("report")
     report.add_argument("--results", type=Path, required=True)
     report.add_argument("--output", type=Path, required=True)
+    analysis = sub.add_parser(
+        "analyze",
+        help="Reclassify immutable observations; report sampled bounds, never exact capacity",
+    )
+    analysis.add_argument(
+        "--input",
+        type=Path,
+        required=True,
+        help="Trial directory, manifest, report JSON or capacity-results.json",
+    )
+    analysis.add_argument(
+        "--output", type=Path, required=True, help="Write JSON and sibling .txt summary"
+    )
+    analysis.add_argument(
+        "--threshold",
+        type=threshold_argument,
+        action="append",
+        help="Finite operation fraction0.90–1.00; repeat to compare (default .90/.95/.99/.999)",
+    )
+    analysis.add_argument(
+        "--authentication-threshold",
+        type=authentication_argument,
+        help="Optional separate gate0–1; default recorded campaign policy",
+    )
     compatibility = sub.add_parser("compatibility")
     compatibility.add_argument("--cell")
     a = p.parse_args()
@@ -115,6 +157,17 @@ def main():
         )
     elif a.command == "report":
         write_report(a.results, a.output)
+    elif a.command == "analyze":
+        from .analysis import analyze_observations, human_summary, load_observations
+
+        data = analyze_observations(
+            load_observations(a.input), a.threshold, a.authentication_threshold
+        )
+        a.output.parent.mkdir(parents=True, exist_ok=True)
+        atomic_json(a.output, data)
+        summary = human_summary(data)
+        a.output.with_suffix(".txt").write_text(summary + "\n")
+        print(summary)
     elif a.command == "compatibility":
         lock = validate_runtime_lock(json.loads(Path("runtimes/python/lock.json").read_text()))
         if a.cell:

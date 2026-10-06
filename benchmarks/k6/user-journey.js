@@ -17,9 +17,13 @@ const failure=new Rate('journey_failure_rate');
 const authenticated=new Counter('users_authenticated');
 const active=new Gauge('journey_active_users');
 const journeys=new Counter('user_journeys_completed');
+const scenarioStarted=new Gauge('scenario_started_epoch');
 const deadline=cfg.ramp_seconds+cfg.settle_seconds;
-export const options={tags:cfg.tags||{},scenarios:{users:{executor:'ramping-vus',startVUs:0,stages:[{duration:cfg.ramp_seconds+'s',target:cfg.users},{duration:cfg.settle_seconds+'s',target:cfg.users},{duration:cfg.hold_seconds+'s',target:cfg.users}],gracefulRampDown:'30s',gracefulStop:'30s'}},summaryTrendStats:['avg','med','p(95)','p(99)','max'],thresholds:{'journey_failure_rate{phase:steady}':['rate<=0.01']},systemTags:['status','method','name','scenario']};
-let token=null;let everAuthenticated=false;let state=(__VU*2654435761)>>>0;
+const successTarget=cfg.success_fraction===undefined?0.99:cfg.success_fraction;
+if(!Number.isFinite(successTarget)||successTarget<0.9||successTarget>1)throw new Error('invalid operation success target');
+const stages=[{duration:cfg.ramp_seconds+'s',target:cfg.users},...(cfg.settle_seconds>0?[{duration:cfg.settle_seconds+'s',target:cfg.users}]:[]),{duration:cfg.hold_seconds+'s',target:cfg.users}];
+export const options={tags:cfg.tags||{},scenarios:{users:{executor:'ramping-vus',startVUs:0,stages,gracefulRampDown:'30s',gracefulStop:'30s'}},summaryTrendStats:['avg','med','p(95)','p(99)','p(99.9)','max'],thresholds:{'journey_failure_rate{phase:steady}':['rate<='+String(Number((1-successTarget).toFixed(12)))]},systemTags:['status','method','name','scenario']};
+let token=null;let everAuthenticated=false;let anchorEmitted=false;let state=(__VU*2654435761)>>>0;
 function random(){state^=state<<13;state^=state>>>17;state^=state<<5;return (state>>>0)/4294967296;}
 function wait(){sleep(cfg.wait_min+random()*(cfg.wait_max-cfg.wait_min));}
 function phase(){const elapsed=(Date.now()-exec.scenario.startTime)/1000;return elapsed<cfg.ramp_seconds?'ramp':elapsed<deadline?'settle':elapsed<deadline+cfg.hold_seconds?'steady':'drain';}
@@ -40,6 +44,7 @@ function request(op,method,path,body,expected){
  return {ok,json,tags};
 }
 export default function(){
+ if(__VU===1&&!anchorEmitted){scenarioStarted.add(exec.scenario.startTime/1000,{phase:'ramp'});anchorEmitted=true;}
  const actor=actors[__VU-1];
  if(!token){
   const r=request('login','POST','/auth/login',{username:actor.username,password:actor.password},200);

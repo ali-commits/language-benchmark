@@ -151,18 +151,104 @@ def build_dashboard():
         }
         for name in ("cell", "trial")
     ]
+    variables.append(
+        {
+            "name": "threshold",
+            "type": "custom",
+            "query": "0.90,0.95,0.99,0.999",
+            "current": {"text": "0.90", "value": "0.90"},
+            "includeAll": False,
+            "multi": False,
+            "allowCustomValue": True,
+            "label": "Operation success threshold",
+        }
+    )
+    historical = 'cell=~"$cell",trial=~"$trial"'
+    # Pass is a selectable policy; technical validity and the saved auth gate remain independent.
+    eligible = f"benchmark_target_users{{{historical}}} and on (cell,trial,campaign,profile,experiment_type,methodology,authentication_policy,target_users,offered_rate,workload) (benchmark_technical_valid{{{historical}}} == 1) and on (cell,trial,campaign,profile,experiment_type,methodology,authentication_policy,target_users,offered_rate,workload) (benchmark_authentication_gate_satisfied{{{historical}}} == 1)"
+    extra = [
+        (
+            "Historical highest observed passing users (not exact capacity)",
+            f"max by (campaign,cell,profile,methodology) (({eligible}) and on (cell,trial,campaign,profile,experiment_type,methodology,authentication_policy,target_users,offered_rate,workload) (benchmark_operation_success_fraction{{{historical}}} >= $threshold))",
+            "short",
+        ),
+        (
+            "Historical lowest observed failing users (check contradictions in CLI)",
+            f"min by (campaign,cell,profile,methodology) (benchmark_target_users{{{historical}}} and on (cell,trial,campaign,profile,experiment_type,methodology,authentication_policy,target_users,offered_rate,workload) (benchmark_technical_valid{{{historical}}} == 1) and on (cell,trial,campaign,profile,experiment_type,methodology,authentication_policy,target_users,offered_rate,workload) ((benchmark_operation_success_fraction{{{historical}}} < $threshold) or (benchmark_authentication_gate_satisfied{{{historical}}} == 0)))",
+            "short",
+        ),
+        (
+            "Historical mean latency (failed replies included)",
+            f"benchmark_latency_mean_ms{{{historical}}}",
+            "ms",
+        ),
+        (
+            "Historical p99.9 latency (raw trial samples)",
+            f"benchmark_latency_p999_ms{{{historical}}}",
+            "ms",
+        ),
+        (
+            "Backend container mean CPU: 100% = 2 vCPUs",
+            f"benchmark_backend_cpu_percent_mean{{{historical}}}",
+            "percent",
+        ),
+        (
+            "Backend sampled working set (MiB)",
+            f"benchmark_backend_memory_working_set_mib_peak{{{historical}}}",
+            "mebibytes",
+        ),
+        (
+            "Live operation mean / p99.9 latency (seconds)",
+            'k6_operation_duration_avg{cell=~"$cell",trial=~"$trial"}',
+            "s",
+        ),
+        (
+            "Operation success fraction and chosen threshold",
+            f"benchmark_operation_success_fraction{{{historical}}}",
+            "percentunit",
+        ),
+    ]
+    for index, (title, expr, unit) in enumerate(extra):
+        targets = [
+            {
+                "refId": "A",
+                "expr": expr,
+                "legendFormat": "{{cell}} {{campaign}} {{profile}} {{operation}}",
+            }
+        ]
+        if index == 6:
+            targets.append(
+                {
+                    "refId": "B",
+                    "expr": expr.replace("_avg", "_p999"),
+                    "legendFormat": "p99.9 {{operation}}",
+                }
+            )
+        if index == 7:
+            targets.append({"refId": "B", "expr": "$threshold", "legendFormat": "chosen target"})
+        panels.append(
+            {
+                "id": 50 + index,
+                "title": title,
+                "type": "timeseries",
+                "gridPos": {"x": (index % 2) * 12, "y": 56 + (index // 2) * 8, "w": 12, "h": 8},
+                "datasource": {"type": "prometheus", "uid": "benchmark-prometheus"},
+                "targets": targets,
+                "fieldConfig": {"defaults": {"unit": unit}, "overrides": []},
+            }
+        )
     return {
         "uid": "language-benchmark",
         "title": "Language Benchmark — live and history",
         "schemaVersion": 39,
-        "version": 1,
+        "version": 2,
         "refresh": "5s",
         "timezone": "browser",
         "time": {"from": "now-1h", "to": "now"},
         "templating": {"list": variables},
         "panels": panels,
-        "tags": ["benchmark", "python"],
-        "description": "Compare equal workloads/rates/fixtures. Never average percentiles across trials. Saved raw artifacts define final qualification.",
+        "tags": ["benchmark", "languages"],
+        "description": "Compare equal workloads/rates/fixtures. Never average percentiles across trials. Saved raw artifacts define final qualification. Threshold comparisons show observed bounds only; invalid telemetry remains excluded. Authentication uses its saved separate gate. Docker CPU100% means both allocatedCPUs; memory is sampled working set.",
     }
 
 

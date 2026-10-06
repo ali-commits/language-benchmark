@@ -158,6 +158,7 @@ def test_partial_runtime_replays_valid_probe_without_rerunning_it(tmp_path, monk
 
     config = {
         "mode": "local",
+        "backend_nofile_limit": 250000,
         "cells": ["python"],
         "start_users": 10000,
         "step_users": 10000,
@@ -173,7 +174,15 @@ def test_partial_runtime_replays_valid_probe_without_rerunning_it(tmp_path, monk
     p = root / "abc-0000"
     p.mkdir(parents=True)
     trial = {"id": "abc-0000", "campaign_id": "abc", "cell": "python", "users": 10000}
-    (p / "manifest.json").write_text(json.dumps({"campaign": config, "trial": trial}))
+    (p / "manifest.json").write_text(
+        json.dumps(
+            {
+                "campaign": config,
+                "trial": trial,
+                "nofile": {"soft": 250000, "hard": 250000, "process_samples": 2},
+            }
+        )
+    )
     (p / "result.json").write_text(
         json.dumps({"status": "measured", "reset_verified": True, "trial": trial})
     )

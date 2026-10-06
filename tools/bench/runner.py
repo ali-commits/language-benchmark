@@ -21,7 +21,9 @@ from .native_runtime import (
     native_collector_hosts,
     native_preflight,
     registry_metadata,
+    verify_runtime_nofile,
 )
+from .profiles import methodology
 from .reset import restore_fixture
 from .runtime import validate_dependency_inventory, validate_worker_snapshots
 from .schedule import schedule_trials
@@ -57,6 +59,11 @@ def run_trial(campaign: dict, trial: dict, output_dir: Path) -> dict:
         "trial": trial,
         "label": manifest["label"],
     }
+    if journey:
+        method = methodology(campaign)
+        manifest["methodology"] = method
+        result["methodology"] = method
+        result.update({k: campaign[k] for k in ("ramp_seconds", "settle_seconds", "hold_seconds")})
     atomic_json(output_dir / "manifest.json", manifest)
     if not cell.supported:
         result.update(status="unsupported", reasons=cell.reasons)
@@ -188,6 +195,7 @@ def run_trial(campaign: dict, trial: dict, output_dir: Path) -> dict:
             if reasons:
                 raise ValueError("; ".join(reasons))
             manifest["workers"] = snapshots
+            manifest["nofile"] = verify_runtime_nofile(backend, compose, env)
             if cell.build == "jit":
                 probe = execute(
                     backend,
@@ -240,6 +248,10 @@ def run_trial(campaign: dict, trial: dict, output_dir: Path) -> dict:
             }
             scenario.update(
                 users=trial["users"],
+                success_fraction=campaign.get("success_fraction", 0.99),
+                authentication_fraction=campaign.get(
+                    "authentication_fraction", campaign.get("success_fraction", 0.99)
+                ),
                 tags={
                     "cell": cell.id,
                     "trial": trial["id"],
@@ -335,9 +347,16 @@ def run_trial(campaign: dict, trial: dict, output_dir: Path) -> dict:
             copy_from(load, outputs, output_dir / "k6")
         result["status"] = "measured"
         if journey:
-            result["journey_metrics"] = read_journey_metrics(output_dir / "k6/metrics.json.gz")
+            result["journey_metrics"] = read_journey_metrics(
+                output_dir / "k6/metrics.json.gz", steady_seconds=campaign["hold_seconds"]
+            )
             jm = result["journey_metrics"]
-            if jm.get("steady_started_epoch"):
+            if jm.get("scenario_started_epoch"):
+                result["scenario_started_epoch"] = jm["scenario_started_epoch"]
+            if jm.get("scenario_started_epoch"):
+                result["measurement_started_epoch"] = jm["scenario_started_epoch"] + campaign["ramp_seconds"] + campaign["settle_seconds"]
+                result["measurement_finished_epoch"] = result["measurement_started_epoch"] + campaign["hold_seconds"]
+            elif jm.get("steady_started_epoch"):
                 result["measurement_started_epoch"] = jm["steady_started_epoch"]
                 result["measurement_finished_epoch"] = jm["steady_finished_epoch"]
         if collect.errors:
