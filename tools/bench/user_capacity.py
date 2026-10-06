@@ -91,6 +91,30 @@ def validate_config(c: dict):
         type(hint) is not int or not c["start_users"] < hint <= c["max_users"]
     ):
         raise ValueError("invalid measured starting hint")
+    if "cell_starting_hints" in c:
+        hints = c["cell_starting_hints"]
+        if (
+            not isinstance(hints, dict)
+            or not isinstance(c["cells"], list)
+            or any(type(name) is not str or not name for name in c["cells"])
+            or len(set(c["cells"])) != len(c["cells"])
+            or any(type(name) is not str or name not in c["cells"] for name in hints)
+        ):
+            raise ValueError("invalid cell_starting_hints cells")
+        for hint in hints.values():
+            if not isinstance(hint, dict) or not {"start_users"} <= set(hint) <= {
+                "start_users",
+                "initial_failing_hint",
+            }:
+                raise ValueError("invalid cell_starting_hints keys")
+            start = hint["start_users"]
+            if type(start) is not int or not 1 <= start <= c["max_users"]:
+                raise ValueError("invalid cell_starting_hints start_users")
+            if "initial_failing_hint" in hint and (
+                type(hint["initial_failing_hint"]) is not int
+                or not start < hint["initial_failing_hint"] <= c["max_users"]
+            ):
+                raise ValueError("invalid cell_starting_hints initial_failing_hint")
     if not c.get("database_allowlist", "").startswith("language_benchmark"):
         raise ValueError("dedicated benchmark database required")
     if (
@@ -156,6 +180,13 @@ def next_start_users(previous: dict | None, default: int) -> int:
     if previous and previous.get("status") in ("bracket_found", "ceiling_reached"):
         return previous.get("passing_users") or default
     return default
+
+
+def cell_starting_points(c, cell, previous, previous_upper):
+    hint = c.get("cell_starting_hints", {}).get(cell)
+    if hint is not None:
+        return hint["start_users"], hint.get("initial_failing_hint")
+    return next_start_users(previous, c["start_users"]), previous_upper
 
 
 def invalid_boundary(result: dict) -> bool:
@@ -290,6 +321,7 @@ def run_user_capacity(
             "confirmation_policy",
             "growth_strategy",
             "initial_failing_hint",
+            "cell_starting_hints",
             "cells",
             "start_users",
             "step_users",
@@ -379,7 +411,7 @@ def run_user_capacity(
                     previous = results[cell]
                 previous_upper = results[cell].get("failing_users")
                 continue
-            start_users = next_start_users(previous, c["start_users"])
+            start_users, initial_upper = cell_starting_points(c, cell, previous, previous_upper)
 
             def probe_once(users):
                 nonlocal ordinal
@@ -464,7 +496,7 @@ def run_user_capacity(
                     c["step_users"],
                     c["max_users"],
                     c["resolution_users"],
-                    next_candidate=previous_upper,
+                    next_candidate=initial_upper,
                     **({"growth_strategy": c["growth_strategy"]} if "growth_strategy" in c else {}),
                 )
                 # Search is exploratory; repeated endpoints determine whether the bracket is stable.

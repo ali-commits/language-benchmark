@@ -1,0 +1,20 @@
+[Unit]
+Description=Mixed-language fast capacity bounded recovery supervisor
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=3600
+StartLimitBurst=3
+
+[Service]
+Type=simple
+User=rocky
+WorkingDirectory=/home/rocky/language-benchmark
+ExecStart=/bin/bash -lc 'source artifacts/aws/monitor.env; export PATH=/home/rocky/.local/bin:$PATH; exec uv run -m bench.supervisor --config artifacts/aws/fast-capacity.json --output artifacts/results/capacity90-20261006 --state artifacts/aws/fast-supervisor-status.json --existing-unit language-benchmark-fast-capacity'
+KillSignal=SIGINT
+KillMode=control-group
+TimeoutStopSec=600
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target
