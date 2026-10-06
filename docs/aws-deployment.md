@@ -175,3 +175,11 @@ ssh -F artifacts/aws/ssh-config benchmark-monitor \
 ```
 
 Always verify final restoration and absence of test containers before resource shutdown. The12-hour idle automation follows the new deployment metadata; no further campaign starts automatically.
+
+## Majority decisions and clean baselines (2026-10-07)
+
+Ali authorized resuming the existing five-minute-ramp campaign with a decision-only policy change. A final failure is repeated once; if the two valid results disagree, run one third valid trial at that same user count and decide by two of three. Two agreeing results need no third. A passing majority raises the measured lower bound and continues searching; raw results and metrics remain separate. Infrastructure-invalid runs do not vote. Python's completed two-failure boundary is retained; Java's saved split is resolved before searching further. Audited handoff receipts preserve the original timing, images, resource budgets and measurement configuration. A separate vote ledger links each decision to immutable trial IDs.
+
+Before each new trial, the runner requires a stopped backend with no leftover test containers or jobs, three low-CPU samples (at most15% with at least1024MiB available RAM), then a ready API with three samples at most20% CPU and at least512MiB available RAM. Samples are five seconds apart, with a120-second deadline. Only host telemetry and the current verified API are allowed. The stopped/ready baseline artifacts record evidence; failure is an infrastructure-invalid probe, not a language capacity failure. No cache purge or unrelated-job termination is performed.
+
+Cleanup defers further SIGINT/SIGTERM while stopping backend/load processes, restoring the fixture and saving the interrupted result. C#/ASP.NET Core is appended to this same authorized queue only after locked-image, API, TLS and resource proofs; it is not permission to launch a different campaign. The same persistent supervisor resumes checkpoints independently of the desktop.
