@@ -158,3 +158,20 @@ ssh -F artifacts/aws/ssh-config benchmark-monitor \
 ```
 
 Confirm fixture restoration and absence of backend/k6 test containers before machine shutdown. The12-hour idle automation now follows these active service paths and must leave machines running during preparation/testing/recovery. No further suite starts automatically after this campaign.
+
+## Reset to five-minute ramp / two-minute sustained capacity profile
+
+Ali changed the next capacity profile to300s ramp,0s separate settling,120s sustained measurement (420 timed seconds total), and explicitly requested a clean reset. The former180/0/240 campaign was stopped and its partial trial preserved as user-interrupted. Remaining k6/API containers were removed and the canonical database restore passed full fingerprint verification. Only OS/Docker and host telemetry remain on the backend before startup.
+
+The fresh private configuration is `artifacts/aws/capacity-ramp5.json`; evidence is isolated under `artifacts/results/capacity90-ramp5-20261006`. Services are `language-benchmark-capacity-ramp5` and `language-benchmark-ramp5-supervisor`, with supervisor state `artifacts/aws/ramp5-supervisor-status.json`. Seven stacks,90% operation/authentication gates,100-user resolution, geometric expansion, one final failing repeat and per-cell1000/PHP100–500 hints remain unchanged and are remeasured.
+
+Signal-handling correction: the previous `uv run` process-group route delivered two SIGINTs, which could interrupt cleanup. New units prepare dependencies with `uv sync --frozen`, then exec the managed `.venv/bin/python` directly. `KillMode=mixed` initially signals only the main Python process; cleanup helpers survive until completion or the600-second forced-stop deadline. This was tested with a real isolated local systemd stop and `trial_lifecycle` cleanup markers.
+
+To stop gracefully:
+
+```sh
+ssh -F artifacts/aws/ssh-config benchmark-monitor \
+  'sudo systemctl stop language-benchmark-ramp5-supervisor; sudo systemctl stop language-benchmark-capacity-ramp5'
+```
+
+Always verify final restoration and absence of test containers before resource shutdown. The12-hour idle automation follows the new deployment metadata; no further campaign starts automatically.
