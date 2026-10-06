@@ -40,4 +40,4 @@ A threshold replay reports observed bounds and gaps; a 90%-guided search does no
 
 This task stages code and local verification only. Starting these campaigns on AWS requires a separate fresh configuration/run. Never automatically stop or delete EC2/RDS; use the established completion reminder and [checked shutdown procedure](aws-deployment.md#stop-to-save-money).
 
-The next authorized AWS campaign runs fixed-load comparisons only at100,500 and1000 users for each of the seven stacks. The90% capacity search remains a separate later campaign and must not be automatically chained after this fixed-load suite. Wait for the current legacy native queue to finish before deploying.
+The planned next AWS campaign is fixed-load comparisons at100,500 and1000 users for each of the seven stacks. On2026-10-06 Ali withdrew automatic deployment and startup until he reviews the complete existing results. Let the current legacy native queue finish, then start no further tests and deploy nothing without his new explicit instruction. The90% capacity search remains a separate later campaign.
