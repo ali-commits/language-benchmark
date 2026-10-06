@@ -1,0 +1,25 @@
+{
+  "budget": {
+    "cpus": 2,
+    "memory_bytes": 3221225472,
+    "swap_bytes": 0,
+    "database_connections": 20
+  },
+  "verified_at": "2026-10-07",
+  "status": "local-verified",
+  "cells": [
+    {
+      "id": "csharp-aspnet-core",
+      "language": "csharp",
+      "runtime_version": "10.0.12",
+      "framework": "aspnet-core",
+      "framework_version": "10.0.12",
+      "image": "lb-csharp-aspnet:10.0.12",
+      "dockerfile": "backends/csharp/aspnet-core/Dockerfile",
+      "workers": 1,
+      "connections_per_worker": 20,
+      "topology": "Kestrel async; Npgsql20; server GC; two cancellation-aware hash slots; ordinary Release JIT",
+      "upstream": "https://github.com/dotnet/core/blob/main/release-notes/10.0/README.md"
+    }
+  ]
+}

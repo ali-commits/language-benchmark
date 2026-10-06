@@ -1,0 +1,4 @@
+<Project Sdk="Microsoft.NET.Sdk">
+ <PropertyGroup><TargetFramework>net10.0</TargetFramework><Nullable>enable</Nullable><ImplicitUsings>enable</ImplicitUsings><IsTestProject>true</IsTestProject><IsPackable>false</IsPackable><RestorePackagesWithLockFile>true</RestorePackagesWithLockFile><RestoreLockedMode Condition="Exists('packages.lock.json')">true</RestoreLockedMode></PropertyGroup>
+ <ItemGroup><ProjectReference Include="../BenchmarkApi.csproj"/><PackageReference Include="Microsoft.NET.Test.Sdk" Version="[18.10.1]"/><PackageReference Include="xunit.v3" Version="[4.0.1]"/><PackageReference Include="xunit.runner.visualstudio" Version="[4.0.0]"/></ItemGroup>
+</Project>
