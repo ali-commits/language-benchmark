@@ -1,6 +1,6 @@
 # Additional backend stacks
 
-Six local staging cells use one latest stable runtime/framework release each, verified on 2026-10-05. They implement the shared API and PostgreSQL schema. They are enrolled in a separate native AWS campaign after the completed Python campaign.
+The six original native staging cells use one pinned runtime/framework release each, verified on 2026-10-05. C# / ASP.NET Core was added to the shared registry on 2026-10-07 and requires its own application build/HTTP/TLS verification before AWS enrollment. They implement the shared API and PostgreSQL schema. They are enrolled in a separate native AWS campaign after the completed Python campaign.
 
 | Cell/profile | Runtime | Framework/data access | Production topology |
 | --- | --- | --- | --- |
@@ -10,8 +10,9 @@ Six local staging cells use one latest stable runtime/framework release each, ve
 | rust | Rust1.99.0 | Axum0.8.9, Tokio1.53.2, SQLx0.9.0 | One process, Tokio2, pool20, blocking hash slots2 |
 | node | Node26.10.0 | Express5.2.1, pg8.23.1 | Cluster2; each pool10/hash1, pending hashes64 |
 | bun | Bun1.4.2 | Same Express application and dependencies | Same cluster2/pool10/hash1 topology |
+| csharp | .NET 10.0.12 (SDK 10.0.401) | ASP.NET Core 10.0.12, Npgsql 10.0.3 | One process, pool 20, server GC, hash slots 2 |
 
-Exact dependencies, image digests, upstream sources and native test commands live in each backend README/lockfile. Runtime staging records are runtimes/java, php, go, rust, node and bun/lock.json. The original runtimes/python/lock.json is unchanged.
+Exact dependencies, image digests, upstream sources and native test commands live in each backend README/lockfile. Runtime staging records are runtimes/java, php, go, rust, node, bun and csharp/lock.json. Python cells remain under runtimes/python/lock.json and are selected independently of native registries.
 
 These are realistic stack comparisons, not isolated language-speed measurements. They use the same SQL/schema, data, crypto parameters and wire contract, while connection lifecycle, scheduling, native hash libraries and servers differ. Node and Bun deliberately share identical source. All containers enforce two CPUs, 3GiB memory and no swap, with at most20 database connections. Every application connection is tagged lb-backend and has a10-second statement timeout; AWS mode requires certificate/hostname-verifying TLS.
 
@@ -31,7 +32,7 @@ PYTHONPATH=tools uv run -m bench.languages verify --language go --output artifac
 
 Verification creates only uniquely named local containers/networks and a dedicated language_benchmark_matrix_test database. It resets that test schema between cases, checks Docker limits, exercises real verified TLS and a deliberately wrong certificate hostname, and removes its disposable containers afterward. Logs, exact image IDs and verification.json remain in the chosen output folder. Defaults use local ports55440/58040; change --db-port/--api-port if occupied. --no-tls is available for explicitly plain local verification. The verifier makes no AWS calls and supplies its own localhost test DSN.
 
-All six stacks passed62 shared HTTP cases per stack, including20 exact baseline validation responses, Argon2id PHC/JWT interoperability, future nbf/expiry/issuer/audience, precise bigint/microsecond cursors, Unicode limits, chunked413, following feeds, idempotent likes/follows, committed writes, and a lock-held SQL timeout/session-tag test. Independent subagents reviewed the implementations and their scoped findings were fixed and rechecked.
+The original six stacks passed62 shared HTTP cases per stack, including20 exact baseline validation responses, Argon2id PHC/JWT interoperability, future nbf/expiry/issuer/audience, precise bigint/microsecond cursors, Unicode limits, chunked413, following feeds, idempotent likes/follows, committed writes, and a lock-held SQL timeout/session-tag test. Independent subagents reviewed the implementations and their scoped findings were fixed and rechecked.
 
 The canonical reference is the existing Python3.10 implementation. Its image also passed all62 cases. Python3.14 expands ISO8601 parsing to accept24:00, unlike3.10; the corresponding in-process3.14 conformance case is explicitly skipped. Generated cursors and normal user journeys never contain that clock value. The existing Python application code was not changed.
 
@@ -54,3 +55,9 @@ docker compose -f compose.languages.yaml stop go
 The local database password is a test-only default; override LANGUAGE_DB_PASSWORD for local data you wish to preserve. Change LANGUAGE_PORT/LANGUAGE_DB_PORT if occupied. Apps never migrate or seed on startup. Use the existing guarded fixture tools when preparing the full50,000-user/500,000-post dataset for a later experiment.
 
 The native controller uses exact verified image IDs, locked runtime/topology labels, fresh container nonces and HTTP database readiness rather than Python GIL/JIT worker attestations. The separate native AWS campaign is managed by language-benchmark-native-capacity and language-benchmark-native-supervisor. Functional verification alone does not establish capacity.
+
+## C# staging and enrollment
+
+`bench.languages list/build/verify --language csharp` selects the single `csharp-aspnet-core` cell. Its backend and dependency locks live in `backends/csharp/aspnet-core`; .NET/ASP.NET Core 10.0.12 is the verified stable runtime pin, while .NET 11 release candidates are excluded. C# uses generic native image/topology/container attestation, not Python worker/GIL/JIT schemas. The existing 2-vCPU/3-GiB/no-swap/20-connection and `nofile=250000` budgets remain unchanged.
+
+The application worker owns its build and shared HTTP/TLS proof. Runtime registration alone is not evidence of application correctness or capacity. An existing seven-cell campaign remains seven-cell evidence until a verified C# image is explicitly appended after a checkpoint through the approved queue-extension audit; previous results are never relabeled as an eight-cell completed experiment.

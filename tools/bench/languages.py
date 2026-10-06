@@ -12,8 +12,9 @@ from pathlib import Path
 import httpx
 
 from .manifest import atomic_json
+from .models import NativeCell
 
-LANGUAGES = ("java", "php", "go", "rust", "node", "bun")
+LANGUAGES = ("java", "php", "go", "rust", "node", "bun", "csharp")
 SECRET = "test-secret-that-has-at-least-32-bytes"
 
 
@@ -28,6 +29,9 @@ def cells(selected):
         if len(lock["cells"]) != 1:
             raise ValueError("exactly one cell per language/framework required")
         cell = lock["cells"][0]
+        validated = NativeCell(**cell)
+        if validated.language != language:
+            raise ValueError("native registry language mismatch")
         if cell["workers"] * cell["connections_per_worker"] != 20:
             raise ValueError("aggregate database budget must be20")
         result.append(cell)

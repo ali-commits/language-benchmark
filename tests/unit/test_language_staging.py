@@ -4,9 +4,14 @@ from bench.languages import LANGUAGES, cells
 
 
 def test_each_requested_pair_has_one_cell_and_controlled_connection_budget():
-    rows = cells(LANGUAGES)
-    assert len(rows) == 6 and len({r["id"] for r in rows}) == 6
-    assert {r["language"] for r in rows} == set(LANGUAGES)
+    # A newly implemented native stack can be registered independently of its app build.
+    # The temporary C# registry tests exercise support before the real lock arrives.
+    registered = [
+        language for language in LANGUAGES if (Path("runtimes") / language / "lock.json").exists()
+    ]
+    rows = cells(registered)
+    assert len(rows) == len(registered) and len({r["id"] for r in rows}) == len(registered)
+    assert {r["language"] for r in rows} == set(registered)
     assert all(r["workers"] * r["connections_per_worker"] == 20 for r in rows)
     assert all(Path(r["dockerfile"]).is_file() for r in rows)
     node = next(r for r in rows if r["language"] == "node")

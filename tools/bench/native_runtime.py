@@ -13,7 +13,7 @@ from .models import NativeCell, RuntimeCell
 from .transport import execute
 
 NOFILE_LIMIT = 250000
-LANGUAGES = ("java", "php", "go", "rust", "node", "bun")
+LANGUAGES = ("java", "php", "go", "rust", "node", "bun", "csharp")
 LABEL_PREFIX = "org.language-benchmark."
 BUDGET = {"cpus": 2, "memory_bytes": 3221225472, "swap_bytes": 0, "database_connections": 20}
 LABEL_FIELDS = (

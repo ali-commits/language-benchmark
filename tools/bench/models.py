@@ -97,6 +97,7 @@ class NativeCell:
             "rust": ("axum", 1, 20),
             "node": ("express", 2, 10),
             "bun": ("express", 2, 10),
+            "csharp": ("aspnet-core", 1, 20),
         }
         if self.language not in expected:
             raise ValueError("unknown native language")
