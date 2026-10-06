@@ -1,0 +1,21 @@
+[Unit]
+Description=Five minute ramp capacity bounded recovery supervisor
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=3600
+StartLimitBurst=3
+
+[Service]
+Type=simple
+User=rocky
+WorkingDirectory=/home/rocky/language-benchmark
+ExecStartPre=/bin/bash -lc 'export PATH=/home/rocky/.local/bin:$PATH; exec uv sync --frozen'
+ExecStart=/bin/bash -lc 'source artifacts/aws/monitor.env; export PYTHONPATH=/home/rocky/language-benchmark/tools; exec /home/rocky/language-benchmark/.venv/bin/python -m bench.supervisor --config artifacts/aws/capacity-ramp5.json --output artifacts/results/capacity90-ramp5-20261006 --state artifacts/aws/ramp5-supervisor-status.json --existing-unit language-benchmark-capacity-ramp5'
+KillSignal=SIGINT
+KillMode=mixed
+TimeoutStopSec=600
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target
