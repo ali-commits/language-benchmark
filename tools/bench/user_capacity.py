@@ -195,6 +195,59 @@ def await_rds(c: dict, result: dict, directory: Path):
         time.sleep(30)
 
 
+def qualify_trial_result(c, r, directory):
+    reasons = list(r.get("reasons", [])) + backend_validity_flags(directory)
+    if r.get("status") != "measured" or not r.get("reset_verified"):
+        reasons.append("measurement or cleanup incomplete")
+    reasons += generator_flags(directory / "telemetry.jsonl", *generator_window(r))
+    if c.get("mode") == "aws":
+        start, end = r.get("measurement_started_epoch"), r.get("measurement_finished_epoch")
+        saved = directory / "rds.json"
+        if not start or not end:
+            reasons.append("RDS measurement interval missing")
+        elif not saved.exists():
+            reasons.append("RDS telemetry missing")
+        else:
+            reasons += validate_rds_evidence(json.loads(saved.read_text()), start, end)
+    m = r.get("journey_metrics", {})
+    reasons += journey_flags(m)
+    outcome = classify_journey(
+        m, r["trial"]["users"], reasons, c["success_fraction"], c["authentication_fraction"]
+    )
+    return {
+        "outcome": outcome,
+        "lifecycle_status": r.get("status"),
+        "reasons": sorted(set(reasons)),
+        "metrics": m,
+        "trial_id": r["trial"]["id"],
+        "methodology": r.get("methodology")
+        or (
+            methodology(c)
+            if "ramp_seconds" in c
+            else {
+                "success_fraction": c["success_fraction"],
+                "authentication_fraction": c["authentication_fraction"],
+            }
+        ),
+    }
+
+
+def finalize_pending_outcomes(c, root):
+    """Finish saved measurements through original validity checks before admitting another vote."""
+    for path in sorted(root.glob("*/result.json")):
+        target = path.with_name("capacity-outcome.json")
+        if target.exists():
+            continue
+        r = json.loads(path.read_text())
+        if r.get("status") != "measured" or r.get("reset_verified") is not True:
+            continue
+        recovery = {**c, "rds_wait_seconds": min(c.get("rds_wait_seconds", 180), 180)}
+        await_rds(recovery, r, path.parent)
+        summary = qualify_trial_result(c, r, path.parent)
+        summary["finalized_after_restart"] = True
+        atomic_json(target, summary)
+
+
 def next_start_users(previous: dict | None, default: int) -> int:
     if previous and previous.get("status") in ("bracket_found", "ceiling_reached"):
         return previous.get("passing_users") or default
@@ -379,6 +432,8 @@ def run_user_capacity(
     ordinal = 0
     previous = None
     previous_upper = c.get("initial_failing_hint")
+    if resume:
+        finalize_pending_outcomes(c, output_dir)
     cached = qualified_cache(output_dir) if resume else {}
     for key, queue in cached.items():
         cached[key] = type(queue)(
@@ -467,26 +522,7 @@ def run_user_capacity(
                 )
                 r = run_trial(c, trial, directory)
                 await_rds(c, r, directory)
-                reasons = list(r.get("reasons", [])) + backend_validity_flags(directory)
-                if r.get("status") != "measured" or not r.get("reset_verified"):
-                    reasons.append("measurement or cleanup incomplete")
-                reasons += generator_flags(
-                    directory / "telemetry.jsonl",
-                    *generator_window(r),
-                )
-                m = r.get("journey_metrics", {})
-                reasons += journey_flags(m)
-                outcome = classify_journey(
-                    m, users, reasons, c["success_fraction"], c["authentication_fraction"]
-                )
-                summary = {
-                    "outcome": outcome,
-                    "lifecycle_status": r.get("status"),
-                    "reasons": sorted(set(reasons)),
-                    "metrics": m,
-                    "trial_id": trial["id"],
-                    "methodology": r.get("methodology", methodology(c)),
-                }
+                summary = qualify_trial_result(c, {**r, "trial": trial}, directory)
                 atomic_json(directory / "capacity-outcome.json", summary)
                 return summary
 

@@ -33,6 +33,16 @@ def retry_probe(probe, users, recover, attempts=3, delay=30, sleep=time.sleep):
 
 
 def qualified_cache(root: Path):
+    for result_path in sorted(root.glob("*/result.json")):
+        result = json.loads(result_path.read_text())
+        if (
+            result.get("status") == "measured"
+            and result.get("reset_verified") is True
+            and not result_path.with_name("capacity-outcome.json").exists()
+        ):
+            raise RuntimeError(
+                "measured trial awaits qualification; finalize it before another probe"
+            )
     cached = defaultdict(deque)
     for path in sorted(root.glob("*/capacity-outcome.json")):
         outcome = json.loads(path.read_text())
