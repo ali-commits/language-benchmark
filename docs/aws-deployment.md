@@ -106,3 +106,27 @@ Check progress:
     ssh -F artifacts/aws/ssh-config benchmark-monitor 'systemctl status language-benchmark-native-supervisor language-benchmark-native-capacity --no-pager; cat /home/rocky/language-benchmark/artifacts/results/native-capacity/capacity-status.json'
 
 For graceful shutdown, stop the native supervisor FIRST, then stop the native controller and verify cleanup before using the checked AWS stop command. Stopping the supervisor prevents recovery from restarting an intentionally stopped controller.
+
+## Fixed-load comparison campaign (2026-10-06)
+
+The separate mixed-language services are `language-benchmark-fixed-load` (controller) and `language-benchmark-fixed-supervisor` (bounded recovery, enabled on monitor reboot). They use the private monitor configuration `artifacts/aws/fixed-load.json`, status/results in `artifacts/results/fixed-load-20261006`, and `artifacts/aws/fixed-supervisor-status.json`. Old campaign artifacts are preserved; old supervisors are disabled. The all-results RDS backfill job was stopped to prevent concurrent writes into new trial evidence.
+
+Queue: Python3.14.8 modern FastAPI, Java/Spring Boot, PHP/Laravel, Go/net-http, Rust/Axum, Node/Express, Bun/Express. Each stack runs100,500,1000 distinct logged-in users, once per population:21 trials, plus bounded retries only for invalid infrastructure evidence. Timings180s ramp,0 settling,240s measurement; setup/restoration/drain add wall time. Both operation and authentication targets are0.90, reported separately. Valid below-target results are recorded and the fixed-load queue proceeds. No capacity search or follow-up campaign is started.
+
+The backend retains2vCPUs/3GiB/no-swap/pool20 and an explicitly verified250000 soft/hard file limit. Python's source-tested image was transferred and verified by ordered filesystem and configuration equality despite Docker config-ID/OCI manifest-ID differences; private proof is `artifacts/aws/fixed-python-image-proof.json`. All six native image identities remain pinned.
+
+Read status without printing private configurations:
+
+```sh
+ssh -F artifacts/aws/ssh-config benchmark-monitor \
+  'cat /home/rocky/language-benchmark/artifacts/results/fixed-load-20261006/capacity-status.json; cat /home/rocky/language-benchmark/artifacts/aws/fixed-supervisor-status.json'
+```
+
+To stop this suite gracefully, stop the supervisor first so it cannot restart the controller:
+
+```sh
+ssh -F artifacts/aws/ssh-config benchmark-monitor \
+  'sudo systemctl stop language-benchmark-fixed-supervisor; sudo systemctl stop language-benchmark-fixed-load'
+```
+
+Then inspect the latest result for verified fixture restoration and confirm backend/load test containers are stopped before using the checked EC2/RDS shutdown commands above. Never stop unrelated resources. The dashboard's history exporter mounts current tool modules and uses finalized saved reductions, avoiding raw-gzip parsing during live scrapes; full canonical offline reports still read raw evidence by default.
