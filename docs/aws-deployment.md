@@ -134,3 +134,27 @@ Then inspect the latest result for verified fixture restoration and confirm back
 ## Automatic idle shutdown authorization (2026-10-06)
 
 Ali replaced the hourly notification-only heartbeat with `stop-idle-benchmark-machines`, a12-hour check explicitly authorized to stop the three dedicated benchmark EC2 instances and RDS `language-benchmark` only when no test, preparation or recovery is active and fixture cleanup is verified. This supersedes earlier reminder-only instructions. Uncertain ownership/activity/cleanup must prevent shutdown. Stop applicable supervisors before residual jobs; stop backend/generator/RDS and the monitor last. Never terminate/delete resources or touch unrelated instances or `rds-eb`. Keep the check scheduled to stop RDS again after its automatic seven-day restart; stopped storage remains billed. No capacity search or new suite is authorized by this automation.
+
+## Fast 90% capacity campaign (2026-10-06)
+
+After the fixed-load review, Ali explicitly authorized the next seven-stack capacity search. Its separate services are `language-benchmark-fast-capacity` and `language-benchmark-fast-supervisor`; private configuration is `artifacts/aws/fast-capacity.json`, output is `artifacts/results/capacity90-20261006`, and supervisor state is `artifacts/aws/fast-supervisor-status.json`. Old results are preserved and never replayed as new 90% evidence.
+
+All six stacks that passed the fixed1,000-user trial start by measuring1,000 users again. PHP starts at100 and measures500 as a failing hint. Explicit per-cell hints override prior-stack seeds. From each measured starting point, geometric expansion finds a failure, then binary search stops at a bracket no wider than100 users. No additional passing repeats; the final failing count is repeated once. Contradictory valid retests remain flagged while later stacks continue. Infrastructure-invalid probes use bounded retries and never define capacity.
+
+Each trial uses180s ramp,0s settling,240s steady measurement, random3-10-second waits and real logins. Both operation/authentication targets are0.90; successful operations require the expected valid response within5 seconds. Fixture restoration, readiness, drain and telemetry add wall time. Backend2vCPU/3GiB/no-swap, pool20 and verified nofile250000 remain unchanged. The current source-tested images are preloaded; missing/unverified images are not rebuilt automatically.
+
+Read status:
+
+```sh
+ssh -F artifacts/aws/ssh-config benchmark-monitor \
+  'cat /home/rocky/language-benchmark/artifacts/results/capacity90-20261006/capacity-status.json; cat /home/rocky/language-benchmark/artifacts/aws/fast-supervisor-status.json'
+```
+
+To stop gracefully, stop the supervisor first:
+
+```sh
+ssh -F artifacts/aws/ssh-config benchmark-monitor \
+  'sudo systemctl stop language-benchmark-fast-supervisor; sudo systemctl stop language-benchmark-fast-capacity'
+```
+
+Confirm fixture restoration and absence of backend/k6 test containers before machine shutdown. The12-hour idle automation now follows these active service paths and must leave machines running during preparation/testing/recovery. No further suite starts automatically after this campaign.

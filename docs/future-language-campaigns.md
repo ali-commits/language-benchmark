@@ -41,3 +41,5 @@ A threshold replay reports observed bounds and gaps; a 90%-guided search does no
 This task stages code and local verification only. Starting these campaigns on AWS requires a separate fresh configuration/run. Never automatically stop or delete EC2/RDS; use the established completion reminder and [checked shutdown procedure](aws-deployment.md#stop-to-save-money).
 
 The planned next AWS campaign is fixed-load comparisons at100,500 and1000 users for each of the seven stacks. After reviewing the existing results, Ali explicitly authorized starting this fixed-load suite on2026-10-06. The earlier hold is revoked for this suite only. The90% capacity search remains a separate later campaign and must not start automatically. The old native queue is complete; use the persistent fixed services and new output directory described in the AWS deployment guide.
+
+The fixed-load suite completed21 trials. Ali subsequently authorized the fast90% capacity campaign on2026-10-06; its fresh config/output and persistent service checks are described in the AWS deployment guide. This authorization covers that campaign only, not any follow-up experiments.
