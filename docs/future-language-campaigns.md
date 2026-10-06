@@ -3,7 +3,7 @@
 The staged examples compare the modern Python 3.14.8 reference with Java/Spring Boot, PHP/Laravel, Go/net-http, Rust/Axum, Node/Express and Bun/Express. They do not modify or extend the currently running AWS queue. Use a fresh private configuration and output directory for changed timing, thresholds, experiment type, populations, images or runtime locks.
 
 - `benchmarks/user-capacity.example.json`: fast capacity search, 180/0/240 seconds, 90% valid steady responses within five seconds and an explicitly recorded authentication gate.
-- `benchmarks/fixed-load.example.json`: the same profile at declared populations, initially `[100]`; no search or endpoint confirmation.
+- `benchmarks/fixed-load.example.json`: the same profile at declared populations, `[100, 500, 1000]` for the next campaign; no search or endpoint confirmation.
 - `benchmarks/user-capacity.legacy.example.json`: explicit historical 300/120/300 timing and 99% targets. This template does not recover or reinterpret an existing checkpoint.
 
 The stable runtime reference is `python-modern-3.14.8-standard-jit0-gil1-async`, image `lb-python-modern:3.14.8-standard`, with two async worker processes and a 20-connection aggregate pool. It retains the existing modern FastAPI and Pydantic beta dependency lock. Python 3.15 experimental controls remain available in their original registry and are not relabeled stable.
@@ -39,3 +39,5 @@ PYTHONPATH=tools uv run -m bench.cli analyze \
 A threshold replay reports observed bounds and gaps; a 90%-guided search does not find exact higher-threshold capacity. Fixed-load samples compare responsiveness, attempted/successful throughput, latency including failures and phase-separated resources at the declared populations. See [methodology](user-capacity-methodology.md) for classification and historical-comparability limits.
 
 This task stages code and local verification only. Starting these campaigns on AWS requires a separate fresh configuration/run. Never automatically stop or delete EC2/RDS; use the established completion reminder and [checked shutdown procedure](aws-deployment.md#stop-to-save-money).
+
+The next authorized AWS campaign runs fixed-load comparisons only at100,500 and1000 users for each of the seven stacks. The90% capacity search remains a separate later campaign and must not be automatically chained after this fixed-load suite. Wait for the current legacy native queue to finish before deploying.
