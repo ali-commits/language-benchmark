@@ -1,6 +1,8 @@
 import fcntl
 import json
 import os
+import signal
+import threading
 import time
 import uuid
 from contextlib import contextmanager
@@ -10,6 +12,7 @@ from pathlib import Path
 import httpx
 import psycopg
 
+from .baseline import wait_backend_baseline
 from .jit_probe import JIT_PROBE
 from .journeys import prepare_journey_data, read_journey_metrics
 from .load_data import prepare_load_data
@@ -147,6 +150,8 @@ def run_trial(campaign: dict, trial: dict, output_dir: Path) -> dict:
     def measure():
         from .images import ensure_backend_image, verify_backend_limits
 
+        gate = campaign.get("execution_policy", {}).get("backend_baseline_gate", {})
+        wait_backend_baseline(backend, gate, "stopped", output_dir / "baseline-stopped.json")
         ensure_backend_image(campaign, cell, output_dir)
         execute(
             backend,
@@ -229,6 +234,12 @@ def run_trial(campaign: dict, trial: dict, output_dir: Path) -> dict:
         atomic_json(output_dir / "manifest.json", manifest)
         with httpx.Client(timeout=10) as c:
             c.get(base + "/health/ready").raise_for_status()
+        if gate.get("enabled"):
+            api_ids = execute(backend, compose + ["ps", "--quiet"], env, timeout=30).stdout.split()
+            manifest["backend_baseline_ready"] = wait_backend_baseline(
+                backend, gate, "ready", output_dir / "baseline-ready.json", api_ids=api_ids
+            )
+            atomic_json(output_dir / "manifest.json", manifest)
         secret_inputs = output_dir / "private"
         secret_inputs.mkdir(mode=0o700)
         if journey:
@@ -354,8 +365,14 @@ def run_trial(campaign: dict, trial: dict, output_dir: Path) -> dict:
             if jm.get("scenario_started_epoch"):
                 result["scenario_started_epoch"] = jm["scenario_started_epoch"]
             if jm.get("scenario_started_epoch"):
-                result["measurement_started_epoch"] = jm["scenario_started_epoch"] + campaign["ramp_seconds"] + campaign["settle_seconds"]
-                result["measurement_finished_epoch"] = result["measurement_started_epoch"] + campaign["hold_seconds"]
+                result["measurement_started_epoch"] = (
+                    jm["scenario_started_epoch"]
+                    + campaign["ramp_seconds"]
+                    + campaign["settle_seconds"]
+                )
+                result["measurement_finished_epoch"] = (
+                    result["measurement_started_epoch"] + campaign["hold_seconds"]
+                )
             elif jm.get("steady_started_epoch"):
                 result["measurement_started_epoch"] = jm["steady_started_epoch"]
                 result["measurement_finished_epoch"] = jm["steady_finished_epoch"]
@@ -380,10 +397,14 @@ def run_trial(campaign: dict, trial: dict, output_dir: Path) -> dict:
             except Exception as e:
                 result["reasons"].append("RDS telemetry missing: " + type(e).__name__)
 
-    state = trial_lifecycle(stop, reset, measure)
+    def persist_cleanup(state):
+        result.update(status=state["status"], reset_verified=state["reset_verified"])
+        result["reasons"] += state["reasons"]
+        atomic_json(output_dir / "result.json", result)
+
+    state = trial_lifecycle(stop, reset, measure, persist=persist_cleanup)
     result["status"] = state["status"]
     result["reset_verified"] = state["reset_verified"]
-    result["reasons"] += state["reasons"]
     try:
         copy_from(load, outputs, output_dir / "k6")
     except Exception:
@@ -429,7 +450,22 @@ def run_campaign(config_path: Path, output_dir: Path) -> list[dict]:
     return results
 
 
-def trial_lifecycle(stop, reset, measure) -> dict:
+@contextmanager
+def defer_cleanup_signals():
+    pending = []
+    previous = {}
+    if threading.current_thread() is threading.main_thread():
+        for name in (signal.SIGINT, signal.SIGTERM):
+            previous[name] = signal.getsignal(name)
+            signal.signal(name, lambda number, frame: pending.append(number))
+    try:
+        yield pending
+    finally:
+        for name, handler in previous.items():
+            signal.signal(name, handler)
+
+
+def trial_lifecycle(stop, reset, measure, persist=None):
     result = {"status": "failed", "reset_verified": False, "reasons": []}
     try:
         stop()
@@ -442,13 +478,29 @@ def trial_lifecycle(stop, reset, measure) -> dict:
         )
         result["reasons"].append(type(e).__name__ + ": " + str(e))
     finally:
-        try:
-            stop()
-            reset()
-            result["reset_verified"] = True
-        except Exception as e:
-            result["status"] = "failed"
-            result["reasons"].append("cleanup failed: " + type(e).__name__ + ": " + str(e))
+        with defer_cleanup_signals() as pending:
+            try:
+                stop()
+                reset()
+                result["reset_verified"] = True
+            except Exception as e:
+                result["status"] = "failed"
+                result["reasons"].append("cleanup failed: " + type(e).__name__ + ": " + str(e))
+            if pending:
+                result["requested_stop_signals"] = [signal.Signals(n).name for n in pending]
+                if result["reset_verified"]:
+                    result["status"] = "interrupted"
+                result["reasons"].append(
+                    "stop requested during cleanup; completed restoration before returning"
+                )
+            if persist:
+                persist(result)
+                # A signal arriving in the checkpoint write still records stop intent.
+                if pending and result["status"] == "measured":
+                    result["status"] = "interrupted"
+                    result["requested_stop_signals"] = [signal.Signals(n).name for n in pending]
+                    result["reasons"].append("stop requested while persisting completed cleanup")
+                    persist(result)
     return result
 
 

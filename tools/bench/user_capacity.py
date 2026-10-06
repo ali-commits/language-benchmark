@@ -12,6 +12,14 @@ from .capacity import search_capacity
 from .control import qualified_cache, recover_hosts, retry_probe
 from .evidence import backend_open_file_exhaustion
 from .journeys import classify_journey, generator_window, journey_flags
+from .majority import (
+    MEASUREMENT_KEYS,
+    POLICY,
+    Consensus,
+    majority_search,
+    measurement_identity,
+    validate_decision_handoff,
+)
 from .manifest import atomic_json
 from .profiles import PROFILES, methodology, normalize_config
 from .report import generator_flags
@@ -27,6 +35,17 @@ def backend_validity_flags(directory: Path) -> list[str]:
 
 
 def validate_config(c: dict):
+    decision = c.get("boundary_decision_policy", "legacy")
+    if decision not in ("legacy", POLICY) or (
+        decision == POLICY and c.get("experiment_type") != "capacity"
+    ):
+        raise ValueError("unknown boundary decision policy")
+    if decision == POLICY and c.get("confirmation_policy") != {
+        "passing_repeats": 0,
+        "failing_repeats": 1,
+        "stop_on_contradiction": True,
+    }:
+        raise ValueError("majority policy requires no passing repeats and one failing confirmation")
     if (
         type(c.get("backend_nofile_limit", 250000)) is not int
         or c.get("backend_nofile_limit", 250000) != 250000
@@ -311,34 +330,7 @@ def run_user_capacity(
         known_ids = {json.loads(path.read_text()).get("trial", {}).get("id") for path in manifests}
         if not references <= known_ids:
             raise ValueError("completed checkpoint references missing original trial manifests")
-        method_keys = (
-            "backend_nofile_limit",
-            "mode",
-            "experiment_type",
-            "profile",
-            "fixed_users",
-            "authentication_fraction",
-            "confirmation_policy",
-            "growth_strategy",
-            "initial_failing_hint",
-            "cell_starting_hints",
-            "cells",
-            "start_users",
-            "step_users",
-            "max_users",
-            "resolution_users",
-            "ramp_seconds",
-            "settle_seconds",
-            "hold_seconds",
-            "wait_min",
-            "wait_max",
-            "timeout_seconds",
-            "success_fraction",
-            "confirmation_repeats",
-            "seed",
-            "fixture",
-            "expected_image_ids",
-        )
+        method_keys = MEASUREMENT_KEYS
         for manifest_path in manifests:
             stored = json.loads(manifest_path.read_text())
             result_path = manifest_path.with_name("result.json")
@@ -347,9 +339,10 @@ def run_user_capacity(
                 measured.get("status") == "measured" and measured.get("reset_verified") is True
             ) or stored.get("trial", {}).get("id") in references
             validate_resume_resource_policy(stored, c, reusable)
+            target_method = validate_decision_handoff(stored["campaign"], c)
             stored_method = normalize_config(stored["campaign"])
             for key in method_keys:
-                if stored_method.get(key) != c.get(key):
+                if stored_method.get(key) != target_method.get(key):
                     raise ValueError("resume configuration differs: " + key)
         from .models import NativeCell
         from .native_runtime import load_runtime_cell, registry_metadata
@@ -364,6 +357,24 @@ def run_user_capacity(
         c["campaign_instance"] = original["trial"]["campaign_id"]
     else:
         output_dir.mkdir(parents=True, exist_ok=False)
+    majority = c.get("boundary_decision_policy") == POLICY
+    if majority and c.get("decision_policy_handoff"):
+        audit = output_dir / "decision-policy-handoff.json"
+        if not audit.exists():
+            atomic_json(
+                audit,
+                {
+                    "receipt": c["decision_policy_handoff"],
+                    "measurement_identity_sha256": measurement_identity(c),
+                    "applied_epoch": time.time(),
+                },
+            )
+    if c.get("queue_extension_handoff"):
+        audit = output_dir / "queue-extension-handoff.json"
+        if not audit.exists():
+            atomic_json(
+                audit, {"receipt": c["queue_extension_handoff"], "applied_epoch": time.time()}
+            )
     results = {}
     ordinal = 0
     previous = None
@@ -405,6 +416,24 @@ def run_user_capacity(
                 int(json.loads(p.read_text())["trial"]["id"].rsplit("-", 1)[1])
                 for p in output_dir.glob("*/manifest.json")
             )
+        if majority:
+            results = {
+                cell: r for cell, r in results.items() if r.get("status") != "unstable_boundary"
+            }
+        ledger = {
+            "policy": POLICY,
+            "measurement_identity_sha256": measurement_identity(c),
+            "cells": {},
+        }
+        if majority:
+            for name in {name for name, _ in prior_trials}:
+                prior = {
+                    users: items
+                    for (current, users), items in prior_trials.items()
+                    if current == name
+                }
+                ledger["cells"][name] = Consensus(None, prior, None).decisions()
+            atomic_json(output_dir / "boundary-decisions.json", ledger)
         for cell in c["cells"]:
             if cell in results:
                 if results[cell]["status"] in ("bracket_found", "ceiling_reached"):
@@ -461,10 +490,7 @@ def run_user_capacity(
                 atomic_json(directory / "capacity-outcome.json", summary)
                 return summary
 
-            def probe(users):
-                queue = cached.get((cell, users))
-                if queue:
-                    return {**queue.popleft(), "reused_after_restart": True}
+            def fresh_probe(users):
                 return retry_probe(
                     probe_once,
                     users,
@@ -472,6 +498,12 @@ def run_user_capacity(
                     attempts=c.get("infrastructure_attempts", 1),
                     delay=c.get("recovery_delay_seconds", 30),
                 )
+
+            def probe(users):
+                queue = cached.get((cell, users))
+                if queue:
+                    return {**queue.popleft(), "reused_after_restart": True}
+                return fresh_probe(users)
 
             if c["experiment_type"] == "fixed-load":
                 observations = []
@@ -489,6 +521,32 @@ def run_user_capacity(
                     "observations": observations,
                 }
                 results[cell] = result
+            elif majority:
+
+                def persist_decisions(decisions):
+                    ledger["cells"][cell] = decisions
+                    ledger["updated_epoch"] = time.time()
+                    atomic_json(output_dir / "boundary-decisions.json", ledger)
+
+                votes = {
+                    users: items for (name, users), items in prior_trials.items() if name == cell
+                }
+                result = majority_search(
+                    fresh_probe,
+                    votes,
+                    start_users,
+                    c["step_users"],
+                    c["max_users"],
+                    c["resolution_users"],
+                    next_candidate=initial_upper,
+                    growth_strategy=c.get("growth_strategy", "adaptive"),
+                    persist=persist_decisions,
+                )
+                result["starting_users"] = start_users
+                results[cell] = result
+                if result["status"] in ("bracket_found", "ceiling_reached"):
+                    previous = result
+                previous_upper = result.get("failing_users")
             else:
                 result = search_capacity(
                     probe,
