@@ -26,6 +26,7 @@ services:
     environment: {RESULTS_DIR: /results}
     volumes:
       - ./monitoring:/workspace/monitoring:ro,Z
+      - ./tools:/workspace/tools:ro,Z
       - ./artifacts/results:/results:ro,z
 volumes:
   prometheus-data:

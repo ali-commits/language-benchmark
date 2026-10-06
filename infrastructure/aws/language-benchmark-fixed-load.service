@@ -1,0 +1,14 @@
+[Unit]
+Description=Mixed-language benchmark guarded fixed-load controller
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=rocky
+WorkingDirectory=/home/rocky/language-benchmark
+ExecStart=/bin/bash -lc 'source artifacts/aws/monitor.env; export PATH=/home/rocky/.local/bin:$PATH; exec uv run -m bench.fixed_campaign --config artifacts/aws/fixed-load.json --output artifacts/results/fixed-load-20261006 >> artifacts/aws/fixed-load.log 2>&1'
+KillSignal=SIGINT
+KillMode=control-group
+TimeoutStopSec=600
+Restart=no

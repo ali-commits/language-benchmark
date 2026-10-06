@@ -1,0 +1,20 @@
+[Unit]
+Description=Mixed-language fixed-load bounded recovery supervisor
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=3600
+StartLimitBurst=3
+
+[Service]
+Type=simple
+User=rocky
+WorkingDirectory=/home/rocky/language-benchmark
+ExecStart=/bin/bash -lc 'source artifacts/aws/monitor.env; export PATH=/home/rocky/.local/bin:$PATH; exec uv run -m bench.supervisor --config artifacts/aws/fixed-load.json --output artifacts/results/fixed-load-20261006 --state artifacts/aws/fixed-supervisor-status.json --existing-unit language-benchmark-fixed-load'
+KillSignal=SIGINT
+KillMode=control-group
+TimeoutStopSec=600
+Restart=on-failure
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target

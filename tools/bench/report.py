@@ -310,7 +310,7 @@ def plot_curves(report: dict, output_dir: Path) -> list[Path]:
     return paths
 
 
-def read_trial_summary(manifest_path: Path) -> dict:
+def read_trial_summary(manifest_path: Path, *, prefer_saved_metrics: bool = False) -> dict:
     p = manifest_path.with_name("result.json")
     manifest = json.loads(manifest_path.read_text())
     result = (
@@ -328,7 +328,25 @@ def read_trial_summary(manifest_path: Path) -> dict:
     metrics = {}
     config = manifest["campaign"]
     journey = manifest["campaign"].get("operation") == "user-journey"
-    if metrics_path.exists():
+    metrics_source = "raw metric samples"
+    if prefer_saved_metrics:
+        # The live exporter trusts only finalized reductions and never scans raw gzip.
+        saved = result.get("journey_metrics" if journey else "metrics")
+        required = (
+            ("attempted", "succeeded", "authenticated_users", "active_users_max", "p95", "p99")
+            if journey
+            else ("attempted", "succeeded", "dropped", "p95", "p99")
+        )
+        if (
+            result.get("status") == "measured"
+            and isinstance(saved, dict)
+            and all(key in saved for key in required)
+        ):
+            metrics = dict(saved)
+            metrics_source = "finalized saved reduction"
+        else:
+            metrics_source = "finalized saved reduction unavailable"
+    elif metrics_path.exists():
         if journey:
             from .journeys import read_journey_metrics
 
@@ -344,6 +362,8 @@ def read_trial_summary(manifest_path: Path) -> dict:
     )
 
     reasons = list(result.get("reasons", [])) + backend_log_flags(p.parent)
+    if prefer_saved_metrics and not metrics:
+        reasons.append("finalized metric reduction unavailable; offline raw analysis required")
     if metrics.get("incomplete"):
         reasons.append("raw metric stream is incomplete or corrupt")
     if result.get("status") != "measured":
@@ -415,9 +435,12 @@ def read_trial_summary(manifest_path: Path) -> dict:
         "qualification": qualification,
         "reasons": reasons,
         "metrics": metrics,
-        "achieved_operations_s": rate(metrics.get("attempted", 0)),
-        "achieved_http_requests_s": rate(metrics.get("http_requests", 0)),
-        "successful_operations_s": rate(metrics.get("succeeded", 0)),
+        "metrics_source": metrics_source,
+        "achieved_operations_s": rate(metrics["attempted"]) if "attempted" in metrics else None,
+        "achieved_http_requests_s": rate(metrics["http_requests"])
+        if "http_requests" in metrics
+        else None,
+        "successful_operations_s": rate(metrics["succeeded"]) if "succeeded" in metrics else None,
         "authentication_fraction": metrics.get("authenticated_users", 0) / users if users else None,
         "authentication_gate": config.get(
             "authentication_fraction", config.get("success_fraction", 0.99)

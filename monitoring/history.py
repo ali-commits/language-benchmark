@@ -63,59 +63,66 @@ def metric_values(row):
     return values
 
 
+def render_metrics(root: Path) -> str:
+    lines = []
+    for manifest in root.rglob("manifest.json"):
+        result = manifest.with_name("result.json")
+        raw = manifest.parent / "k6/metrics.json.gz"
+        if not result.exists():
+            continue
+        try:
+            finalized = json.loads(result.read_text())
+            if finalized.get("status") != "measured":
+                continue
+            signature = tuple(
+                (p.stat().st_mtime if p.exists() else 0)
+                for p in [
+                    manifest,
+                    result,
+                    raw,
+                    manifest.with_name("rds.json"),
+                    manifest.with_name("telemetry.jsonl"),
+                    manifest.with_name("backend.log"),
+                ]
+            )
+            key = str(manifest)
+            if key not in CACHE or CACHE[key][0] != signature:
+                CACHE[key] = (signature, read_trial_summary(manifest, prefer_saved_metrics=True))
+            row = CACHE[key][1]
+            if not row["metrics"]:
+                continue
+            m = json.loads(manifest.read_text())
+            r = json.loads(result.read_text())
+            t = r["trial"]
+            labels = {
+                "cell": t["cell"],
+                "trial": t["id"],
+                "campaign": t["campaign_id"],
+                "offered_rate": str(t.get("rate", 0)),
+                "target_users": str(t.get("users", 0)),
+                "workload": m["campaign"].get("operation", "mixed"),
+                "profile": row.get("methodology", {}).get("profile", "historical-unspecified"),
+                "experiment_type": row.get("methodology", {}).get("experiment_type", "capacity"),
+                "methodology": json.dumps(
+                    row.get("methodology", {}), sort_keys=True, separators=(",", ":")
+                ),
+                "authentication_policy": str(row.get("authentication_gate", 0.99)),
+            }
+            label = ",".join(k + "=" + json.dumps(x) for k, x in labels.items())
+            values = metric_values(row)
+            for key, value in values.items():
+                lines.append(f"{key}{{{label}}} {value}")
+        except (KeyError, ValueError, OSError):
+            continue
+    return "\n".join(lines) + "\n"
+
+
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path != "/metrics":
             self.send_error(404)
             return
-        lines = []
-        root = Path(os.environ.get("RESULTS_DIR", "/results"))
-        for manifest in root.rglob("manifest.json"):
-            result = manifest.with_name("result.json")
-            raw = manifest.parent / "k6/metrics.json.gz"
-            if not result.exists() or not raw.exists():
-                continue
-            try:
-                signature = tuple(
-                    (p.stat().st_mtime if p.exists() else 0)
-                    for p in [
-                        manifest,
-                        result,
-                        raw,
-                        manifest.with_name("rds.json"),
-                        manifest.with_name("telemetry.jsonl"),
-                    ]
-                )
-                key = str(manifest)
-                if key not in CACHE or CACHE[key][0] != signature:
-                    CACHE[key] = (signature, read_trial_summary(manifest))
-                row = CACHE[key][1]
-                m = json.loads(manifest.read_text())
-                r = json.loads(result.read_text())
-                t = r["trial"]
-                labels = {
-                    "cell": t["cell"],
-                    "trial": t["id"],
-                    "campaign": t["campaign_id"],
-                    "offered_rate": str(t.get("rate", 0)),
-                    "target_users": str(t.get("users", 0)),
-                    "workload": m["campaign"].get("operation", "mixed"),
-                    "profile": row.get("methodology", {}).get("profile", "historical-unspecified"),
-                    "experiment_type": row.get("methodology", {}).get(
-                        "experiment_type", "capacity"
-                    ),
-                    "methodology": json.dumps(
-                        row.get("methodology", {}), sort_keys=True, separators=(",", ":")
-                    ),
-                    "authentication_policy": str(row.get("authentication_gate", 0.99)),
-                }
-                label = ",".join(k + "=" + json.dumps(x) for k, x in labels.items())
-                values = metric_values(row)
-                for key, value in values.items():
-                    lines.append(f"{key}{{{label}}} {value}")
-            except (KeyError, ValueError, OSError):
-                continue
-        data = ("\n".join(lines) + "\n").encode()
+        data = render_metrics(Path(os.environ.get("RESULTS_DIR", "/results"))).encode()
         self.send_response(200)
         self.send_header("Content-Type", "text/plain; version=0.0.4")
         self.end_headers()
