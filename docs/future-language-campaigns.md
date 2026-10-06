@@ -43,3 +43,11 @@ This task stages code and local verification only. Starting these campaigns on A
 The planned next AWS campaign is fixed-load comparisons at100,500 and1000 users for each of the seven stacks. After reviewing the existing results, Ali explicitly authorized starting this fixed-load suite on2026-10-06. The earlier hold is revoked for this suite only. The90% capacity search remains a separate later campaign and must not start automatically. The old native queue is complete; use the persistent fixed services and new output directory described in the AWS deployment guide.
 
 The fixed-load suite completed21 trials. Ali subsequently authorized the fast90% capacity campaign on2026-10-06; its fresh config/output and persistent service checks are described in the AWS deployment guide. This authorization covers that campaign only, not any follow-up experiments.
+
+## Planned Laravel Octane comparison (2026-10-07)
+
+Ali requested an additional Laravel Octane configuration for a later test. Its planned cell is `php-laravel-octane`, recorded in [the planned configuration](../benchmarks/planned/laravel-octane.json). It is not runnable or enrolled in the active eight-stack campaign. The original `php-laravel` PHP-FPM cell, runtime lock and measured results remain intact.
+
+Use the same API/schema/authentication, fixture, user journeys and2vCPU/3GiB/no-swap/20-connection budget. Compare100,500 and1000 fixed users, then capacity separately, using the current300-second ramp/120-second sustained schedule and majority-on-disagreement policy. Verify and lock stable compatible versions and one supported Octane server when implementing; no server or image is claimed verified yet. The comparison must preserve per-trial clean-VM checks and explicitly validate request isolation and connection recovery in long-lived workers.
+
+The purpose is to measure how much Laravel's persistent application-server model and connection reuse change VM resource usage, latency, throughput and capacity relative to the existing FPM deployment. This request schedules a later comparison; it does not append or start a test in the currently running queue.

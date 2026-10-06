@@ -1,0 +1,42 @@
+{
+  "id": "php-laravel-octane",
+  "status": "planned",
+  "requested_on": "2026-10-07",
+  "language": "php",
+  "framework": "laravel",
+  "application_server": "octane",
+  "server_engine": null,
+  "version_policy": "Verify and lock the latest stable compatible PHP, Laravel, Octane and server releases when implemented.",
+  "budget": {
+    "cpus": 2,
+    "memory_bytes": 3221225472,
+    "swap_bytes": 0,
+    "database_connections": 20,
+    "nofile": 250000
+  },
+  "comparison": {
+    "baseline_cell": "php-laravel",
+    "api_and_behavior": "Identical existing shared HTTP contract and database schema",
+    "fixture": "Canonical 50000 users and 500000 posts with verified restore before and after each trial",
+    "user_journey": "Real login, following feed, likes, comments and posts; random 3\u201310-second waits",
+    "fixed_users": [
+      100,
+      500,
+      1000
+    ],
+    "timing_seconds": {
+      "ramp": 300,
+      "settle": 0,
+      "hold": 120
+    },
+    "capacity_policy": "90% operation and authentication targets; final failure retest, third valid run only on disagreement; majority of three"
+  },
+  "verification_required": [
+    "Choose one supported Octane server and document worker topology; preserve aggregate database connection cap20",
+    "Shared HTTP contracts and cross-language authentication interoperability",
+    "Request isolation, transaction rollback and database connection recovery for long-lived workers",
+    "Verified database TLS and wrong-hostname rejection",
+    "Image/dependency locks, actual process limits, clean VM baseline gates and generator calibration"
+  ],
+  "execution_policy": "Future comparison only. Not part of the active AWS queue. Use separate verified configuration and artifacts; do not modify historical results or the existing PHP runtime lock."
+}
