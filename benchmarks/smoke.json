@@ -1,12 +1,8 @@
 {
   "mode": "local",
   "smoke": true,
-  "cells": [
-    "python-baseline-3.15.0rc3"
-  ],
-  "rates": [
-    5
-  ],
+  "cells": ["python-baseline-3.15.0rc3"],
+  "rates": [5],
   "max_rate": 3200,
   "repeats": 1,
   "warmup_seconds": 3,

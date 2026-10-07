@@ -4,9 +4,17 @@ export function emit(event) {
 }
 
 export function stageAt(stages, seconds) {
-  return stages.find(stage => seconds >= stage.start_seconds && seconds < stage.end_seconds) || null;
+  return (
+    stages.find((stage) => seconds >= stage.start_seconds && seconds < stage.end_seconds) || null
+  );
 }
 
 export function sample(metric, timestamp, fields) {
-  emit({type: 'sample', sample: Object.assign({metric, timestamp, scope: 'workload', kind: 'event', includes_failures: true}, fields)});
+  emit({
+    type: 'sample',
+    sample: Object.assign(
+      { metric, timestamp, scope: 'workload', kind: 'event', includes_failures: true },
+      fields,
+    ),
+  });
 }

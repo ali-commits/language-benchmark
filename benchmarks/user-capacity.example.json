@@ -1,9 +1,7 @@
 {
   "mode": "aws",
   "operation": "user-journey",
-  "cells": [
-    "python-modern-3.14.8-standard-jit0-gil1-async"
-  ],
+  "cells": ["python-modern-3.14.8-standard-jit0-gil1-async"],
   "start_users": 10000,
   "step_users": 10000,
   "max_users": 50000,

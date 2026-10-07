@@ -1,9 +1,7 @@
 {
   "mode": "aws",
   "operation": "user-journey",
-  "cells": [
-    "python-baseline-3.10.22"
-  ],
+  "cells": ["python-baseline-3.10.22"],
   "start_users": 10000,
   "step_users": 10000,
   "max_users": 50000,

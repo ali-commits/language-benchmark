@@ -12,7 +12,22 @@
       "tsconfig.json"
     ]
   },
-  "formatter": { "enabled": true, "indentStyle": "space", "indentWidth": 2, "lineWidth": 100 },
-  "linter": { "enabled": true, "rules": { "recommended": true } },
-  "javascript": { "globals": ["__ENV", "__VU", "__ITER", "open"] }
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 100
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "recommended": true
+    }
+  },
+  "javascript": {
+    "globals": ["__ENV", "__VU", "__ITER", "open"],
+    "formatter": {
+      "quoteStyle": "single"
+    }
+  }
 }

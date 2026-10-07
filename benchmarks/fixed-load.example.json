@@ -25,10 +25,6 @@
   "authentication_fraction": 0.9,
   "experiment_type": "fixed-load",
   "expected_image_ids": {},
-  "fixed_users": [
-    100,
-    500,
-    1000
-  ],
+  "fixed_users": [100, 500, 1000],
   "backend_nofile_limit": 250000
 }
