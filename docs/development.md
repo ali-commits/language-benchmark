@@ -87,3 +87,13 @@ Tool configuration references:
 [Mypy](https://mypy.readthedocs.io/en/stable/config_file.html),
 [Biome](https://biomejs.dev/reference/configuration/), and
 [TypeScript checkJs](https://www.typescriptlang.org/tsconfig/checkJs.html).
+
+Resolved-environment regression coverage uses the real queue store/controller
+with a fake lifecycle to test changed worker counts, fixture DSNs, hook values,
+missing/corrupt keys, legacy checkpoints and the preparation-to-launch boundary.
+`tests/unit/test_queue_report_attribution.py` exercises fixed/search exports with
+two pinned images behind the same requested alias, including HTML escaping and
+secret/path exclusion. Run these alongside the trial, recovery and report tests
+when changing preparation or public exports. An existing queue's private
+`.environment-key` must accompany its state; tests must not rotate or regenerate
+that key to make a resumed experiment pass.

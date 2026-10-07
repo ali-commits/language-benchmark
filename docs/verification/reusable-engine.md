@@ -81,3 +81,37 @@ the fix and passed afterward. Earlier parser regressions continue to distinguish
 The loopback SSH test uses one Docker daemon through SSH and does not establish operation across independent machines, unsynchronized clocks or a production network. The service test exercises a real user-manager stop/resume, not a host reboot or power loss. Baseline gating stays disabled on this shared host; unit tests cover its rejection and cancellation behavior. These small populations test correctness, not generator capacity or target capacity. Target environment values remain single-line; CR, LF and NUL are rejected.
 
 No AWS/RDS calls or live CloudWatch evidence are claimed. The disposable cached Go/PostgreSQL social fixture-restoration test is included in the final acceptance command; this does not claim Python social runtime deployment. Required missing evidence remains invalid; reports do not fill gaps with zero. Existing historical capacity measurements and artifacts are unchanged.
+
+## Final review fixes
+
+Resolved target, fixture DSN and fixture-hook environment references now have a
+durable HMAC binding under a private per-queue 0600 key. Resume and raw-evidence
+reuse check the binding; recovery checks it before fixture operations. Execution
+uses the checked values from memory. Tests reject WORKERS changing from 1 to 8
+without another lifecycle launch, accept unchanged references, reject missing or
+corrupt keys and unbound older checkpoints, and preserve literal parameters and
+unrelated ambient credentials. Recovery tests prove that changed fixture values
+cannot invoke cleanup against a different destination. These environment-change
+cases use a fake lifecycle around the actual store/controller; they are not a
+claim of a real host reboot or live database credential rotation.
+
+Reports now retain allowlisted target names and actual pinned image identities
+in job mappings, trial rows, sanitized evidence, fixed decisions and search
+bounds. The real store/controller regression covers two targets resolving the
+same requested alias to different image IDs, both fixed and search results,
+HTML escaping, missing-image availability and exclusion of secrets/private paths.
+The root quick start now pulls the pinned k6 image and names Buildx; the documented
+queue append/update flags match the parser. A completely empty Docker image cache
+was not used for a fresh-machine installation test.
+
+The focused real Docker acceptance rerun passed both the two-version
+fixed/staged/search/report flow and process mutations/stop/resume/crash recovery:
+**2 passed in 173.22 seconds**. The earlier 16-case broad acceptance remains the
+record for other surfaces; it was not repeated for these scoped changes.
+
+Final scoped-fix checks: **568 unit tests passed, 9 opt-in skips in 16.10 seconds**;
+strict Mypy passed across **73 production files**; Ruff lint/format passed across
+**146 formatted files**; strict JavaScript, Biome and all **seven pre-commit
+all-files gates** passed. Installed commit hooks also passed without bypass.
+All **181 protected SHA256 hashes** and the backend tree listed above remain
+unchanged. The fixes add no cloud calls and do not alter historical measurements.

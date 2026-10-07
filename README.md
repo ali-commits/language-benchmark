@@ -2,12 +2,13 @@
 
 Run reusable HTTP workloads against Linux Docker targets, locally or over SSH. The engine supports **fixed-load** tests (explicit populations, sweeps or absolute stage sequences) and **search** tests (finite-budget observed user bounds for separate objectives). The social workload and nine runtime implementations remain available with their original runtime and database safeguards.
 
-Install Python 3.14 and [uv](https://docs.astral.sh/uv/), and make Docker available to your user. From this checkout:
+Install Python 3.14 and [uv](https://docs.astral.sh/uv/), and make Docker with its Buildx plugin available to your user. From this checkout:
 
 ```sh
 uv sync
 uv run bench init --template http --output /tmp/bench-demo/queue.yaml
 uv run bench validate /tmp/bench-demo/queue.yaml
+docker pull grafana/k6:1.4.2
 uv run bench doctor /tmp/bench-demo/queue.yaml
 ```
 
