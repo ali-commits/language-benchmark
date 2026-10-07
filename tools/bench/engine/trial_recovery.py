@@ -48,7 +48,13 @@ def fixture(context: TrialContext, action: FixtureAction) -> FixtureReceipt:
             action
         ]
         if hook:
-            return run_hook(hook, context)
+            return run_hook(
+                hook,
+                context,
+                resolved_env=context.bound_environment.values
+                if context.bound_environment
+                else None,
+            )
     return None
 
 

@@ -1,11 +1,15 @@
 """Pinned preparation and retained-copy reconstruction, independent of dispatch."""
 
-import os
 from collections.abc import Callable
 from pathlib import Path
 from typing import Protocol
 
 from tools.bench.engine.docker_env import validate_container_environment
+from tools.bench.engine.environment_binding import (
+    BoundEnvironment,
+    bind_environment,
+    reference_names,
+)
 from tools.bench.engine.stages import fixed_populations
 from tools.bench.engine.targets import (
     BuildSnapshot,
@@ -54,6 +58,7 @@ class ExecutionIdentity(Protocol):
         *,
         generator_image_id: str,
         fixture_manifest: Path | None = None,
+        environment_binding: str | None = None,
     ) -> str: ...
 
 
@@ -63,24 +68,41 @@ def prepare(
     job: ResolvedJob,
     *,
     expected_inputs: FrozenInputs,
+    allow_key_creation: bool,
     root: Path,
     save: Callable[[str | None], None],
     check_stop: Callable[[], None],
     resolve: TargetResolver,
     inspect_image: Callable[[Host, str], str],
     execution_identity: ExecutionIdentity,
-) -> tuple[ResolvedTarget, PreparedWorkload, str]:
-    # Resolve refs without persisting values; validate before Docker preparation.
+) -> tuple[ResolvedTarget, PreparedWorkload, str, BoundEnvironment | None]:
+    key = str(index)
+    bindings = data.setdefault("environment_bindings", {})
+    expected = bindings.get(key)
+    if (
+        reference_names(job)
+        and expected is None
+        and (
+            key in data["prepared"]
+            or data["pending"]
+            or any(d["target"] == index for d in data["decisions"])
+        )
+    ):
+        raise QueueConflict("legacy checkpoint lacks environment binding; create a new queue")
     try:
-        env = {key: os.environ[ref.env] for key, ref in job.target.env.items()}
-    except KeyError as exc:
-        raise QueueConflict("required target environment reference is unset") from exc
-    try:
+        bound = bind_environment(
+            job,
+            root / ".environment-key",
+            expected=expected,
+            create=allow_key_creation,
+        )
+        env = {name: bound.values[ref.env] for name, ref in job.target.env.items()} if bound else {}
         validate_container_environment(env)
     except ValueError as exc:
-        raise QueueConflict(
-            "target environment requires portable names and single-line values (no CR, LF or NUL)"
-        ) from exc
+        raise QueueConflict(str(exc)) from exc
+    if bound is not None and expected is None:
+        bindings[key] = bound.digest
+        save(None)
     check_stop()
     key = str(index)
     prep = data["prepared"].get(key)
@@ -202,10 +224,11 @@ def prepare(
         workload,
         generator_image_id=prep["generator"],
         fixture_manifest=fixture.verify() if fixture else None,
+        environment_binding=bound.digest if bound else None,
     )
     if prep.get("execution_identity", identity) != identity:
         raise QueueConflict("execution identity changed; cannot resume")
     prep["execution_identity"] = identity
     save(None)
     check_stop()
-    return target, workload, prep["generator"]
+    return target, workload, prep["generator"], bound

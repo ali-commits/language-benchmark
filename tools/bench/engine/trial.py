@@ -5,6 +5,7 @@ import hashlib
 import json
 import time
 from contextlib import contextmanager
+from dataclasses import replace
 from pathlib import Path
 from typing import Callable, Iterator, Literal
 
@@ -149,6 +150,7 @@ def run_trial(
 
 def _run_trial(context: TrialContext, stop_requested: Callable[[], bool]) -> TrialEvidence:
     prepared = prepare_trial(context, execute=execute_host)
+    context = replace(context, bound_environment=prepared.bound_environment)
     directory, job = prepared.directory, context.job
     prepared_target, bundle, stages = prepared.target, prepared.bundle, prepared.stages
     generator_image_id, execution_id = prepared.generator_image_id, prepared.execution_id

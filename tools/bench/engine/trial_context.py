@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from ..records import checked_record
+from .environment_binding import BoundEnvironment, bind_environment, reference_names
 from .records import Manifest
 from .targets import ResolvedTarget, tree_checksums
 from .types import Environment, ResolvedJob, Workload
@@ -33,6 +34,8 @@ class TrialContext:
     prepared_workload: PreparedWorkload | None = None
     generator_image_id: str | None = None
     prepared_fixture: PreparedFixture | None = None
+
+    bound_environment: BoundEnvironment | None = None
 
     @property
     def fixture_manifest(self) -> Path | None:
@@ -67,14 +70,23 @@ class TrialContext:
         data = checked_record(json.loads(path.read_text()), Manifest)
         pin = data.get("prepared_fixture")
         prepared_fixture = PreparedFixture(Path(pin["manifest"]), pin["checksums"]) if pin else None
+        job = ResolvedJob.model_validate_json(json.dumps(data["job"]))
+        bound = None
+        if reference_names(job):
+            if not data.get("environment_binding") or not data.get("environment_key"):
+                raise ValueError("legacy trial lacks environment binding; requires attention")
+            bound = bind_environment(
+                job, Path(data["environment_key"]), expected=data["environment_binding"]
+            )
         # Reconciliation never resolves images, builds or re-reads mutable sources.
         return cls(
-            ResolvedJob.model_validate_json(json.dumps(data["job"])),
+            job,
             data["users"],
             path.parent,
             data["queue_id"],
             data["trial_id"],
             prepared_fixture=prepared_fixture,
+            bound_environment=bound,
         )
 
 

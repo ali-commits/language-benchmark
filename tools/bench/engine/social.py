@@ -48,13 +48,18 @@ class SocialAdapter:
         self.dsn_ref = fixture.dsn
         self.allowed_database = fixture.allowed_database
 
-    def _dsn(self) -> str:
-        dsn = os.environ[self.dsn_ref.env]
+    def _dsn(self, context: "TrialContext | None" = None) -> str:
+        values = (
+            context.bound_environment.values
+            if context is not None and context.bound_environment
+            else os.environ
+        )
+        dsn = values[self.dsn_ref.env]
         guard(dsn, self.allowed_database)
         return dsn
 
     def prepare(self, context: "TrialContext") -> None:
-        self._dsn()
+        self._dsn(context)
         manifest = FixtureManifest(
             **checked_record(json.loads(self.manifest_path.read_text()), FixtureRecord)
         )
@@ -67,13 +72,13 @@ class SocialAdapter:
         load_runtime_cell(self.runtime_cell, runtime_root())
 
     def reset(self, context: "TrialContext") -> FixtureManifest:
-        return restore_fixture(self._dsn(), self.manifest_path, self.allowed_database)
+        return restore_fixture(self._dsn(context), self.manifest_path, self.allowed_database)
 
     def verify(self, context: "TrialContext") -> None:
         manifest = FixtureManifest(
             **checked_record(json.loads(self.manifest_path.read_text()), FixtureRecord)
         )
-        if verify_fixture(self._dsn(), manifest):
+        if verify_fixture(self._dsn(context), manifest):
             raise ValueError("social fixture fingerprints differ")
 
     def attest(self, context: "TrialContext", container_id: str) -> None:

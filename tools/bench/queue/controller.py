@@ -12,6 +12,7 @@ from dataclasses import asdict
 from pathlib import Path
 from uuid import uuid4
 
+from tools.bench.engine.environment_binding import BoundEnvironment, bind_environment
 from tools.bench.engine.evidence import immutable_json
 from tools.bench.engine.metrics import evaluate
 from tools.bench.engine.records import DockerImage
@@ -104,6 +105,7 @@ def _identity(context: TrialContext) -> str:
         context.prepared_workload,
         generator_image_id=context.generator_image_id,
         fixture_manifest=context.fixture_manifest,
+        environment_binding=context.bound_environment.digest if context.bound_environment else None,
     )
 
 
@@ -117,12 +119,13 @@ def _prepare(
     interrupt_requested: StopRequested = lambda: False,
     *,
     expected_inputs: FrozenInputs,
-) -> tuple[ResolvedTarget, PreparedWorkload, str]:
+) -> tuple[ResolvedTarget, PreparedWorkload, str, BoundEnvironment | None]:
     return prepare(
         data,
         index,
         job,
         expected_inputs=expected_inputs,
+        allow_key_creation=not any(j.get("environment_bindings") for j in state["jobs"].values()),
         root=_root(store, queue),
         save=lambda status: _save(store, queue, state, status),
         check_stop=lambda: _check_stop(store, queue, interrupt_requested),
@@ -293,6 +296,7 @@ def _reuse_probes(
     objective: str,
     search: SearchState,
     fixture: PreparedFixture | None = None,
+    bound: BoundEnvironment | None = None,
 ) -> tuple[SearchState, list[Decision]]:
     """Reclassify immutable raw probes; previous objective labels are irrelevant."""
     retained = dict(data.get("raw_trials", {}))
@@ -326,6 +330,7 @@ def _reuse_probes(
             workload,
             generator_image_id=generator,
             fixture_manifest=fixture.verify() if fixture else None,
+            environment_binding=bound.digest if bound else None,
         )
         if evidence.trial_id != trial_id or evidence.execution_id != expected:
             continue
@@ -385,7 +390,7 @@ def _execute_job(
         _save(store, queue, state)
     while data["target"] < len(claimed.resolved_jobs):
         job = claimed.resolved_jobs[data["target"]]
-        target, workload, generator = _prepare(
+        target, workload, generator, bound = _prepare(
             store,
             queue,
             state,
@@ -409,12 +414,18 @@ def _execute_job(
                 workload,
                 generator,
                 fixture,
+                bound,
             )
             if _identity(context) != p["identity"]:
                 raise QueueConflict("execution identity changed; cannot resume")
             _decide(store, queue, state, data, job, interrupt_requested)
         objectives = list(job.objectives) or ["default"]
         while data["objective"] < len(objectives):
+            if bound is not None:
+                try:
+                    bound = bind_environment(job, bound.key_path, expected=bound.digest)
+                except ValueError as exc:
+                    raise QueueConflict(str(exc)) from exc
             objective = objectives[data["objective"]]
             if job.test.type == "search":
                 if data["search"] is None:
@@ -433,6 +444,7 @@ def _execute_job(
                         objective,
                         search,
                         fixture,
+                        bound,
                     )
                     data["decisions"].extend(reused_decisions)
                 else:
@@ -475,7 +487,7 @@ def _execute_job(
             trial_id = uuid4().hex
             directory = _root(store, queue) / data["directory"] / trial_id
             context = TrialContext(
-                job, users, directory, queue, trial_id, target, workload, generator, fixture
+                job, users, directory, queue, trial_id, target, workload, generator, fixture, bound
             )
             identity = _identity(context)
             if job.test.type == "search":

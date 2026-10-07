@@ -2,13 +2,13 @@
 
 import hashlib
 import json
-import os
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
 from ..records import checked_record
 from .docker_env import validate_container_environment
+from .environment_binding import BoundEnvironment, bind_environment
 from .evidence import immutable_json
 from .records import DockerImage, TrialManifest
 from .resources import wrapper_path
@@ -36,6 +36,7 @@ class Preparation:
     execution_id: str
     labels: dict[str, str]
     target_environment: dict[str, str]
+    bound_environment: BoundEnvironment | None
 
 
 def bundle_workload(context: TrialContext, prepared: PreparedWorkload) -> Path:
@@ -55,10 +56,21 @@ def bundle_workload(context: TrialContext, prepared: PreparedWorkload) -> Path:
 
 def prepare_trial(context: TrialContext, *, execute: HostExecutor) -> Preparation:
     directory = context.directory.resolve()
-    if (directory / "manifest.json").exists():
+    if any(
+        (directory / name).exists() for name in ("manifest.json", "result.json", "interrupted.json")
+    ):
         raise ValueError("trial already exists: reconcile and use a new trial identity")
     job = context.job
-    target_env = {key: os.environ[ref.env] for key, ref in job.target.env.items()}
+    bound = context.bound_environment
+    bound = bind_environment(
+        job,
+        bound.key_path if bound else directory / ".environment-key",
+        expected=bound.digest if bound else None,
+        create=bound is None,
+    )
+    target_env = (
+        {key: bound.values[ref.env] for key, ref in job.target.env.items()} if bound else {}
+    )
     validate_container_environment(target_env)
     stages = resolve_stages(job, context.users)
     for value in [*(s.duration for s in stages), job.drain, job.graceful_ramp_down]:
@@ -93,6 +105,7 @@ def prepare_trial(context: TrialContext, *, execute: HostExecutor) -> Preparatio
         prepared_workload,
         generator_image_id=generator_image_id,
         fixture_manifest=context.fixture_manifest,
+        environment_binding=bound.digest if bound else None,
     )
     labels = owner_labels(context.queue_id, context.job_id, context.trial_id)
     if any(key.startswith("bench.") for key in job.target.labels):
@@ -116,6 +129,9 @@ def prepare_trial(context: TrialContext, *, execute: HostExecutor) -> Preparatio
         },
         "colocated_generator": job.environment.backend == job.environment.generator,
     }
+    if bound is not None:
+        manifest["environment_binding"] = bound.digest
+        manifest["environment_key"] = str(bound.key_path.resolve())
     if context.prepared_fixture is not None:
         manifest["prepared_fixture"] = {
             "manifest": str(context.prepared_fixture.manifest),
@@ -132,4 +148,5 @@ def prepare_trial(context: TrialContext, *, execute: HostExecutor) -> Preparatio
         execution_id,
         labels,
         target_env,
+        bound,
     )

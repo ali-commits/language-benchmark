@@ -308,7 +308,9 @@ class HookContext(Protocol):
     def environment(self) -> Environment: ...
 
 
-def run_hook(hook: Hook, context: HookContext) -> HookReceipt:
+def run_hook(
+    hook: Hook, context: HookContext, *, resolved_env: dict[str, str] | None = None
+) -> HookReceipt:
     host = (
         Host(transport="local")
         if hook.host == "controller"
@@ -317,10 +319,11 @@ def run_hook(hook: Hook, context: HookContext) -> HookReceipt:
         else context.environment.generator
     )
     env = {}
+    source = os.environ if resolved_env is None else resolved_env
     for key, reference in hook.env.items():
-        if reference.env not in os.environ:
+        if reference.env not in source:
             raise ValueError(f"hook environment reference missing: {reference.env}")
-        env[key] = os.environ[reference.env]
+        env[key] = source[reference.env]
     start = time.monotonic()
     try:
         execute_host(host, hook.argv, env=env, timeout=hook.timeout)

@@ -210,6 +210,7 @@ class JobCheckpoint(TypedDict):
     decisions: list[Decision]
     results: list[JobResult]
     fixed_attempts: dict[str, int]
+    environment_bindings: NotRequired[dict[str, str]]
     target_pins: NotRequired[dict[str, TargetPin]]
     invalid_retries: NotRequired[dict[str, int]]
     interruptions: NotRequired[dict[str, int]]

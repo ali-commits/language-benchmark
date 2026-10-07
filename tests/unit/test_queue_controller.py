@@ -1008,3 +1008,224 @@ def test_frozen_fixture_archive_used_for_restore_and_old_identity(tmp_path, monk
             TrialContext.from_manifest(context.directory / "manifest.json"), "reset"
         )
     assert restored == [b"enqueued archive"]
+
+
+@pytest.mark.parametrize("reference", ["target", "dsn", "hook"])
+@pytest.mark.parametrize("changed", [False, True])
+def test_resolved_environment_resume_binding(harness, monkeypatch, reference, changed):
+    from tools.bench.engine.types import Fixture, Hook, SecretRef, TestPolicy
+
+    store, cfg, launches = harness
+    monkeypatch.setenv("REVIEW_WORKERS", "1")
+    ref = SecretRef(env="REVIEW_WORKERS")
+    target = cfg.targets["app"]
+    workload = cfg.workloads["load"]
+    if reference == "target":
+        target = target.model_copy(update={"env": {"WORKERS": ref}})
+    else:
+        fixture = (
+            Fixture(dsn=ref)
+            if reference == "dsn"
+            else Fixture(reset=Hook(argv=["true"], env={"VALUE": ref}))
+        )
+        workload = workload.model_copy(update={"fixture": fixture})
+    job = cfg.jobs[0].model_copy(
+        update={
+            "test": TestPolicy.model_validate(
+                {
+                    "type": "search",
+                    "users": {"min": 1, "start": 1, "max": 4},
+                    "limits": {"max_trials": 4, "max_elapsed": 120},
+                }
+            )
+        }
+    )
+    other = QueueStore(store.path.parent / "bound.db")
+    other.register(
+        cfg.model_copy(
+            update={"targets": {"app": target}, "workloads": {"load": workload}, "jobs": [job]}
+        )
+    )
+    original = controller.run_trial
+
+    def stop(ctx, callback):
+        value = original(ctx, callback)
+        other.request_stop("test")
+        return value
+
+    monkeypatch.setattr(controller, "run_trial", stop)
+    assert controller.run_queue(other, "test")["queues"][0]["state"] == "interrupted"
+    monkeypatch.setenv("REVIEW_WORKERS", "8" if changed else "1")
+    monkeypatch.setattr(controller, "run_trial", original)
+    other.clear_stop("test")
+    result = controller.run_queue(other, "test")
+    assert result["queues"][0]["state"] == ("needs_attention" if changed else "completed")
+    assert len(launches) == (1 if changed else 3)
+
+
+@pytest.mark.parametrize("damage", ["missing-key", "corrupt-key", "legacy"])
+def test_environment_receipt_damage_fails_closed(harness, monkeypatch, damage):
+    from tools.bench.engine.types import SecretRef
+
+    store, cfg, launches = harness
+    monkeypatch.setenv("REVIEW_SECRET", "private-value-1234")
+    target = cfg.targets["app"].model_copy(
+        update={"env": {"TOKEN": SecretRef(env="REVIEW_SECRET")}}
+    )
+    other = QueueStore(store.path.parent / "damage.db")
+    other.register(cfg.model_copy(update={"targets": {"app": target}}))
+    original = controller.run_trial
+
+    def stop(ctx, callback):
+        result = original(ctx, callback)
+        other.request_stop("test")
+        return result.model_copy(update={"valid": False})
+
+    monkeypatch.setattr(controller, "run_trial", stop)
+    controller.run_queue(other, "test")
+    key = controller._root(other, "test") / ".environment-key"
+    assert key.stat().st_mode & 0o777 == 0o600
+    state = other.controller_state("test")
+    assert "private-value-1234" not in str(state)
+    if damage == "missing-key":
+        key.unlink()
+    elif damage == "corrupt-key":
+        key.write_bytes(b"corrupt")
+    else:
+        del state["jobs"]["one"]["environment_bindings"]
+        other.checkpoint("test", state)
+    monkeypatch.setattr(controller, "run_trial", original)
+    other.clear_stop("test")
+    assert controller.run_queue(other, "test")["queues"][0]["state"] == "needs_attention"
+    assert len(launches) == 1
+    if damage == "missing-key":
+        assert not key.exists()
+
+
+def test_environment_change_between_preparation_and_first_launch(harness, monkeypatch):
+    from tools.bench.engine.types import SecretRef
+
+    store, cfg, launches = harness
+    monkeypatch.setenv("REVIEW_WORKERS", "1")
+    target = cfg.targets["app"].model_copy(
+        update={"env": {"WORKERS": SecretRef(env="REVIEW_WORKERS")}}
+    )
+    other = QueueStore(store.path.parent / "race.db")
+    other.register(cfg.model_copy(update={"targets": {"app": target}}))
+    original = controller._prepare
+
+    def change(*args, **kwargs):
+        prepared = original(*args, **kwargs)
+        monkeypatch.setenv("REVIEW_WORKERS", "8")
+        return prepared
+
+    monkeypatch.setattr(controller, "_prepare", change)
+    assert controller.run_queue(other, "test")["queues"][0]["state"] == "needs_attention"
+    assert launches == []
+
+
+def test_only_declared_environment_references_are_bound(harness, monkeypatch):
+    from tools.bench.engine.types import SecretRef
+
+    store, cfg, launches = harness
+    monkeypatch.setenv("REVIEW_WORKERS", "1")
+    target = cfg.targets["app"].model_copy(
+        update={"env": {"WORKERS": SecretRef(env="REVIEW_WORKERS")}}
+    )
+    workload = cfg.workloads["load"].model_copy(
+        update={"parameters": {"literal": {"env": "NOT_A_REFERENCE"}}}
+    )
+    other = QueueStore(store.path.parent / "opaque.db")
+    other.register(
+        cfg.model_copy(update={"targets": {"app": target}, "workloads": {"load": workload}})
+    )
+    original = controller.run_trial
+
+    def stop(ctx, callback):
+        value = original(ctx, callback)
+        other.request_stop("test")
+        return value.model_copy(update={"valid": False})
+
+    monkeypatch.setattr(controller, "run_trial", stop)
+    assert controller.run_queue(other, "test")["queues"][0]["state"] == "interrupted"
+    monkeypatch.setenv("AWS_SESSION_TOKEN", "new-ambient-token")
+    monkeypatch.setattr(controller, "run_trial", original)
+    other.clear_stop("test")
+    assert controller.run_queue(other, "test")["queues"][0]["state"] == "completed", (
+        other.controller_state("test")["last_error"]
+    )
+    assert len(launches) == 2
+
+
+@pytest.mark.parametrize("damage", ["changed", "missing-key"])
+def test_pending_fixture_recovery_checks_binding_before_cleanup(harness, monkeypatch, damage):
+    from tools.bench.engine.trial_preparation import prepare_trial
+    from tools.bench.engine.types import Fixture, Hook, SecretRef
+    from tools.bench.queue import recovery
+
+    store, cfg, launches = harness
+    monkeypatch.setenv("FIXTURE_DESTINATION", "original-database")
+    fixture = Fixture(
+        reset=Hook(argv=["restore"], env={"DATABASE": SecretRef(env="FIXTURE_DESTINATION")})
+    )
+    workload = cfg.workloads["load"].model_copy(update={"fixture": fixture})
+    other = QueueStore(store.path.parent / "pending-fixture.db")
+    other.register(cfg.model_copy(update={"workloads": {"load": workload}}))
+
+    def crash(context, callback):
+        context.directory.mkdir(parents=True)
+        prepare_trial(context, execute=lambda *a, **kw: pytest.fail("unexpected Docker call"))
+        raise KeyboardInterrupt()
+
+    monkeypatch.setattr(controller, "run_trial", crash)
+    with pytest.raises(KeyboardInterrupt):
+        controller.run_queue(other, "test")
+    monkeypatch.setattr(
+        recovery,
+        "reconcile_trial",
+        lambda context: pytest.fail("cleanup must not start against changed references"),
+    )
+    if damage == "changed":
+        monkeypatch.setenv("FIXTURE_DESTINATION", "different-database")
+    else:
+        (controller._root(other, "test") / ".environment-key").unlink()
+    assert controller.run_queue(other, "test")["queues"][0]["state"] == "needs_attention"
+    assert other.controller_state("test")["jobs"]["one"]["pending"] is not None
+    assert launches == []
+
+
+def test_checked_values_used_for_target_and_fixture_hooks(harness, monkeypatch):
+    from tools.bench.engine import trial_recovery, workloads
+    from tools.bench.engine.trial_preparation import prepare_trial
+    from tools.bench.engine.types import Fixture, Hook, SecretRef
+
+    store, cfg, launches = harness
+    monkeypatch.setenv("SHARED_VALUE", "checked-value")
+    ref = SecretRef(env="SHARED_VALUE")
+    target = cfg.targets["app"].model_copy(update={"env": {"TOKEN": ref}})
+    fixture = Fixture(reset=Hook(argv=["true"], env={"TOKEN": ref}))
+    workload = cfg.workloads["load"].model_copy(update={"fixture": fixture})
+    other = QueueStore(store.path.parent / "frozen-values.db")
+    other.register(
+        cfg.model_copy(update={"targets": {"app": target}, "workloads": {"load": workload}})
+    )
+    original = controller.run_trial
+    received = []
+    monkeypatch.setattr(
+        workloads, "execute_host", lambda host, argv, **kw: received.append(kw["env"])
+    )
+
+    def run(context, callback):
+        context.directory.mkdir(parents=True)
+        prepared = prepare_trial(
+            context, execute=lambda *a, **kw: pytest.fail("unexpected Docker call")
+        )
+        monkeypatch.setenv("SHARED_VALUE", "later-value")
+        assert prepared.target_environment == {"TOKEN": "checked-value"}
+        trial_recovery.fixture(context, "reset")
+        assert received == [{"TOKEN": "checked-value"}]
+        monkeypatch.setenv("SHARED_VALUE", "checked-value")
+        return original(context, callback)
+
+    monkeypatch.setattr(controller, "run_trial", run)
+    assert controller.run_queue(other, "test")["queues"][0]["state"] == "completed"

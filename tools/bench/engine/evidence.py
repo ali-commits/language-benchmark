@@ -24,7 +24,11 @@ def _file_identity(path: Path) -> str:
 
 
 def execution_identity(
-    job: ResolvedJob, users: int | None, *, provenance: PreparedProvenance | None = None
+    job: ResolvedJob,
+    users: int | None,
+    *,
+    provenance: PreparedProvenance | None = None,
+    environment_binding: str | None = None,
 ) -> str:
     payload = job.model_dump(mode="json", by_alias=True)
     for field in ("criteria", "objectives", "test", "id"):
@@ -33,6 +37,8 @@ def execution_identity(
         s.model_dump(mode="json", exclude={"evaluate"}) for s in resolve_stages(job, users)
     ]
     payload["users"] = users
+    if environment_binding is not None:
+        payload["environment_binding"] = environment_binding
     if provenance is not None:
         if not provenance.get("image_id") or not provenance.get("workload_identity"):
             raise ValueError("prepared provenance requires image and workload identities")

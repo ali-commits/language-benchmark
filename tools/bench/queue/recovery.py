@@ -30,7 +30,14 @@ def recover_pending(data: JobCheckpoint, *, save: Callable[[str | None], None]) 
         save("cleaning")
         manifest = directory / "manifest.json"
         if manifest.exists():
-            receipt = reconcile_trial(TrialContext.from_manifest(manifest))
+            try:
+                context = TrialContext.from_manifest(manifest)
+            except ValueError as exc:
+                raise QueueConflict(
+                    "trial preparation receipt unavailable; restore original declared environment "
+                    "and private binding key before resume"
+                ) from exc
+            receipt = reconcile_trial(context)
             if not receipt.verified:
                 raise QueueConflict("trial cleanup requires attention")
         pending["interrupted"] = True

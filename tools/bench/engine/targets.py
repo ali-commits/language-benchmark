@@ -417,15 +417,20 @@ def prepared_execution_identity(
     *,
     generator_image_id: str | None = None,
     fixture_manifest: Path | None = None,
+    environment_binding: str | None = None,
 ) -> str:
     """Canonical identity from preparation receipts, independent of mutable source."""
+    from .environment_binding import reference_names
     from .evidence import execution_identity
 
+    if reference_names(job) and environment_binding is None:
+        raise ValueError("resolved environment binding required for prepared identity")
     if fixture_manifest is None and job.workload.fixture:
         fixture_manifest = job.workload.fixture.manifest
     return execution_identity(
         job,
         users,
+        environment_binding=environment_binding,
         provenance={
             "image_id": resolved_target.image_id,
             "generator_image_id": generator_image_id,

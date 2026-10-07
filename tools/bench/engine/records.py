@@ -153,6 +153,8 @@ class Manifest(TypedDict, total=False):
     queue_id: str
     trial_id: str
     fixture_manifest_sha256: str | None
+    environment_binding: str
+    environment_key: str
     prepared_fixture: FixturePin
 
 
