@@ -1,0 +1,35 @@
+version: 1
+name: http-demo
+targets:
+  http:
+    build: {context: .}
+    port: 8000
+    resources: {cpus: 1, memory: 256MiB, swap: 0}
+workloads:
+  http:
+    script: ./journey.js
+    parameters: {wait: 0.02}
+    metrics:
+      latency: {name: latency, type: trend, unit: ms, includes_failures: true}
+      success: {name: success, type: rate, unit: fraction}
+environments:
+  local:
+    backend: {transport: local}
+    generator: {transport: local}
+    network: {mode: host}
+    telemetry: {host: optional, container: optional, database: "off"}
+defaults:
+  workload: http
+  environment: local
+  drain: 5s
+  stages:
+    - {id: ramp, from: 0, to: target, duration: 3s}
+    - {id: hold, from: target, to: target, duration: 5s, evaluate: true}
+    - {id: cool, from: target, to: 0, duration: 2s}
+    - {id: idle, from: 0, to: 0, duration: 1s}
+  criteria:
+    - {metric: success, statistic: rate, operator: ">=", value: 99%}
+jobs:
+  - id: http-fixed
+    targets: [http]
+    test: {type: fixed, users: [4]}

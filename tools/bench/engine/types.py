@@ -236,6 +236,7 @@ class Defaults(Model):
     workload: str | None = None
     stages: list[Stage] = Field(default_factory=list)
     criteria: list[Criterion] = Field(default_factory=list)
+    graceful_ramp_down: float = Field(default=5, ge=0)
     drain: float = 30
     hold_tolerance: OccupancyTolerance = Field(default_factory=OccupancyTolerance)
 
@@ -249,6 +250,7 @@ class Job(Model):
     stages: list[Stage] | None = None
     criteria: list[Criterion] | None = None
     objectives: dict[str, list[Criterion]] = Field(default_factory=dict)
+    graceful_ramp_down: float | None = Field(default=None, ge=0)
     drain: float | None = None
     hold_tolerance: OccupancyTolerance | None = None
 
@@ -280,6 +282,7 @@ class ResolvedJob(Model):
     stages: list[Stage]
     criteria: list[Criterion]
     objectives: dict[str, list[Criterion]] = Field(default_factory=dict)
+    graceful_ramp_down: float = Field(default=5, ge=0)
     drain: float = 30
     hold_tolerance: OccupancyTolerance = Field(default_factory=OccupancyTolerance)
 

@@ -140,3 +140,18 @@ def test_imported_version_is_exact_integer(tmp_path, version):
     (tmp_path / 'defs.yaml').write_text(f'version: {version}\n')
     with pytest.raises(ConfigError):
         load_config(document(tmp_path, definitions=['defs.yaml']))
+
+
+def test_graceful_ramp_down_default_override_and_quantity(tmp_path):
+    from tools.bench.engine.types import Defaults
+    assert Defaults().graceful_ramp_down == 5
+    path = document(tmp_path)
+    data = yaml.safe_load(path.read_text())
+    data['defaults']['graceful_ramp_down'] = '200ms'
+    data['jobs'][0]['graceful_ramp_down'] = '0s'
+    path.write_text(yaml.safe_dump(data))
+    config = load_config(path)
+    assert config.defaults.graceful_ramp_down == .2
+    assert resolve_jobs(config)[0].graceful_ramp_down == 0
+    with pytest.raises(Exception):
+        Defaults(graceful_ramp_down=-1.)

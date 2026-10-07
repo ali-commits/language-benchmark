@@ -68,7 +68,7 @@ def _normalize(value, base, key=''):
         if key != 'workdir' and not path.exists():
             raise ConfigError(f'path does not exist: {path}')
         return path
-    if key in {'duration', 'timeout', 'interval', 'drain', 'max_elapsed', 'grace'}:
+    if key in {'duration', 'timeout', 'interval', 'drain', 'graceful_ramp_down', 'max_elapsed', 'grace'}:
         return parse_quantity(value, 'seconds')
     if key == 'hold_tolerance' and isinstance(value, (int, float)):
         return {'fraction': parse_quantity(value, 'fraction')}
@@ -180,6 +180,7 @@ def resolve_jobs(config: BenchmarkConfig) -> list[ResolvedJob]:
                 workload_name=workload_name, workload=config.workloads[workload_name],
                 environment_name=environment_name, environment=config.environments[environment_name],
                 test=job.test, stages=stages, criteria=criteria, objectives=job.objectives,
+                graceful_ramp_down=job.graceful_ramp_down if job.graceful_ramp_down is not None else config.defaults.graceful_ramp_down,
                 drain=job.drain if job.drain is not None else config.defaults.drain,
                 hold_tolerance=job.hold_tolerance if job.hold_tolerance is not None else config.defaults.hold_tolerance))
     from .stages import validate_stages

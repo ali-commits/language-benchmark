@@ -1,0 +1,7 @@
+services:
+  http:
+    build: .
+    ports: ["8000:8000"]
+    cpus: 1
+    mem_limit: 256m
+    memswap_limit: 256m
