@@ -166,6 +166,7 @@ def test_failure_cleanup_and_reconciliation(tmp_path, monkeypatch, crash):
         job, 2, tmp_path / "trial", "q", crash, target, prepared, "sha256:k6"
     )
     resources = {}
+    load_arguments = []
 
     class Docker:
         def __init__(self, host, labels):
@@ -175,6 +176,8 @@ def test_failure_cleanup_and_reconciliation(tmp_path, monkeypatch, crash):
             return identity in resources
 
         def create(self, name, args, **kwargs):
+            if name.startswith("bench-load-"):
+                load_arguments.append(args)
             if name.startswith("bench-target-"):
                 assert secret not in json.dumps(args)
                 assert "BENCH_TOKEN" not in args
@@ -235,6 +238,12 @@ def test_failure_cleanup_and_reconciliation(tmp_path, monkeypatch, crash):
 
     monkeypatch.setattr(module, "_fixture", fixture)
     evidence = module.run_trial(context)
+    if crash != "deploy":
+        # Human progress/summary output must not split JSON metric writes on stdout.
+        assert len(load_arguments) == 1
+        assert "--quiet" in load_arguments[0]
+        assert "--summary-mode=disabled" in load_arguments[0]
+        assert "json=/dev/stdout" in load_arguments[0]
     assert not evidence.valid
     if crash == "restore":
         assert not evidence.cleanup_verified

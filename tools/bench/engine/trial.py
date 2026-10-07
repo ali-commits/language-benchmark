@@ -280,6 +280,8 @@ def _run_trial(context: TrialContext, stop_requested: Callable[[], bool]) -> Tri
                 "BENCH_CONFIG=" + json.dumps(config),
                 k6,
                 "run",
+                "--quiet",
+                "--summary-mode=disabled",
                 "--log-format",
                 "raw",
                 "--out",

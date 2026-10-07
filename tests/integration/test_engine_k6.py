@@ -98,6 +98,8 @@ def run_load(tmp_path, stages, *, delay=0.04, grace=0.2):
                 "BENCH_CONFIG=" + json.dumps(config),
                 "grafana/k6:1.4.2",
                 "run",
+                "--quiet",
+                "--summary-mode=disabled",
                 "--log-format",
                 "raw",
                 "--out",
@@ -109,6 +111,11 @@ def run_load(tmp_path, stages, *, delay=0.04, grace=0.2):
             timeout=45,
         )
         assert result.returncode == 0, result.stderr[-2500:]
+        # Metric output must not share stdout with progress or human summaries.
+        native_points = [json.loads(line) for line in result.stdout.splitlines() if line.strip()]
+        assert native_points
+        assert "BENCH_EVENT " in result.stderr
+        assert "deprecated" not in result.stderr
         events = [
             json.loads(line.split("BENCH_EVENT ", 1)[1])
             for line in result.stderr.splitlines()
