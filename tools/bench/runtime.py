@@ -1,7 +1,8 @@
 from .models import RuntimeCell
+from .records import WorkerSnapshot
 
 
-def validate_worker_snapshots(cell: RuntimeCell, snapshots: list[dict]) -> list[str]:
+def validate_worker_snapshots(cell: RuntimeCell, snapshots: list[WorkerSnapshot]) -> list[str]:
     reasons = []
     if len(snapshots) != cell.workers or len({s.get("pid") for s in snapshots}) != cell.workers:
         reasons.append("missing or duplicate worker readiness")
@@ -32,7 +33,7 @@ def validate_worker_snapshots(cell: RuntimeCell, snapshots: list[dict]) -> list[
     return reasons
 
 
-def validate_dependency_inventory(cell: RuntimeCell, snapshots: list[dict]) -> list[str]:
+def validate_dependency_inventory(cell: RuntimeCell, snapshots: list[WorkerSnapshot]) -> list[str]:
     import re
     from pathlib import Path
 
@@ -40,7 +41,7 @@ def validate_dependency_inventory(cell: RuntimeCell, snapshots: list[dict]) -> l
     from packaging.requirements import Requirement
     from packaging.utils import canonicalize_name
 
-    environment = default_environment()
+    environment = {key: str(value) for key, value in default_environment().items()}
     environment["python_version"] = ".".join(cell.python.split(".")[:2])
     environment["python_full_version"] = cell.python
     expected = {}

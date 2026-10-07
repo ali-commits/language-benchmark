@@ -1,5 +1,12 @@
 """Guard native deployments without importing Python worker-attestation schemas."""
 
+from collections.abc import Mapping
+from typing import overload
+from typing_extensions import Literal, TypedDict
+
+class ImageConfig(TypedDict, total=False):
+    expected_image_ids: dict[str, str]
+
 import hashlib
 import json
 import re
@@ -11,6 +18,7 @@ import httpx
 
 from .models import NativeCell, RuntimeCell
 from .transport import execute
+from .records import (RuntimeLock, NativeLock, NativeCellRecord, NativeContainer, NativeImage, NativeAttestation, Nofile, Ulimit, checked_record)
 
 NOFILE_LIMIT = 250000
 REGISTRY_LANGUAGES = {
@@ -59,14 +67,20 @@ IMAGE_FORMAT = (
 )
 
 
-def _read_registry(path):
+@overload
+def _read_registry(path: Path, *, python: Literal[True]) -> RuntimeLock: ...
+
+@overload
+def _read_registry(path: Path, *, python: Literal[False] = False) -> NativeLock: ...
+
+def _read_registry(path: Path, *, python: bool = False) -> RuntimeLock | NativeLock:
     data = json.loads(path.read_text())
     if path.parent.name != "python" and data.get("budget") != BUDGET:
         raise ValueError("native registry budget must enforce 2 CPUs, 3 GiB and 20 connections")
-    return data
+    return checked_record(data, RuntimeLock) if python else checked_record(data, NativeLock)
 
 
-def validate_native_registry_cell(data, registry):
+def validate_native_registry_cell(data: NativeCellRecord, registry: str) -> NativeCell:
     if data["language"] != REGISTRY_LANGUAGES.get(registry):
         raise ValueError("native registry language mismatch")
     if registry == "php-octane" and (
@@ -78,19 +92,19 @@ def validate_native_registry_cell(data, registry):
     return NativeCell(**data)
 
 
-def load_runtime_cell(cell_id, registry_root=Path("runtimes")):
+def load_runtime_cell(cell_id: str, registry_root: str | Path = Path("runtimes")) -> RuntimeCell | NativeCell:
     """Python selection is deliberately independent of unselected native registries."""
     root = Path(registry_root)
-    python = _read_registry(root / "python/lock.json")
-    for data in python["cells"]:
-        if data["id"] == cell_id:
-            return RuntimeCell(**data)
+    python = _read_registry(root / "python/lock.json", python=True)
+    for python_cell in python["cells"]:
+        if python_cell["id"] == cell_id:
+            return RuntimeCell(**python_cell)
     matches = []
     for language in LANGUAGES:
         path = root / language / "lock.json"
         if not path.exists():
             continue
-        raw = json.loads(path.read_text())
+        raw = checked_record(json.loads(path.read_text()), NativeLock)
         for data in raw["cells"]:
             if data["id"] == cell_id:
                 _read_registry(path)
@@ -100,9 +114,9 @@ def load_runtime_cell(cell_id, registry_root=Path("runtimes")):
     return matches[0]
 
 
-def load_runtime_cells(registry_root=Path("runtimes")):
+def load_runtime_cells(registry_root: str | Path = Path("runtimes")) -> list[RuntimeCell | NativeCell]:
     root = Path(registry_root)
-    cells = [RuntimeCell(**data) for data in _read_registry(root / "python/lock.json")["cells"]]
+    cells: list[RuntimeCell | NativeCell] = [RuntimeCell(**data) for data in _read_registry(root / "python/lock.json", python=True)["cells"]]
     for language in LANGUAGES:
         path = root / language / "lock.json"
         if not path.exists():
@@ -114,7 +128,7 @@ def load_runtime_cells(registry_root=Path("runtimes")):
     return cells
 
 
-def registry_metadata(cell):
+def registry_metadata(cell: NativeCell) -> dict[str, str]:
     directory = (
         "php-octane"
         if cell.language == "php" and cell.framework == "laravel-octane"
@@ -124,14 +138,14 @@ def registry_metadata(cell):
     return {"path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
 
 
-def expected_image_id(config, cell):
+def expected_image_id(config: ImageConfig, cell: NativeCell) -> str:
     value = config.get("expected_image_ids", {}).get(cell.id)
     if not isinstance(value, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", value):
         raise ValueError("native cell requires a verified expected_image_ids digest: " + cell.id)
     return value
 
 
-def validate_native_container(data, cell, run_id, image):
+def validate_native_container(data: NativeContainer, cell: NativeCell, run_id: str, image: str) -> NativeContainer:
     if (
         data.get("image") != image
         or data.get("running") is not True
@@ -158,29 +172,26 @@ def validate_native_container(data, cell, run_id, image):
     ):
         raise ValueError("native backend requires a read-only RDS CA mount")
     return {
-        k: data[k]
-        for k in (
-            "id",
-            "image",
-            "running",
-            "nano_cpus",
-            "memory",
-            "memory_swap",
-            "network_mode",
-            "run_id",
-            "cell_id",
-        )
+        "id": data["id"],
+        "image": data["image"],
+        "running": data["running"],
+        "nano_cpus": data["nano_cpus"],
+        "memory": data["memory"],
+        "memory_swap": data["memory_swap"],
+        "network_mode": data["network_mode"],
+        "run_id": data["run_id"],
+        "cell_id": data["cell_id"],
     }
 
 
-def native_image_metadata(data, cell, expected):
+def native_image_metadata(data: NativeImage, cell: NativeCell, expected: str) -> NativeImage:
     if (
         data.get("id") != expected
         or data.get("os") != "linux"
         or data.get("architecture") != "amd64"
     ):
         raise ValueError("native image identity/platform differs from the verified image")
-    wanted = {
+    wanted: dict[str, str | None] = {
         LABEL_PREFIX + field.replace("_", "-"): str(getattr(cell, field)) for field in LABEL_FIELDS
     }
     if any(data.get("labels", {}).get(key) != value for key, value in wanted.items()):
@@ -193,7 +204,7 @@ def native_image_metadata(data, cell, expected):
     }
 
 
-def wait_native_ready(base_url, timeout=120):
+def wait_native_ready(base_url: str, timeout: float = 120) -> None:
     deadline = time.monotonic() + timeout
     with httpx.Client(timeout=5) as client:
         while time.monotonic() < deadline:
@@ -207,7 +218,7 @@ def wait_native_ready(base_url, timeout=120):
     raise RuntimeError("native backend readiness did not become healthy")
 
 
-def validate_process_nofile(text):
+def validate_process_nofile(text: str) -> Nofile:
     matches = re.findall(r"Max open files\s+(\d+)\s+(\d+)\s+files", text)
     if not matches or any(
         (int(soft), int(hard)) != (NOFILE_LIMIT, NOFILE_LIMIT) for soft, hard in matches
@@ -216,7 +227,7 @@ def validate_process_nofile(text):
     return {"soft": NOFILE_LIMIT, "hard": NOFILE_LIMIT, "process_samples": len(matches)}
 
 
-def verify_runtime_nofile(backend, compose, env):
+def verify_runtime_nofile(backend: Mapping[str, str], compose: list[str], env: Mapping[str, object]) -> Nofile:
     ids = execute(backend, compose + ["ps", "--quiet"], env, timeout=30).stdout.split()
     if len(ids) != 1:
         raise ValueError("exactly one measured backend container required")
@@ -249,7 +260,7 @@ def verify_runtime_nofile(backend, compose, env):
     return validate_process_nofile(text)
 
 
-def native_preflight(backend, cell, compose, env, base_url, run_id, expected):
+def native_preflight(backend: Mapping[str, str], cell: NativeCell, compose: list[str], env: Mapping[str, object], base_url: str, run_id: str, expected: str) -> NativeAttestation:
     wait_native_ready(base_url)
     ids = execute(backend, compose + ["ps", "--quiet"], env, timeout=30).stdout.split()
     if len(ids) != 1:
@@ -259,7 +270,7 @@ def native_preflight(backend, cell, compose, env, base_url, run_id, expected):
             backend, ["docker", "inspect", "--format", CONTAINER_FORMAT, ids[0]], timeout=30
         ).stdout
     )
-    safe_container = validate_native_container(container, cell, run_id, expected)
+    safe_container = validate_native_container(checked_record(container, NativeContainer), cell, run_id, expected)
     process_limits = execute(
         backend,
         [
@@ -280,15 +291,15 @@ def native_preflight(backend, cell, compose, env, base_url, run_id, expected):
             timeout=30,
         ).stdout
     )
-    image = native_image_metadata(raw_image, cell, expected)
+    image = native_image_metadata(checked_record(raw_image, NativeImage), cell, expected)
     return {
-        "cell": asdict(cell),
+        "cell": checked_record(asdict(cell), NativeCellRecord),
         "container": safe_container,
         "image": image,
         "attestation": "verified image digest, locked topology, fresh container nonce and HTTP readiness",
     }
 
 
-def native_collector_hosts(backend, load):
+def native_collector_hosts(backend: Mapping[str, str], load: Mapping[str, str]) -> dict[str, Mapping[str, str]]:
     host = {key: value for key, value in backend.items() if key != "runtime_dir"}
     return {"backend": host, "generator": load}

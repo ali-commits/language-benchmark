@@ -9,9 +9,10 @@ from dataclasses import asdict
 from pathlib import Path
 
 from .models import RuntimeCell
+from .records import RuntimeLock
 
 
-def validate_runtime_lock(data: dict) -> dict:
+def validate_runtime_lock(data: RuntimeLock) -> RuntimeLock:
     if not re.fullmatch(r".+@sha256:[a-f0-9]{64}", data.get("base", "")):
         raise ValueError("base must be pinned by digest")
     if not data.get("runtimes"):
@@ -26,7 +27,7 @@ def validate_runtime_lock(data: dict) -> dict:
     return data
 
 
-def probe_cell(cell: RuntimeCell) -> dict:
+def probe_cell(cell: RuntimeCell) -> dict[str, object]:
     result = asdict(cell)
     reasons = list(cell.reasons)
     if platform.python_version() != cell.python:
