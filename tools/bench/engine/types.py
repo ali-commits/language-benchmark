@@ -37,7 +37,21 @@ class Telemetry(Model):
     host: Literal['required', 'optional', 'off'] = 'optional'
     container: Literal['required', 'optional', 'off'] = 'optional'
     database: Literal['required', 'optional', 'off'] = 'off'
-    interval: float = 1
+    interval: float = Field(default=1, gt=0)
+    generator: Literal['required', 'optional', 'off'] = 'required'
+    generator_cpu_max: float = Field(default=.98, gt=0, le=1)
+
+
+class Baseline(Model):
+    enabled: StrictBool = False
+    interval: float = Field(default=5, gt=0)
+    timeout: float = Field(default=120, gt=0)
+    consecutive_samples: StrictInt = Field(default=3, ge=1)
+    stopped_cpu_max: float = Field(default=.15, ge=0, le=1)
+    ready_cpu_max: float = Field(default=.20, ge=0, le=1)
+    stopped_memory_available: float = Field(default=1073741824, ge=0)
+    ready_memory_available: float = Field(default=536870912, ge=0)
+    allowed_containers: list[str] = Field(default_factory=list)
 
 
 class Environment(Model):
@@ -47,6 +61,7 @@ class Environment(Model):
     network: Network = Field(default_factory=Network)
     telemetry: Telemetry = Field(default_factory=Telemetry)
     database: dict[str, Any] | None = None
+    baseline: Baseline = Field(default_factory=Baseline)
 
 
 class Readiness(Model):
@@ -107,6 +122,10 @@ class Fixture(Model):
     prepare: Hook | None = None
     reset: Hook | None = None
     verify: Hook | None = None
+    dsn: SecretRef | None = None
+    manifest: Path | None = None
+    allowed_database: str | None = None
+    runtime_cell: str | None = None
 
 
 class Workload(Model):

@@ -369,7 +369,7 @@ def load_build_snapshot(directory: Path) -> BuildSnapshot:
     )
 
 
-def prepared_execution_identity(job, users, resolved_target: ResolvedTarget, prepared_workload):
+def prepared_execution_identity(job, users, resolved_target: ResolvedTarget, prepared_workload, *, generator_image_id=None):
     """Canonical identity from preparation receipts, independent of mutable source."""
     from .evidence import execution_identity
 
@@ -378,6 +378,10 @@ def prepared_execution_identity(job, users, resolved_target: ResolvedTarget, pre
         users,
         provenance={
             "image_id": resolved_target.image_id,
+            "generator_image_id": generator_image_id,
+            "generator_version": "grafana/k6:1.4.2",
+            "fixture_manifest_sha256": hashlib.sha256(job.workload.fixture.manifest.read_bytes()).hexdigest() if job.workload.fixture and job.workload.fixture.manifest else None,
+            "wrapper_sha256": {name: hashlib.sha256((Path(__file__).resolve().parents[3] / "benchmarks/k6/engine" / name).read_bytes()).hexdigest() for name in ("runner.js", "metrics.js")},
             "build_input_identity": resolved_target.build_snapshot.identity
             if resolved_target.build_snapshot
             else None,

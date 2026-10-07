@@ -21,38 +21,35 @@ const grace = config.gracefulRampDown === undefined ? 5 : config.gracefulRampDow
 const drain = config.drain === undefined ? 30 : config.drain;
 const interval = config.telemetryInterval === undefined ? 0.1 : config.telemetryInterval;
 if (![grace, drain, interval].every(Number.isFinite) || grace < 0 || drain < 0 || interval <= 0) throw new Error('invalid timing');
-const duration = seconds => `${Math.round(seconds * 1000)}ms`;
+const duration = seconds => {
+  if (Math.abs(seconds * 1000 - Math.round(seconds * 1000)) > 1e-7) throw new Error('durations require exact millisecond precision');
+  return `${Math.round(seconds * 1000)}ms`;
+};
 export const options = {
+  teardownTimeout: duration(total + 30),
   scenarios: {
     load: {executor: 'ramping-vus', exec: 'journey', startVUs: stages[0].from_users,
       stages: stages.map(stage => ({duration: duration(stage.duration), target: stage.to_users})),
       gracefulRampDown: duration(grace), gracefulStop: duration(drain)},
-    telemetry: {executor: 'constant-vus', exec: 'telemetry', vus: 1,
-      duration: duration(total + Math.max(drain, grace)), gracefulStop: '0s'},
   },
 };
 
-// Both scenarios start at offset zero. Scenario startTime is the same absolute
-// load origin, independent of init/setup wall time or per-VU iteration delays.
+// The single scenario owns all VU IDs. Native k6 `vus` gauge points (JSON
+// output, once per second) provide independent occupancy, including idle.
 function timestamp() { return (Date.now() - execution.scenario.startTime) / 1000; }
 let metadataSent = false;
-export function telemetry() {
-  const seconds = timestamp();
-  if (!metadataSent) {
+function metadata() {
+  if (execution.vu.idInTest === 1 && !metadataSent) {
     emit({type: 'metadata', version: 1, load_start_epoch_ms: execution.scenario.startTime,
       stages, graceful_ramp_down_seconds: grace, drain_seconds: drain,
-      telemetry_interval_seconds: interval, occupancy_excludes_monitor_vus: 1});
+      telemetry_interval_seconds: 1, occupancy_excludes_monitor_vus: 0,
+      occupancy_provider: 'k6_native_vus', observation_tail_seconds: 1});
     metadataSent = true;
   }
-  const stage = stageAt(stages, seconds);
-  const requested = stage ? stage.from_users + (stage.to_users - stage.from_users) * (seconds - stage.start_seconds) / stage.duration : 0;
-  sample('active_users', seconds, {scope: 'generator', kind: 'gauge', value: Math.max(0, execution.instance.vusActive - 1),
-    unit: 'count', max_gap_seconds: interval * 3, collection_interval: interval,
-    provider_fields: {stage: stage ? stage.id : 'drain', requested_users: requested}});
-  sleep(interval);
 }
 
 export function journey() {
+  metadata();
   const started = timestamp();
   const stage = stageAt(stages, started);
   // A gracefully draining VU may finish an existing journey, but never starts
@@ -88,4 +85,15 @@ export function journey() {
   try { workload(context); }
   catch (error) { emit(Object.assign({type: 'journey_error', timestamp: timestamp()}, identity)); }
   finally { emit(Object.assign({type: 'journey_end', timestamp: timestamp()}, identity)); }
+}
+
+// k6 can finish ramping-vus once the last active VU retires, before trailing
+// zero-user stages end. Keep the process alive for that declared observation
+// window. The native gauge reads actual zero active VUs during teardown.
+export function setup() {
+  return {observationDeadline: Date.now() + (total + 1) * 1000};
+}
+export function teardown(data) {
+  const remaining = (data.observationDeadline - Date.now()) / 1000;
+  if (remaining > 0) sleep(remaining);
 }

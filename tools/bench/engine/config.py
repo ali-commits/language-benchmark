@@ -63,7 +63,7 @@ def _normalize(value, base, key=''):
         return [_normalize(v, base, key) for v in value]
     if isinstance(value, float) and not math.isfinite(value):
         raise ConfigError('nonfinite number')
-    if key in {'script', 'context', 'dockerfile', 'identity_file', 'workdir', 'dependencies'} and isinstance(value, str):
+    if key in {'script', 'context', 'dockerfile', 'identity_file', 'workdir', 'dependencies', 'manifest'} and isinstance(value, str):
         path = (base / value).resolve()
         if key != 'workdir' and not path.exists():
             raise ConfigError(f'path does not exist: {path}')

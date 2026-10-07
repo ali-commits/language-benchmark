@@ -13,6 +13,7 @@ from urllib.request import urlopen
 import pytest
 
 from tools.bench.engine.config import load_config
+from tools.bench.engine.trial import parse_events
 from tools.bench.engine.types import Sample
 from tools.bench.engine.workloads import prepare_workload
 
@@ -99,18 +100,40 @@ def run_load(tmp_path, stages, *, delay=0.04, grace=0.2):
                 "run",
                 "--log-format",
                 "raw",
+                "--out",
+                "json=/dev/stdout",
                 "/scripts/runner.js",
             ],
             text=True,
             capture_output=True,
             timeout=45,
         )
-        assert result.returncode == 0, result.stdout + result.stderr
+        assert result.returncode == 0, result.stderr[-2500:]
         events = [
             json.loads(line.split("BENCH_EVENT ", 1)[1])
             for line in result.stderr.splitlines()
             if "BENCH_EVENT " in line
         ]
+        parsed = parse_events(result.stdout + result.stderr)
+        occupancy = [s for s in parsed.samples if s.metric == "active_users"]
+        for sample in occupancy:
+            stage = next(
+                (
+                    stage
+                    for stage in stages
+                    if stage["start_seconds"] <= sample.timestamp < stage["end_seconds"]
+                ),
+                None,
+            )
+            tagged = sample.model_copy(
+                update={
+                    "provider_fields": {
+                        **sample.provider_fields,
+                        "stage": stage["id"] if stage else "drain",
+                    }
+                }
+            )
+            events.append({"type": "sample", "sample": tagged.model_dump(mode="json")})
         assert events
         return events
     finally:
@@ -147,29 +170,36 @@ def test_continuous_stage_telemetry_and_raw_samples(tmp_path):
     stages = stages_of(
         [
             ("ramp", 0, 4, 1.0),
-            ("hold", 4, 4, 1.0),
+            ("hold", 4, 4, 2.0),
             ("reduce", 4, 2, 1.0),
-            ("recover", 2, 2, 1.0),
+            ("recover", 2, 2, 2.0),
             ("cool", 2, 0, 1.0),
-            ("idle", 0, 0, 0.5),
+            ("idle", 0, 0, 2.0),
         ]
     )
     events = run_load(tmp_path, stages)
     samples = [Sample.model_validate(e["sample"]) for e in events if e["type"] == "sample"]
     occupancy = [s for s in samples if s.metric == "active_users"]
-    assert {s.provider_fields["stage"] for s in occupancy} >= {s["id"] for s in stages}
+    assert {s.provider_fields["stage"] for s in occupancy} >= {"hold", "recover", "idle"}
+    assert all(s.provider_fields["provider"] == "k6_native_vus" for s in occupancy)
+    assert next(e for e in events if e["type"] == "metadata")["occupancy_excludes_monitor_vus"] == 0
     for name, users in [("hold", 4), ("recover", 2), ("idle", 0)]:
-        assert all(
-            s.value == users
+        selected = [
+            s
             for s in occupancy
             if s.provider_fields["stage"] == name
             and s.timestamp > next(x["start_seconds"] for x in stages if x["id"] == name) + 0.3
+        ]
+        assert selected, (
+            name,
+            [(s.timestamp, s.value, s.provider_fields["stage"]) for s in occupancy],
         )
+        assert all(s.value == users for s in selected)
     success = [s for s in samples if s.metric == "success"]
     assert success and all(s.denominator == 1 and s.numerator in (0, 1) for s in success)
     assert not any(s.provider_fields["start_stage"] == "idle" for s in success)
     assert not any(
-        s.timestamp > 5.2 for s in success
+        s.timestamp > 7.2 for s in success
     )  # Only real in-flight drain can cross into idle.
     assert len(success) == len([s for s in samples if s.metric == "latency"])
     starts = [e for e in events if e["type"] == "journey_start"]
@@ -179,7 +209,7 @@ def test_continuous_stage_telemetry_and_raw_samples(tmp_path):
 def test_boundary_completion_and_interrupted_operations(tmp_path):
     events = run_load(
         tmp_path,
-        stages_of([("hold", 2, 2, 0.4), ("reduce", 2, 0, 0.1), ("idle", 0, 0, 0.5)]),
+        stages_of([("hold", 2, 2, 0.4), ("reduce", 2, 0, 0.1), ("idle", 0, 0, 2.0)]),
         delay=0.65,
         grace=0.05,
     )
@@ -210,3 +240,8 @@ def test_timeout_attempt_retained_in_latency_denominator(tmp_path):
     assert len(success) == len(latency) == 1
     assert success[0].numerator == 0 and success[0].denominator == 1
     assert latency[0].includes_failures and latency[0].value >= 1900
+
+
+def test_submillisecond_stage_is_rejected_instead_of_rounded(tmp_path):
+    with pytest.raises(AssertionError, match="exact millisecond precision"):
+        run_load(tmp_path, stages_of([("hold", 1, 1, 0.0001)]))

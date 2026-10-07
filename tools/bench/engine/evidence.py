@@ -2,6 +2,7 @@
 import hashlib
 import json
 from pathlib import Path
+
 from .stages import resolve_stages
 
 
@@ -43,3 +44,43 @@ def decision_identity(job, objective):
     if objective != 'default' and objective not in job.objectives:
         raise ValueError(f'unknown objective: {objective}')
     return _digest({'objective':objective,'criteria':[c.model_dump(mode='json') for c in [*job.criteria,*job.objectives.get(objective,[])]], 'evaluation_stages':[s.id for s in job.stages if s.evaluate], 'confirmation':job.test.confirmation})
+
+
+def immutable_json(path: Path, value):
+    """Publish a complete artifact without replacing an existing artifact."""
+    import os
+    import tempfile
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix='.pending-', dir=path.parent)
+    try:
+        with os.fdopen(fd, 'w') as stream:
+            json.dump(value, stream, sort_keys=True, indent=2, allow_nan=False)
+            stream.write('\n')
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.link(temporary, path)
+        directory = os.open(path.parent, os.O_DIRECTORY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    finally:
+        os.unlink(temporary)
+
+
+class Journal:
+    """One immutable intent/completion file per transition; protected by trial lock."""
+    def __init__(self, directory: Path):
+        self.directory = directory / 'journal'
+        self.directory.mkdir(parents=True, exist_ok=True)
+
+    def entries(self):
+        return [json.loads(p.read_text()) for p in sorted(self.directory.glob('*.json'))]
+
+    def record(self, action, state, details=None):
+        import time
+        entries = self.entries()
+        value = {'sequence': len(entries), 'action': action, 'state': state,
+                 'epoch': time.time(), 'details': details or {}}
+        immutable_json(self.directory / f'{len(entries):06d}.json', value)
+        return value
