@@ -1,5 +1,7 @@
 # Reusable Benchmark Engine Implementation Plan
 
+**Execution status:** Completed, including the non-backend refactor and final independent review fixes. The original task checklists are retained as the approved plan; actual verification and limitations are recorded in [the acceptance record](../../verification/reusable-engine.md).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Let users compare arbitrary HTTP codebases using configurable stages, fixed-load measurements, metric-constrained capacity searches and editable, resumable queues.

@@ -1,6 +1,6 @@
 # Reusable benchmark engine and configurable queues
 
-Status: approved by Ali on 2026-10-07; implementation plan pending review.
+Status: implemented and verified after approval on 2026-10-07. See [the acceptance record](../../verification/reusable-engine.md) for results and platform limits.
 
 The public mental model is two modes: fixed-load measurements and metric-driven
 searches. Both share arbitrary stage strategies. Sweeps are fixed-load population
