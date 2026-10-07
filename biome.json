@@ -1,0 +1,18 @@
+{
+  "files": {
+    "includes": [
+      "benchmarks/k6/**/*.js",
+      "tools/**/*.js",
+      "tools/bench/templates/**/*.json",
+      "examples/**/*.js",
+      "examples/**/*.json",
+      "benchmarks/*.json",
+      "package.json",
+      "biome.json",
+      "tsconfig.json"
+    ]
+  },
+  "formatter": { "enabled": true, "indentStyle": "space", "indentWidth": 2, "lineWidth": 100 },
+  "linter": { "enabled": true, "rules": { "recommended": true } },
+  "javascript": { "globals": ["__ENV", "__VU", "__ITER", "open"] }
+}

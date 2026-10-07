@@ -1,0 +1,14 @@
+{
+  "name": "language-benchmark-dev",
+  "private": true,
+  "scripts": {
+    "typecheck": "tsc --project tsconfig.json",
+    "check": "biome check .",
+    "format": "biome format --write ."
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.15",
+    "@types/k6": "2.3.0",
+    "typescript": "7.0.2"
+  }
+}
