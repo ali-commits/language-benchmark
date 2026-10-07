@@ -389,3 +389,10 @@ def test_queued_nullable_metric_and_criterion_units_generate_report(tmp_path, un
     assert row["status"] == "unavailable"
     assert row["sum"] is None
     assert "requests" in output.read_text()
+
+
+def test_report_missing_image_receipt_is_unavailable(tmp_path):
+    output = write_queue_report(Store(tmp_path / "absent"), "q", tmp_path / "report")
+    report = json.loads(output.with_suffix(".json").read_text())
+    assert report["trials"][0]["image_id"] is None
+    assert report["trials"][0]["target_name"] is None

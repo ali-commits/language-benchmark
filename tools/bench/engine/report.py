@@ -17,7 +17,27 @@ from .types import Criterion, SampleScope, TrialEvidence
 Catalog = dict[tuple[SampleScope, str, str | None], set[str]]
 
 
+class TargetReceipt(TypedDict, total=False):
+    image: str
+
+
+class TargetAttribution(TypedDict):
+    target: int | None
+    target_name: str | None
+    image_id: str | None
+
+
+class ManifestJob(TypedDict, total=False):
+    target_name: str
+
+
+class PublicManifest(TypedDict, total=False):
+    image_id: str
+    job: ManifestJob
+
+
 class Expansion(TypedDict, total=False):
+    target_name: str
     workload: RawWorkload
     criteria: list[RawCriterion]
     objectives: dict[str, list[RawCriterion]]
@@ -48,6 +68,7 @@ class ReportSnapshot(TypedDict):
 
 
 class JobState(TypedDict, total=False):
+    prepared: dict[str, TargetReceipt]
     results: list[dict[str, object]]
     decisions: list[dict[str, object]]
 
@@ -67,6 +88,9 @@ class Window(TypedDict):
 
 
 class TrialReport(TypedDict, total=False):
+    target: int | None
+    target_name: str | None
+    image_id: str | None
     id: str
     job: str
     state: str
@@ -249,6 +273,26 @@ def _table(rows: Sequence[Mapping[str, object]]) -> str:
     )
 
 
+def _target_mapping(job: ReportJob, state: JobState) -> list[TargetAttribution]:
+    resolved = job.get("resolved", [])
+    if isinstance(resolved, str):
+        resolved = checked_record(json.loads(resolved), list[Expansion])
+    return [
+        {
+            "target": index,
+            "target_name": expansion.get("target_name"),
+            "image_id": state.get("prepared", {}).get(str(index), {}).get("image"),
+        }
+        for index, expansion in enumerate(resolved)
+    ]
+
+
+def _attribution(targets: list[TargetAttribution], index: object) -> TargetAttribution:
+    if isinstance(index, int) and 0 <= index < len(targets):
+        return targets[index].copy()
+    return {"target": None, "target_name": None, "image_id": None}
+
+
 def write_queue_report(store: ReportStore, queue: str, output: Path) -> Path:
     """Write report.html and report.json; never export config, paths or logs."""
     output = Path(output)
@@ -256,12 +300,19 @@ def write_queue_report(store: ReportStore, queue: str, output: Path) -> Path:
     destination.parent.mkdir(parents=True, exist_ok=True)
     snapshot = checked_record(store.snapshot(queue), ReportSnapshot)
     state = checked_record(store.controller_state(queue) or {}, ReportState)
+    mappings = {
+        j["id"]: _target_mapping(j, state.get("jobs", {}).get(j["id"], {}))
+        for j in snapshot["jobs"]
+    }
     report: QueueReport = {
         "version": 1,
         "queue": queue,
         "state": snapshot["queues"][0]["state"],
         "revision": snapshot["queues"][0]["revision"],
-        "jobs": [{"id": j["id"], "state": j["state"]} for j in snapshot["jobs"]],
+        "jobs": [
+            {"id": j["id"], "state": j["state"], "targets": mappings[j["id"]]}
+            for j in snapshot["jobs"]
+        ],
         "objectives": [],
         "decisions": [],
         "trials": [],
@@ -271,6 +322,7 @@ def write_queue_report(store: ReportStore, queue: str, output: Path) -> Path:
             report["objectives"].append(
                 {
                     "job": job,
+                    **_attribution(mappings.get(job, []), result.get("target")),
                     **{
                         k: v
                         for k, v in result.items()
@@ -297,6 +349,7 @@ def write_queue_report(store: ReportStore, queue: str, output: Path) -> Path:
             report["decisions"].append(
                 {
                     "job": job,
+                    **_attribution(mappings.get(job, []), decision.get("target")),
                     **{
                         k: v
                         for k, v in decision.items()
@@ -327,7 +380,27 @@ def write_queue_report(store: ReportStore, queue: str, output: Path) -> Path:
                 }
             ],
         }
+        decisions = state.get("jobs", {}).get(ref["job"], {}).get("decisions", [])
+        target_index = next(
+            (d.get("target") for d in decisions if d.get("trial_id") == ref["id"]), None
+        )
+        attribution = _attribution(mappings.get(ref["job"], []), target_index)
         path = Path(ref["path"])
+        # Trial image attribution requires its actual immutable preparation receipt.
+        attribution["image_id"] = None
+        manifest = path / "manifest.json"
+        if manifest.is_file():
+            try:
+                receipt = checked_record(json.loads(manifest.read_text()), PublicManifest)
+                attribution["image_id"] = receipt.get("image_id")
+                attribution["target_name"] = receipt.get("job", {}).get(
+                    "target_name", attribution["target_name"]
+                )
+            except (ValueError, TypeError):
+                pass
+        trial["target"] = attribution["target"]
+        trial["target_name"] = attribution["target_name"]
+        trial["image_id"] = attribution["image_id"]
         source = next(
             (p for p in (path / "result.json", path / "interrupted.json") if p.is_file()), None
         )
@@ -339,6 +412,7 @@ def write_queue_report(store: ReportStore, queue: str, output: Path) -> Path:
                 public_evidence = evidence.model_dump(
                     mode="json", exclude={"manifest_path", "samples_path"}
                 )
+                public_evidence.update(attribution)
                 for sample in public_evidence["samples"]:
                     sample.pop("provider_fields", None)
                 artifact_name = hashlib.sha256(ref["id"].encode()).hexdigest() + ".json"
