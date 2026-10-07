@@ -192,7 +192,8 @@ class TestPolicy(Model):
         if self.type == 'search':
             if not isinstance(self.users, SearchUsers) or self.limits is None:
                 raise ValueError('search requires users bounds and finite limits')
-            ceiling = self.users.max if isinstance(self.users.max, int) else self.limits.hard_users
+            ceilings = [v for v in (self.users.max, self.limits.hard_users) if isinstance(v, int)]
+            ceiling = min(ceilings) if ceilings else None
             if self.users.start < self.users.min or (ceiling is not None and (self.users.start > ceiling or self.users.min > ceiling)):
                 raise ValueError('search start/min outside ceilings')
         elif self.type == 'staged':

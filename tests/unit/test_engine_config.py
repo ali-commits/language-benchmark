@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -63,6 +64,9 @@ def test_secret_snapshot(tmp_path, monkeypatch):
     config = load_config(document(tmp_path, targets={'api': {'image': 'api:1', 'port': 8000, 'env': {'TOKEN': {'env': 'BENCH_TOKEN'}}}}))
     assert 'private-secret' not in config.model_dump_json()
     assert 'BENCH_TOKEN' in config.model_dump_json()
+    snapshot = json.dumps(config.public_snapshot())
+    assert 'private-secret' not in snapshot
+    assert 'BENCH_TOKEN' in snapshot
 
 
 def test_import_collision(tmp_path):
@@ -104,3 +108,35 @@ def test_fixed_cannot_use_search_strategy(tmp_path):
 def test_malformed_shapes_are_configuration_errors(tmp_path, updates):
     with pytest.raises(ConfigError):
         load_config(document(tmp_path, **updates))
+
+
+def test_shared_default_criteria_normalize_per_workload(tmp_path):
+    workloads = {name: {'adapter': 'k6', 'script': './api.js', 'metrics': {'latency': {'name': 'duration', 'type': 'trend', 'unit': unit}}} for name, unit in [('millis', 'ms'), ('seconds', 's')]}
+    defaults = {'workload': 'millis', 'environment': 'local', 'stages': [{'id': 'hold', 'from': 'target', 'to': 'target', 'duration': '1s', 'evaluate': True}], 'criteria': [{'metric': 'duration', 'statistic': 'p99', 'operator': '<=', 'value': '1s'}]}
+    jobs = [{'id': name, 'targets': ['api'], 'workload': name, 'test': {'type': 'fixed', 'users': 1}} for name in workloads]
+    resolved = resolve_jobs(load_config(document(tmp_path, workloads=workloads, defaults=defaults, jobs=jobs)))
+    assert [(j.criteria[0].value, j.criteria[0].unit) for j in resolved] == [(1000, 'ms'), (1, 's')]
+
+
+def test_overridden_defaults_still_normalize(tmp_path):
+    path = document(tmp_path)
+    data = yaml.safe_load(path.read_text())
+    data['defaults']['criteria'] = [{'metric': 'duration', 'statistic': 'p99', 'operator': '<=', 'value': '1s'}]
+    data['jobs'][0]['criteria'] = []
+    path.write_text(yaml.safe_dump(data))
+    config = load_config(path)
+    assert config.defaults.criteria[0].value == 1000
+    assert resolve_jobs(config)[0].criteria == []
+
+
+def test_numeric_max_also_enforces_hard_users(tmp_path):
+    jobs = [{'id': 'search', 'targets': ['api'], 'test': {'type': 'search', 'users': {'min': 1, 'start': 100, 'max': 1000}, 'limits': {'max_trials': 10, 'max_elapsed': '1h', 'hard_users': 10}}}]
+    with pytest.raises(ConfigError):
+        load_config(document(tmp_path, jobs=jobs))
+
+
+@pytest.mark.parametrize('version', ['true', '1.0'])
+def test_imported_version_is_exact_integer(tmp_path, version):
+    (tmp_path / 'defs.yaml').write_text(f'version: {version}\n')
+    with pytest.raises(ConfigError):
+        load_config(document(tmp_path, definitions=['defs.yaml']))

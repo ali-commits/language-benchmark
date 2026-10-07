@@ -1,4 +1,5 @@
 """Safe YAML loading, quantity normalization and explicit default resolution."""
+from copy import deepcopy
 import math
 import os
 import re
@@ -93,7 +94,7 @@ def _load_config(path: Path) -> BenchmarkConfig:
     data['definitions'] = [(path.parent / item).resolve() for item in imports]
     for imported in data['definitions']:
         definitions = _read(imported)
-        if set(definitions) - {'version', 'targets', 'workloads', 'environments'} or definitions.get('version') != 1:
+        if set(definitions) - {'version', 'targets', 'workloads', 'environments'} or type(definitions.get('version')) is not int or definitions['version'] != 1:
             raise ConfigError('definition files accept version, targets, workloads and environments only')
         for group in ('targets', 'workloads', 'environments'):
             for name, definition in definitions.get(group, {}).items():
@@ -101,8 +102,15 @@ def _load_config(path: Path) -> BenchmarkConfig:
                     raise ConfigError(f'conflicting imported definition: {group}.{name}')
                 data[group][name] = definition
     # Criteria need the selected workload's metric contract before model validation.
-    for job in data.get('jobs', []):
-        defaults = data.get('defaults', {})
+    defaults = data.get('defaults', {})
+    jobs = data.get('jobs', [])
+    original_criteria = deepcopy(defaults.get('criteria', []))
+    default_workload = defaults.get('workload') or next(
+        (job.get('workload') for job in jobs if isinstance(job, dict) and job.get('workload')), None)
+    default_criteria_job = {'workload': default_workload, 'criteria': deepcopy(original_criteria)}
+    for job in [*jobs, default_criteria_job]:
+        if 'criteria' not in job:
+            job['criteria'] = deepcopy(original_criteria)
         workload = data.get('workloads', {}).get(job.get('workload', defaults.get('workload')), {})
         metrics = {m['name']: m for m in workload.get('metrics', {}).values()}
         groups = [job.get('criteria', defaults.get('criteria', [])), *job.get('objectives', {}).values()]
@@ -129,6 +137,8 @@ def _load_config(path: Path) -> BenchmarkConfig:
                 criterion['unit'] = unit
                 if metric['type'] == 'rate' and not 0 < criterion['value'] <= 1:
                     raise ConfigError('rate criterion must be in (0, 1]')
+    if 'criteria' in defaults:
+        defaults['criteria'] = default_criteria_job['criteria']
     try:
         config = BenchmarkConfig.model_validate({**data, 'source': path})
         resolve_jobs(config)
