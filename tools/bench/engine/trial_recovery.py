@@ -14,11 +14,12 @@ from .types import Host
 from .workloads import HookReceipt, run_hook
 
 FixtureAction = Literal["prepare", "reset", "verify"]
-FixtureCallback = Callable[[TrialContext, FixtureAction], object]
+FixtureReceipt = FixtureManifest | HookReceipt | None
+FixtureCallback = Callable[[TrialContext, FixtureAction], FixtureReceipt]
 DockerFactory = Callable[[Host, dict[str, str]], OwnedDocker]
 
 
-def fixture(context: TrialContext, action: FixtureAction) -> FixtureManifest | HookReceipt | None:
+def fixture(context: TrialContext, action: FixtureAction) -> FixtureReceipt:
     fixture = context.job.workload.fixture
     if fixture and fixture.manifest:
         manifest = checked_record(json.loads((context.directory / "manifest.json").read_text()), Manifest)

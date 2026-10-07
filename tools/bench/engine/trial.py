@@ -26,7 +26,7 @@ from .trial_events import Events as Events
 from .trial_events import parse_events as parse_events
 from .trial_events import verify_occupancy as verify_occupancy
 from .trial_preparation import prepare_trial
-from .trial_recovery import FixtureAction, cleanup, fixture
+from .trial_recovery import FixtureAction, FixtureReceipt, cleanup, fixture
 from .types import Host, Sample, TrialEvidence
 from .workloads import transfer_tree
 
@@ -45,7 +45,7 @@ def trial_lock(directory: Path) -> Iterator[None]:
         yield
 
 
-def _fixture(context: TrialContext, action: FixtureAction) -> object:
+def _fixture(context: TrialContext, action: FixtureAction) -> FixtureReceipt:
     return fixture(context, action)
 
 

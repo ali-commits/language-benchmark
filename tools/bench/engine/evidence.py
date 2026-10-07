@@ -5,7 +5,7 @@ from collections.abc import Mapping
 from pathlib import Path
 
 from ..records import checked_record
-from .records import JournalEntry
+from .records import JournalEntry, PreparedProvenance
 from .stages import resolve_stages
 from .types import ResolvedJob
 
@@ -20,7 +20,7 @@ def _file_identity(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def execution_identity(job: ResolvedJob, users: int | None, *, provenance: Mapping[str, object] | None = None) -> str:
+def execution_identity(job: ResolvedJob, users: int | None, *, provenance: PreparedProvenance | None = None) -> str:
     payload=job.model_dump(mode='json',by_alias=True)
     for field in ('criteria','objectives','test','id'):
         payload.pop(field,None)

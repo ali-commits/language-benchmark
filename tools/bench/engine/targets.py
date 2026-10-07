@@ -295,9 +295,9 @@ def resolve_target(
                 execute_host(environment.backend, ["docker", "load", "--input", remote])
             finally:
                 execute_host(environment.backend, ["rm", "-f", "--", remote])
-            loaded = json.loads(
+            loaded = checked_record(json.loads(
                 execute_host(environment.backend, ["docker", "image", "inspect", image_id]).stdout
-            )[0]
+            ), list[DockerImage])[0]
             if loaded["Id"] != image_id:
                 raise ValueError("loaded image identity mismatch")
         finally:

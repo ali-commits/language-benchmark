@@ -173,3 +173,12 @@ class TrialManifest(Manifest):
     workload_identity: str
     wrapper_sha256: dict[str, str]
     colocated_generator: bool
+
+class PreparedProvenance(TypedDict, total=False):
+    image_id: str
+    generator_image_id: str | None
+    generator_version: str
+    fixture_manifest_sha256: str | None
+    wrapper_sha256: dict[str, str]
+    build_input_identity: str | None
+    workload_identity: str
