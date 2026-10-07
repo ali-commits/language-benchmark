@@ -213,3 +213,31 @@ def test_prepared_identity_survives_source_mutation_and_tracks_image(tmp_path):
     assert prepared_execution_identity(job, 10, resolved, prepared) == before
     changed = ResolvedTarget(target, target.image, "sha256:changed", ())
     assert prepared_execution_identity(job, 10, changed, prepared) != before
+
+
+def test_explicit_generator_url_precedes_host_derivation():
+    from tools.bench.engine.types import Network
+
+    env = Environment(
+        backend=Host(transport="local"),
+        generator=Host(transport="ssh", host="generator"),
+        network=Network(backend_url="http://reachable.example:8080/"),
+    )
+    endpoints = resolve_endpoints(Target(image="api"), env, host_port=12345)
+    assert endpoints.generator_url == "http://reachable.example:8080"
+    assert endpoints.readiness_url == "http://127.0.0.1:12345/health"
+
+
+def test_build_snapshot_detects_chmod_only_mutation(tmp_path):
+    from tools.bench.engine.targets import load_build_snapshot
+
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "Dockerfile").write_text("FROM scratch\nCOPY . /\n")
+    executable = source / "entrypoint"
+    executable.write_text("#!/bin/sh\nexit 0\n")
+    executable.chmod(0o755)
+    snapshot = snapshot_build(Build(context=source), tmp_path / "snapshot")
+    (snapshot.context / "entrypoint").chmod(0o644)
+    with pytest.raises(ValueError, match="checksum"):
+        load_build_snapshot(tmp_path / "snapshot")

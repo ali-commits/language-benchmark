@@ -175,6 +175,25 @@ def test_real_loopback_ssh_stages_verified_inputs_and_argv(tmp_path, monkeypatch
         fetched = tmp_path / "downloaded file.js"
         fetch_file(host, staged.script, fetched)
         assert fetched.read_bytes() == prepared.script.read_bytes()
+        from tools.bench.engine.targets import tree_checksums
+        from tools.bench.engine.workloads import transfer_tree
+
+        mode_source = tmp_path / "permission inputs"
+        mode_source.mkdir()
+        nested = mode_source / "readonly"
+        nested.mkdir()
+        executable = nested / "entrypoint"
+        executable.write_text("#!/bin/sh\nexit 0\n")
+        executable.chmod(0o755)
+        nested.chmod(0o555)
+        mode_destination = tmp_path / "permission remote"
+        transfer_tree(mode_source, host, str(mode_destination))
+        assert tree_checksums(mode_destination) == tree_checksums(mode_source)
+        assert (mode_destination / "readonly" / "entrypoint").stat().st_mode & 0o7777 == 0o755
+        assert (mode_destination / "readonly").stat().st_mode & 0o7777 == 0o555
+        # pytest must be able to remove these disposable inputs afterward.
+        nested.chmod(0o755)
+        (mode_destination / "readonly").chmod(0o755)
         with pytest.raises(RuntimeError):
             _ssh(
                 host,
@@ -204,3 +223,44 @@ def test_local_file_transfer_is_atomic_and_verified(tmp_path):
     assert destination.read_bytes() == b"input"
     with pytest.raises(ValueError):
         transfer_file(source, Host(transport="local"), str(destination))
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        'import/* comment */"https://example.com/x.js";',
+        'import /* comment */ ("./dep.js");',
+        'require/* comment */("./dep.js");',
+        'export/* comment */ * /* another */ from /* comment */ "https://example.com/x.js";',
+        'const x = `value ${import/*comment*/("./dep.js")}`;',
+    ],
+)
+def test_comment_separated_imports_fail_closed(tmp_path, text):
+    script = tmp_path / "main.js"
+    script.write_text(text)
+    with pytest.raises(ValueError):
+        prepare_workload(workload(script), tmp_path / "bundle")
+
+
+def test_lexer_preserves_strings_and_comments(tmp_path):
+    script = tmp_path / "main.js"
+    script.write_text(
+        '/* import("https://ignored.invalid/a.js") */\nconst a = \'import("https://ignored.invalid/b.js")\';\nconst b = `import("https://ignored.invalid/c.js")`;\nimport /* accepted comment */ "k6/http";\nexport default function() {}'
+    )
+    prepared = prepare_workload(workload(script), tmp_path / "bundle")
+    assert prepared.script.read_text() == script.read_text()
+
+
+def test_comment_separated_data_file_is_declared(tmp_path):
+    script = tmp_path / "main.js"
+    script.write_text('const x = open/* comment */("./undeclared.json");')
+    with pytest.raises(ValueError):
+        prepare_workload(workload(script), tmp_path / "bundle")
+
+
+@pytest.mark.parametrize("separator", ["\r", "\u2028", "\u2029"])
+def test_javascript_line_comment_terminators_cannot_hide_import(tmp_path, separator):
+    script = tmp_path / "main.js"
+    script.write_text("// harmless comment" + separator + 'import "https://example.com/module.js";')
+    with pytest.raises(ValueError):
+        prepare_workload(workload(script), tmp_path / "bundle")

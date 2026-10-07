@@ -4,7 +4,6 @@ import hashlib
 import io
 import json
 import os
-import re
 import shlex
 import shutil
 import subprocess
@@ -49,11 +48,143 @@ class HookReceipt:
     elapsed_seconds: float
 
 
-# Reproducible mode accepts only static ES-module imports. Dynamic import and
-# CommonJS are rejected rather than pretending to know their runtime dependencies.
-_IMPORT = re.compile(
-    r"\b(?:import\s*(?:[^;'\"]*?\s+from\s*)?|export\s+[^;'\"]*?\s+from\s*)['\"]([^'\"]+)['\"]"
-)
+def _js_tokens(text: str):
+    """Lex comments/strings/templates; reject ambiguous slash and escaped identifiers.
+
+    This intentionally is not a JavaScript parser. Regex literals and division
+    operators are unsupported to avoid lexical-goal ambiguity hiding imports.
+    Template substitutions are recursively scanned as executable code.
+    """
+    tokens = []
+    index = 0
+
+    def scan(*, template_expression=False):
+        nonlocal index
+        depth = 0
+        while index < len(text):
+            char = text[index]
+            if char.isspace():
+                index += 1
+                continue
+            if text.startswith("//", index):
+                index += 2
+                while index < len(text) and text[index] not in "\r\n\u2028\u2029":
+                    index += 1
+                continue
+            if text.startswith("/*", index):
+                end = text.find("*/", index + 2)
+                if end < 0:
+                    raise ValueError("unterminated workload comment")
+                index = end + 2
+                continue
+            if char == "/":
+                raise ValueError(
+                    "regex literals and slash operators unsupported in reproducible mode"
+                )
+            if char == "\\":
+                raise ValueError("escaped workload identifiers unsupported in reproducible mode")
+            if char in ("'", '"'):
+                quote = char
+                index += 1
+                begin = index
+                while index < len(text) and text[index] != quote:
+                    if text[index] == "\\":
+                        index += 2
+                    else:
+                        if text[index] in "\r\n":
+                            raise ValueError("unterminated workload string")
+                        index += 1
+                if index >= len(text):
+                    raise ValueError("unterminated workload string")
+                tokens.append(("string", text[begin:index]))
+                index += 1
+                continue
+            if char == "`":
+                index += 1
+                while index < len(text):
+                    if text[index] == "\\":
+                        index += 2
+                    elif text[index] == "`":
+                        index += 1
+                        tokens.append(("template", ""))
+                        break
+                    elif text.startswith("${", index):
+                        index += 2
+                        tokens.append(("punctuation", "("))
+                        scan(template_expression=True)
+                        tokens.append(("punctuation", ")"))
+                    else:
+                        index += 1
+                else:
+                    raise ValueError("unterminated workload template")
+                continue
+            if char.isalpha() or char in "_$":
+                begin = index
+                index += 1
+                while index < len(text) and (text[index].isalnum() or text[index] in "_$"):
+                    index += 1
+                tokens.append(("identifier", text[begin:index]))
+                continue
+            if char == "}":
+                if template_expression and depth == 0:
+                    index += 1
+                    return
+                depth -= 1
+            elif char == "{":
+                depth += 1
+            tokens.append(("punctuation", char))
+            index += 1
+        if template_expression:
+            raise ValueError("unterminated workload template expression")
+
+    scan()
+    return tokens
+
+
+def _source_references(text: str):
+    """Return static module/data references; unsupported import syntax fails closed."""
+    tokens = _js_tokens(text)
+    references = []
+    for index, (kind, value) in enumerate(tokens):
+        if kind != "identifier":
+            continue
+        following = tokens[index + 1 :]
+        if value == "require":
+            # Reject aliases too: const load = require could hide subsequent calls.
+            raise ValueError("CommonJS workload imports are not reproducible")
+        if value == "open" and following and following[0][1] == "(":
+            if (
+                len(following) < 3
+                or following[1][0] != "string"
+                or following[2][1] not in (",", ")")
+            ):
+                raise ValueError("workload data path must be a static string")
+            references.append(("data", following[1][1]))
+        if value not in ("import", "export"):
+            continue
+        if not following:
+            raise ValueError("incomplete workload import/export")
+        if value == "export" and following[0][1] not in ("*", "{"):
+            continue
+        if value == "import" and following[0][0] == "string":
+            references.append(("module", following[0][1]))
+            continue
+        if value == "import" and following[0][1] in ("(", "."):
+            raise ValueError("dynamic/meta workload imports are not reproducible")
+        # Binding lists may span lines/comments. Only a static from string is allowed.
+        found = False
+        for offset, token in enumerate(following):
+            if token[1] in (";", "import", "export"):
+                break
+            if token == ("identifier", "from"):
+                if offset + 1 >= len(following) or following[offset + 1][0] != "string":
+                    raise ValueError("workload import path must be a static string")
+                references.append(("module", following[offset + 1][1]))
+                found = True
+                break
+        if value == "import" and not found:
+            raise ValueError("unsupported workload import syntax")
+    return references
 
 
 def prepare_workload(workload: Workload, destination: Path) -> PreparedWorkload:
@@ -77,30 +208,20 @@ def prepare_workload(workload: Workload, destination: Path) -> PreparedWorkload:
     for name, path in declared.items():
         if path.suffix not in (".js", ".mjs", ".cjs", ".ts", ".jsx", ".tsx"):
             continue
-        text = path.read_text()
-        if re.search(r"\bimport\s*\(|\brequire\s*\(", text):
-            raise ValueError("dynamic workload imports are not reproducible")
-        for match in _IMPORT.finditer(text):
-            dependency = match.group(1)
-            if dependency == "k6" or dependency.startswith("k6/"):
+        for reference_kind, dependency in _source_references(path.read_text()):
+            if "\\" in dependency:
+                raise ValueError("escaped workload reference unsupported in reproducible mode")
+            if reference_kind == "module" and (dependency == "k6" or dependency.startswith("k6/")):
                 continue
-            if not dependency.startswith("./") and not dependency.startswith("../"):
+            if reference_kind == "module" and not dependency.startswith(("./", "../")):
                 raise ValueError("remote or package workload imports must be bundled locally")
             resolved = (path.parent / dependency).resolve()
             try:
                 relative = resolved.relative_to(root).as_posix()
             except ValueError:
-                raise ValueError("workload import escapes source root") from None
+                raise ValueError("workload reference escapes source root") from None
             if relative not in declared:
-                raise ValueError("workload import is undeclared")
-        for match in re.finditer(r"\bopen\s*\(\s*([\'\"])(.*?)\1", text):
-            resolved = (path.parent / match.group(2)).resolve()
-            try:
-                relative = resolved.relative_to(root).as_posix()
-            except ValueError:
-                raise ValueError("workload data escapes source root") from None
-            if relative not in declared:
-                raise ValueError("workload data is undeclared")
+                raise ValueError("workload reference is undeclared")
     destination.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="bench-workload-", dir=destination.parent) as temporary:
         bundle = Path(temporary) / "bundle"
@@ -115,11 +236,11 @@ def prepare_workload(workload: Workload, destination: Path) -> PreparedWorkload:
     return PreparedWorkload(destination, destination / workload.script.name, checksums, identity)
 
 
-_TRANSFER_TREE = """import hashlib,json,os,pathlib,shutil,sys,tarfile,tempfile
+_TRANSFER_TREE = """import hashlib,json,os,pathlib,shutil,stat,sys,tarfile,tempfile
 p=json.loads(sys.argv[1]); dest=pathlib.Path(p['destination']);dest.parent.mkdir(parents=True,exist_ok=True)
 if dest.exists(): raise RuntimeError('destination already exists')
 with tempfile.TemporaryDirectory(prefix='.bench-transfer-',dir=dest.parent) as temp:
- root=pathlib.Path(temp)/'inputs';root.mkdir()
+ root=pathlib.Path(temp)/'inputs';root.mkdir();modes={}
  with tarfile.open(fileobj=sys.stdin.buffer,mode='r|') as archive:
   for m in archive:
    member=pathlib.PurePosixPath(m.name)
@@ -132,10 +253,16 @@ with tempfile.TemporaryDirectory(prefix='.bench-transfer-',dir=dest.parent) as t
     (target.parent/link).resolve().relative_to(root.resolve())
    if sys.version_info >= (3,12): archive.extract(m,root,filter='data')
    else: archive.extract(m,root)
+   if not m.issym(): modes[target]=m.mode & 0o7777
+ for target,mode in sorted(modes.items(),key=lambda item:len(item[0].parts),reverse=True): os.chmod(target,mode)
  actual={}
  for f in sorted(root.rglob('*')):
-  if f.is_symlink(): actual[f.relative_to(root).as_posix()]=hashlib.sha256(('symlink:'+os.readlink(f)).encode()).hexdigest()
-  elif f.is_file(): actual[f.relative_to(root).as_posix()]=hashlib.sha256(f.read_bytes()).hexdigest()
+  mode=stat.S_IMODE(f.lstat().st_mode)
+  if f.is_symlink(): content=('symlink:'+str(mode)+':'+os.readlink(f)).encode()
+  elif f.is_file(): content=('file:'+str(mode)+':').encode()+f.read_bytes()
+  elif f.is_dir(): content=('directory:'+str(mode)+':').encode()
+  else: raise RuntimeError('unsupported input type')
+  actual[f.relative_to(root).as_posix()]=hashlib.sha256(content).hexdigest()
  if actual != p['checksums']: raise RuntimeError('transfer checksum mismatch')
  os.rename(root,dest)
 """

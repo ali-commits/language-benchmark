@@ -5,6 +5,7 @@ import json
 import os
 import shlex
 import shutil
+import stat
 import subprocess
 import tempfile
 import time
@@ -103,21 +104,23 @@ def execute_host(host: Host, argv: list[str], *, env=None, timeout=1800):
 
 
 def tree_checksums(root: Path):
+    """Bind Docker-relevant input type, POSIX mode, content and symlink target."""
     result = {}
     for path in sorted(root.rglob("*")):
+        mode = stat.S_IMODE(path.lstat().st_mode)
         if path.is_symlink():
-            # Symlink targets are build inputs too; reject links escaping the snapshot.
             try:
                 path.resolve().relative_to(root.resolve())
             except ValueError:
                 raise ValueError("input symlink escapes bundle") from None
-            result[path.relative_to(root).as_posix()] = hashlib.sha256(
-                ("symlink:" + os.readlink(path)).encode()
-            ).hexdigest()
+            content = ("symlink:" + str(mode) + ":" + os.readlink(path)).encode()
         elif path.is_file():
-            result[path.relative_to(root).as_posix()] = hashlib.sha256(
-                path.read_bytes()
-            ).hexdigest()
+            content = ("file:" + str(mode) + ":").encode() + path.read_bytes()
+        elif path.is_dir():
+            content = ("directory:" + str(mode) + ":").encode()
+        else:
+            raise ValueError("unsupported input file type")
+        result[path.relative_to(root).as_posix()] = hashlib.sha256(content).hexdigest()
     return result
 
 
@@ -288,15 +291,17 @@ def resolve_target(
 def resolve_endpoints(
     target: Target, environment: Environment, *, host_port: int, generator_host: str | None = None
 ):
-    host = generator_host
-    if host is None:
-        if environment.generator == environment.backend:
-            host = "127.0.0.1"
-        elif environment.backend.transport == "ssh":
-            host = environment.backend.host
-        else:
-            raise ValueError("generator-reachable backend address required")
-    generator = environment.network.backend_url or f"http://{host}:{host_port}"
+    generator = environment.network.backend_url
+    if generator is None:
+        host = generator_host
+        if host is None:
+            if environment.generator == environment.backend:
+                host = "127.0.0.1"
+            elif environment.backend.transport == "ssh":
+                host = environment.backend.host
+            else:
+                raise ValueError("generator-reachable backend address required")
+        generator = f"http://{host}:{host_port}"
     return Endpoints(f"http://127.0.0.1:{host_port}{target.readiness.path}", generator.rstrip("/"))
 
 
