@@ -312,3 +312,16 @@ def test_opaque_parameters_still_reject_nonfinite_json(tmp_path, invalid):
     path.write_text(yaml.safe_dump(data))
     with pytest.raises(ConfigError):
         load_config(path)
+
+
+@pytest.mark.parametrize("unit_fields", [{}, {"unit": None}])
+def test_metric_unit_may_be_omitted_or_explicitly_null(tmp_path, unit_fields):
+    path = document(tmp_path)
+    data = yaml.safe_load(path.read_text())
+    data["workloads"]["http"]["metrics"] = {
+        "requests": {"name": "requests", "type": "counter", **unit_fields}
+    }
+    path.write_text(yaml.safe_dump(data))
+    metric = load_config(path).workloads["http"].metrics["requests"]
+    assert metric.unit is None
+    assert metric.model_dump(mode="json")["unit"] is None

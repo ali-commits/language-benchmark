@@ -153,7 +153,7 @@ class Manifest(TypedDict, total=False):
 class RawMetric(TypedDict, total=False):
     name: str
     type: str
-    unit: str
+    unit: str | None
 
 
 class RawCriterion(TypedDict, total=False):
@@ -161,7 +161,7 @@ class RawCriterion(TypedDict, total=False):
     scope: str
     statistic: str
     value: str | int | float
-    unit: str
+    unit: str | None
 
 
 class RawWorkload(TypedDict, total=False):

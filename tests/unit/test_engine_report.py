@@ -348,3 +348,44 @@ def test_missing_artifact_still_shows_declared_metric_unavailable(tmp_path):
     assert row["rate"] is None
     assert row["attempted_rps"] is None
     assert "success" in output.read_text()
+
+
+@pytest.mark.parametrize("unit_fields", [{}, {"unit": None}])
+def test_queued_nullable_metric_and_criterion_units_generate_report(tmp_path, unit_fields):
+    from pathlib import Path
+
+    from tools.bench.engine.config import load_config
+    from tools.bench.engine.types import Criterion, Metric, Target
+    from tools.bench.queue.store import QueueStore
+
+    config = load_config(Path("examples/http/queue.yaml"))
+    metric = Metric(name="requests", type="counter", **unit_fields)
+    criterion = Criterion(metric="requests", statistic="sum", operator=">=", value=0.0)
+    config = config.model_copy(
+        update={
+            "targets": {"http": Target(image="example:1")},
+            "workloads": {
+                "http": config.workloads["http"].model_copy(
+                    update={"metrics": {"requests": metric}}
+                )
+            },
+            "jobs": [config.jobs[0].model_copy(update={"criteria": [criterion]})],
+        }
+    )
+    store = QueueStore(tmp_path / "queue.db")
+    store.register(config)
+    owner = "nullable-unit-test"
+    claimed = store.claim_next(config.name, owner)
+    assert claimed is not None
+    store.record_trial(config.name, claimed.job_id, owner, "trial", tmp_path / "absent")
+    resolved = json.loads(store.snapshot(config.name)["jobs"][0]["resolved"])[0]
+    assert resolved["workload"]["metrics"]["requests"]["unit"] is None
+    assert resolved["criteria"][0]["unit"] is None
+
+    output = write_queue_report(store, config.name, tmp_path / "report")
+    trial = json.loads(output.with_suffix(".json").read_text())["trials"][0]
+    row = next(row for row in trial["windows"][0]["metrics"] if row["metric"] == "requests")
+    assert row["unit"] is None
+    assert row["status"] == "unavailable"
+    assert row["sum"] is None
+    assert "requests" in output.read_text()
