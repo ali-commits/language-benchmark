@@ -67,3 +67,35 @@ def test_other_container_blocks_even_when_cpu_idle(tmp_path):
             sleep=lambda s: clock.__setitem__(0, clock[0] + s),
             monotonic=lambda: clock[0],
         )
+
+
+def test_baseline_detects_leftover_octane_workers_but_allows_current_container(tmp_path):
+    import os
+    import subprocess
+    import sys
+
+    from bench.baseline import HOST_PROBE
+
+    root = tmp_path / "proc"
+    root.mkdir()
+    (root / "stat").write_text("cpu 0 0 0 100 0 0 0 0\n")
+    (root / "meminfo").write_text("MemAvailable: 3000000 kB\n")
+    for idx, name in enumerate(["php", "rr", "frankenphp"], 900001):
+        p = root / str(idx)
+        p.mkdir()
+        (p / "comm").write_text(name)
+        (p / "stat").write_text(str(idx) + " (" + name + ") S 0")
+        (p / "cgroup").write_text("0::/system.slice/docker-current-api.scope")
+    script = HOST_PROBE.replace("'/proc'", repr(str(root)))
+
+    def probe(ids):
+        return json.loads(
+            subprocess.check_output(
+                [sys.executable, "-c", script],
+                env={**os.environ, "BASELINE_ALLOWED_IDS": json.dumps(ids)},
+                text=True,
+            )
+        )
+
+    assert {p["name"] for p in probe([])["unexpected_jobs"]} == {"php", "rr", "frankenphp"}
+    assert not probe(["current-api"])["unexpected_jobs"]

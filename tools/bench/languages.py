@@ -12,9 +12,9 @@ from pathlib import Path
 import httpx
 
 from .manifest import atomic_json
-from .models import NativeCell
+from .native_runtime import BUDGET, REGISTRY_LANGUAGES, validate_native_registry_cell
 
-LANGUAGES = ("java", "php", "go", "rust", "node", "bun", "csharp")
+LANGUAGES = tuple(REGISTRY_LANGUAGES)
 SECRET = "test-secret-that-has-at-least-32-bytes"
 
 
@@ -26,12 +26,12 @@ def cells(selected):
     result = []
     for language in selected:
         lock = json.loads((Path("runtimes") / language / "lock.json").read_text())
+        if lock.get("budget") != BUDGET:
+            raise ValueError("uncontrolled native registry budget")
         if len(lock["cells"]) != 1:
             raise ValueError("exactly one cell per language/framework required")
         cell = lock["cells"][0]
-        validated = NativeCell(**cell)
-        if validated.language != language:
-            raise ValueError("native registry language mismatch")
+        validate_native_registry_cell(cell, language)
         if cell["workers"] * cell["connections_per_worker"] != 20:
             raise ValueError("aggregate database budget must be20")
         result.append(cell)
@@ -335,13 +335,17 @@ def verify(selected, output, db_port=55440, api_port=58040, tls=True):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=["list", "build", "verify"])
-    parser.add_argument("--language", choices=LANGUAGES, action="append")
+    parser.add_argument(
+        "--language", "--languages", dest="language", choices=LANGUAGES, action="append"
+    )
     parser.add_argument("--output", type=Path, default=Path("artifacts/language-verification"))
     parser.add_argument("--db-port", type=int, default=55440)
     parser.add_argument("--api-port", type=int, default=58040)
     parser.add_argument("--no-tls", action="store_true")
     args = parser.parse_args()
-    selected = args.language or LANGUAGES
+    selected = args.language or tuple(
+        name for name in LANGUAGES if (Path("runtimes") / name / "lock.json").exists()
+    )
     if args.command == "list":
         print(json.dumps(cells(selected), indent=2))
     elif args.command == "build":

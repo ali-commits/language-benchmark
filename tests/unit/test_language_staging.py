@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from bench.languages import LANGUAGES, cells
+from bench.native_runtime import REGISTRY_LANGUAGES
 
 
 def test_each_requested_pair_has_one_cell_and_controlled_connection_budget():
@@ -11,7 +12,7 @@ def test_each_requested_pair_has_one_cell_and_controlled_connection_budget():
     ]
     rows = cells(registered)
     assert len(rows) == len(registered) and len({r["id"] for r in rows}) == len(registered)
-    assert {r["language"] for r in rows} == set(registered)
+    assert {r["language"] for r in rows} == {REGISTRY_LANGUAGES[name] for name in registered}
     assert all(r["workers"] * r["connections_per_worker"] == 20 for r in rows)
     assert all(Path(r["dockerfile"]).is_file() for r in rows)
     node = next(r for r in rows if r["language"] == "node")

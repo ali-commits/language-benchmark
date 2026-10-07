@@ -13,7 +13,17 @@ from .models import NativeCell, RuntimeCell
 from .transport import execute
 
 NOFILE_LIMIT = 250000
-LANGUAGES = ("java", "php", "go", "rust", "node", "bun", "csharp")
+REGISTRY_LANGUAGES = {
+    "java": "java",
+    "php": "php",
+    "go": "go",
+    "rust": "rust",
+    "node": "node",
+    "bun": "bun",
+    "csharp": "csharp",
+    "php-octane": "php",
+}
+LANGUAGES = tuple(REGISTRY_LANGUAGES)
 LABEL_PREFIX = "org.language-benchmark."
 BUDGET = {"cpus": 2, "memory_bytes": 3221225472, "swap_bytes": 0, "database_connections": 20}
 LABEL_FIELDS = (
@@ -56,6 +66,18 @@ def _read_registry(path):
     return data
 
 
+def validate_native_registry_cell(data, registry):
+    if data["language"] != REGISTRY_LANGUAGES.get(registry):
+        raise ValueError("native registry language mismatch")
+    if registry == "php-octane" and (
+        data["id"] != "php-laravel-octane" or data["framework"] != "laravel-octane"
+    ):
+        raise ValueError("Octane registry requires its explicit framework identity")
+    if registry == "php" and data["framework"] != "laravel":
+        raise ValueError("baseline PHP registry must remain Laravel FPM")
+    return NativeCell(**data)
+
+
 def load_runtime_cell(cell_id, registry_root=Path("runtimes")):
     """Python selection is deliberately independent of unselected native registries."""
     root = Path(registry_root)
@@ -72,9 +94,7 @@ def load_runtime_cell(cell_id, registry_root=Path("runtimes")):
         for data in raw["cells"]:
             if data["id"] == cell_id:
                 _read_registry(path)
-                if data["language"] != language:
-                    raise ValueError("native registry language mismatch")
-                matches.append(NativeCell(**data))
+                matches.append(validate_native_registry_cell(data, language))
     if len(matches) != 1:
         raise ValueError("unknown or ambiguous runtime cell: " + cell_id)
     return matches[0]
@@ -88,16 +108,19 @@ def load_runtime_cells(registry_root=Path("runtimes")):
         if not path.exists():
             continue
         for data in _read_registry(path)["cells"]:
-            if data["language"] != language:
-                raise ValueError("native registry language mismatch")
-            cells.append(NativeCell(**data))
+            cells.append(validate_native_registry_cell(data, language))
     if len({cell.id for cell in cells}) != len(cells):
         raise ValueError("runtime cell identifiers must be unique")
     return cells
 
 
 def registry_metadata(cell):
-    path = Path("runtimes") / cell.language / "lock.json"
+    directory = (
+        "php-octane"
+        if cell.language == "php" and cell.framework == "laravel-octane"
+        else cell.language
+    )
+    path = Path("runtimes") / directory / "lock.json"
     return {"path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
 
 

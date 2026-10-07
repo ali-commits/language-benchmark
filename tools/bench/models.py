@@ -102,6 +102,10 @@ class NativeCell:
         if self.language not in expected:
             raise ValueError("unknown native language")
         framework, workers, connections = expected[self.language]
+        if self.language == "php" and self.framework == "laravel-octane":
+            if self.id != "php-laravel-octane":
+                raise ValueError("uncontrolled native Octane identity")
+            framework = "laravel-octane"
         if (
             self.framework != framework
             or type(self.workers) is not int

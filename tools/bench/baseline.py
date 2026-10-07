@@ -8,7 +8,7 @@ from .transport import execute
 
 HOST_PROBE = r"""import json,os,pathlib,re,time
 allowed=json.loads(os.environ.get("BASELINE_ALLOWED_IDS","[]"));blocked=[]
-servers={"java","node","bun","nginx","social-api","dotnet","k6","uvicorn","gunicorn"}
+servers={"java","node","bun","nginx","social-api","dotnet","php","rr","frankenphp","k6","uvicorn","gunicorn"}
 builds={"go","cargo","rustc","gcc","g++","cc","c++","clang","make","cmake","mvn","gradle","msbuild"}
 for p in pathlib.Path('/proc').glob('[0-9]*'):
  try:
