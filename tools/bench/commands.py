@@ -18,6 +18,13 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps([j.model_dump(mode='json', by_alias=True) for j in resolve_jobs(config)], indent=2))
         else:
             print(f'Valid configuration: {config.name} ({len(config.jobs)} jobs)')
+            from .engine.stages import fixed_populations, resolve_stages
+            for job in resolve_jobs(config):
+                populations = fixed_populations(job) if job.test.type == 'fixed' else (job.test.users.start,)
+                for users in populations:
+                    print(f'  {job.id}/{job.target_name} users={users}')
+                    for stage in resolve_stages(job, users):
+                        print(f'    {stage.id}: {stage.from_users} -> {stage.to_users} ({stage.duration:g}s)')
         return 0
     except ConfigError as exc:
         print(f'Invalid configuration: {exc}', file=__import__('sys').stderr)

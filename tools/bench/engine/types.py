@@ -215,13 +215,28 @@ class TestPolicy(Model):
         return self
 
 
+class OccupancyTolerance(Model):
+    fraction: float = Field(default=.05, ge=0, le=1)
+    grace: float = Field(default=0, ge=0)
+
+
+class ResolvedStage(Model):
+    id: str
+    from_users: StrictInt = Field(ge=0)
+    to_users: StrictInt = Field(ge=0)
+    duration: float = Field(gt=0)
+    evaluate: StrictBool
+    start_seconds: float = Field(ge=0)
+    end_seconds: float = Field(gt=0)
+
+
 class Defaults(Model):
     environment: str | None = None
     workload: str | None = None
     stages: list[Stage] = Field(default_factory=list)
     criteria: list[Criterion] = Field(default_factory=list)
     drain: float = 30
-    hold_tolerance: float = Field(default=.05, ge=0, le=1)
+    hold_tolerance: OccupancyTolerance = Field(default_factory=OccupancyTolerance)
 
 
 class Job(Model):
@@ -234,7 +249,7 @@ class Job(Model):
     criteria: list[Criterion] | None = None
     objectives: dict[str, list[Criterion]] = Field(default_factory=dict)
     drain: float | None = None
-    hold_tolerance: float | None = Field(default=None, ge=0, le=1)
+    hold_tolerance: OccupancyTolerance | None = None
 
 
 class BenchmarkConfig(Model):
@@ -265,4 +280,4 @@ class ResolvedJob(Model):
     criteria: list[Criterion]
     objectives: dict[str, list[Criterion]] = Field(default_factory=dict)
     drain: float = 30
-    hold_tolerance: float = .05
+    hold_tolerance: OccupancyTolerance = Field(default_factory=OccupancyTolerance)

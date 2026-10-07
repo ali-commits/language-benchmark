@@ -53,6 +53,8 @@ def parse_quantity(value, unit):
 
 def _normalize(value, base, key=''):
     if isinstance(value, dict):
+        if key == 'hold_tolerance' and 'fraction' in value:
+            value = {**value, 'fraction': parse_quantity(value['fraction'], 'fraction')}
         if set(value) == {'env'}:
             if not isinstance(value['env'], str) or value['env'] not in os.environ:
                 raise ConfigError(f'missing environment reference: {value["env"]!r}')
@@ -66,8 +68,10 @@ def _normalize(value, base, key=''):
         if key != 'workdir' and not path.exists():
             raise ConfigError(f'path does not exist: {path}')
         return path
-    if key in {'duration', 'timeout', 'interval', 'drain', 'max_elapsed'}:
+    if key in {'duration', 'timeout', 'interval', 'drain', 'max_elapsed', 'grace'}:
         return parse_quantity(value, 'seconds')
+    if key == 'hold_tolerance' and isinstance(value, (int, float)):
+        return {'fraction': parse_quantity(value, 'fraction')}
     if key in {'memory', 'swap'}:
         return parse_quantity(value, 'bytes')
     return value
@@ -178,6 +182,12 @@ def resolve_jobs(config: BenchmarkConfig) -> list[ResolvedJob]:
                 test=job.test, stages=stages, criteria=criteria, objectives=job.objectives,
                 drain=job.drain if job.drain is not None else config.defaults.drain,
                 hold_tolerance=job.hold_tolerance if job.hold_tolerance is not None else config.defaults.hold_tolerance))
+    from .stages import validate_stages
+    for resolved in result:
+        try:
+            validate_stages(resolved)
+        except ValueError as exc:
+            raise ConfigError(f"job {resolved.id}: {exc}") from exc
     return result
 
 
