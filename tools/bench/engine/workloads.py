@@ -48,142 +48,68 @@ class HookReceipt:
     elapsed_seconds: float
 
 
-def _js_tokens(text: str):
-    """Lex comments/strings/templates; reject ambiguous slash and escaped identifiers.
+def _source_references(text: str, suffix: str = ".js"):
+    """Inspect maintained syntax trees; only declared static imports/data are allowed."""
+    import tree_sitter_javascript
+    import tree_sitter_typescript
+    from tree_sitter import Language, Parser
 
-    This intentionally is not a JavaScript parser. Regex literals and division
-    operators are unsupported to avoid lexical-goal ambiguity hiding imports.
-    Template substitutions are recursively scanned as executable code.
-    """
-    tokens = []
-    index = 0
-
-    def scan(*, template_expression=False):
-        nonlocal index
-        depth = 0
-        while index < len(text):
-            char = text[index]
-            if char.isspace():
-                index += 1
-                continue
-            if text.startswith("//", index):
-                index += 2
-                while index < len(text) and text[index] not in "\r\n\u2028\u2029":
-                    index += 1
-                continue
-            if text.startswith("/*", index):
-                end = text.find("*/", index + 2)
-                if end < 0:
-                    raise ValueError("unterminated workload comment")
-                index = end + 2
-                continue
-            if char == "/":
-                raise ValueError(
-                    "regex literals and slash operators unsupported in reproducible mode"
-                )
-            if char == "\\":
-                raise ValueError("escaped workload identifiers unsupported in reproducible mode")
-            if char in ("'", '"'):
-                quote = char
-                index += 1
-                begin = index
-                while index < len(text) and text[index] != quote:
-                    if text[index] == "\\":
-                        index += 2
-                    else:
-                        if text[index] in "\r\n":
-                            raise ValueError("unterminated workload string")
-                        index += 1
-                if index >= len(text):
-                    raise ValueError("unterminated workload string")
-                tokens.append(("string", text[begin:index]))
-                index += 1
-                continue
-            if char == "`":
-                index += 1
-                while index < len(text):
-                    if text[index] == "\\":
-                        index += 2
-                    elif text[index] == "`":
-                        index += 1
-                        tokens.append(("template", ""))
-                        break
-                    elif text.startswith("${", index):
-                        index += 2
-                        tokens.append(("punctuation", "("))
-                        scan(template_expression=True)
-                        tokens.append(("punctuation", ")"))
-                    else:
-                        index += 1
-                else:
-                    raise ValueError("unterminated workload template")
-                continue
-            if char.isalpha() or char in "_$":
-                begin = index
-                index += 1
-                while index < len(text) and (text[index].isalnum() or text[index] in "_$"):
-                    index += 1
-                tokens.append(("identifier", text[begin:index]))
-                continue
-            if char == "}":
-                if template_expression and depth == 0:
-                    index += 1
-                    return
-                depth -= 1
-            elif char == "{":
-                depth += 1
-            tokens.append(("punctuation", char))
-            index += 1
-        if template_expression:
-            raise ValueError("unterminated workload template expression")
-
-    scan()
-    return tokens
-
-
-def _source_references(text: str):
-    """Return static module/data references; unsupported import syntax fails closed."""
-    tokens = _js_tokens(text)
+    if suffix == ".ts":
+        language = tree_sitter_typescript.language_typescript()
+    elif suffix == ".tsx":
+        language = tree_sitter_typescript.language_tsx()
+    else:
+        language = tree_sitter_javascript.language()
+    source = text.encode("utf-8")
+    root = Parser(Language(language)).parse(source).root_node
+    if root.has_error:
+        raise ValueError("invalid workload JavaScript/TypeScript syntax")
     references = []
-    for index, (kind, value) in enumerate(tokens):
-        if kind != "identifier":
-            continue
-        following = tokens[index + 1 :]
-        if value == "require":
-            # Reject aliases too: const load = require could hide subsequent calls.
-            raise ValueError("CommonJS workload imports are not reproducible")
-        if value == "open" and following and following[0][1] == "(":
-            if (
-                len(following) < 3
-                or following[1][0] != "string"
-                or following[2][1] not in (",", ")")
-            ):
-                raise ValueError("workload data path must be a static string")
-            references.append(("data", following[1][1]))
-        if value not in ("import", "export"):
-            continue
-        if not following:
-            raise ValueError("incomplete workload import/export")
-        if value == "export" and following[0][1] not in ("*", "{"):
-            continue
-        if value == "import" and following[0][0] == "string":
-            references.append(("module", following[0][1]))
-            continue
-        if value == "import" and following[0][1] in ("(", "."):
+
+    def literal(node):
+        if node is None or node.type != "string":
+            raise ValueError("workload reference must be a static string")
+        value = source[node.start_byte + 1 : node.end_byte - 1].decode("utf-8")
+        if "\\" in value:
+            raise ValueError("escaped workload reference unsupported in reproducible mode")
+        return value
+
+    pending = [root]
+    while pending:
+        node = pending.pop()
+        if node.type in ("import_statement", "export_statement"):
+            dependency = node.child_by_field_name("source")
+            if dependency is not None:
+                references.append(("module", literal(dependency)))
+        elif node.type in ("import", "meta_property"):
             raise ValueError("dynamic/meta workload imports are not reproducible")
-        # Binding lists may span lines/comments. Only a static from string is allowed.
-        found = False
-        for offset, token in enumerate(following):
-            if token[1] in (";", "import", "export"):
-                break
-            if token == ("identifier", "from"):
-                if offset + 1 >= len(following) or following[offset + 1][0] != "string":
-                    raise ValueError("workload import path must be a static string")
-                references.append(("module", following[offset + 1][1]))
-                found = True
-                break
-        if value == "import" and not found:
-            raise ValueError("unsupported workload import syntax")
+        elif node.type in ("identifier", "property_identifier", "shorthand_property_identifier"):
+            name = source[node.start_byte : node.end_byte].decode("utf-8")
+            if "\\" in name:
+                raise ValueError("escaped workload identifiers unsupported in reproducible mode")
+            if name == "require":
+                raise ValueError("CommonJS workload imports and aliases are not reproducible")
+            if name == "open" and node.type == "identifier":
+                parent = node.parent
+                if (
+                    parent.type != "call_expression"
+                    or parent.child_by_field_name("function") != node
+                ):
+                    raise ValueError("workload data loader aliases are not reproducible")
+                args = parent.child_by_field_name("arguments")
+                values = [child for child in args.named_children if child.type != "comment"]
+                if not values:
+                    raise ValueError("workload data path must be a static string")
+                references.append(("data", literal(values[0])))
+        elif node.type == "subscript_expression":
+            index = node.child_by_field_name("index")
+            if (
+                index is not None
+                and index.type == "string"
+                and index.text in (b'"require"', b"'require'")
+            ):
+                raise ValueError("CommonJS workload imports and aliases are not reproducible")
+        pending.extend(reversed(node.named_children))
     return references
 
 
@@ -208,7 +134,7 @@ def prepare_workload(workload: Workload, destination: Path) -> PreparedWorkload:
     for name, path in declared.items():
         if path.suffix not in (".js", ".mjs", ".cjs", ".ts", ".jsx", ".tsx"):
             continue
-        for reference_kind, dependency in _source_references(path.read_text()):
+        for reference_kind, dependency in _source_references(path.read_text(), path.suffix):
             if "\\" in dependency:
                 raise ValueError("escaped workload reference unsupported in reproducible mode")
             if reference_kind == "module" and (dependency == "k6" or dependency.startswith("k6/")):

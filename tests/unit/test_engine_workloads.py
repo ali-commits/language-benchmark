@@ -264,3 +264,58 @@ def test_javascript_line_comment_terminators_cannot_hide_import(tmp_path, separa
     script.write_text("// harmless comment" + separator + 'import "https://example.com/module.js";')
     with pytest.raises(ValueError):
         prepare_workload(workload(script), tmp_path / "bundle")
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "export default function() { const seconds = 1000 / 1000; }",
+        'export default function() { return /ok/.test("ok"); }',
+        'export default function() { return /["/]/.test("/"); }',
+        "export default function() { const text = `elapsed ${(1000 / 1000)}`; return /import/.test(text); }",
+    ],
+)
+def test_reproducible_arithmetic_and_regex_workloads_are_accepted(tmp_path, text):
+    script = tmp_path / "main.js"
+    script.write_text(text)
+    prepared = prepare_workload(workload(script), tmp_path / "bundle")
+    assert prepared.script.read_text() == text
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        'const load = require; load("https://example.com/mod.js");',
+        'const r = /"/; import "https://example.com/mod.js";',
+        "export default function() { const x = ; }",
+    ],
+)
+def test_parser_rejects_unsupported_imports_and_invalid_syntax(tmp_path, text):
+    script = tmp_path / "main.js"
+    script.write_text(text)
+    with pytest.raises(ValueError):
+        prepare_workload(workload(script), tmp_path / "bundle")
+
+
+@pytest.mark.parametrize(
+    "suffix,text",
+    [
+        (
+            ".ts",
+            'const ratio: number = 1000 / 1000; export default function(): boolean { return /ok/.test("ok"); }',
+        ),
+        (
+            ".tsx",
+            'const title = <span>ok</span>; export default function() { return /ok/.test("ok"); }',
+        ),
+        (
+            ".js",
+            'const a = {"line\\nbreak": 1}; export default function() { return a["line\\nbreak"]; }',
+        ),
+    ],
+)
+def test_parser_preserves_supported_language_syntax(tmp_path, suffix, text):
+    script = tmp_path / ("main" + suffix)
+    script.write_text(text)
+    prepared = prepare_workload(workload(script), tmp_path / "bundle")
+    assert prepared.script.read_text() == text
