@@ -236,12 +236,14 @@ class OwnedDocker:
         ids = self.command("ps", "-aq", "--no-trunc", "--filter", f"name=^/{name}$").stdout.split()
         return self.inspect(ids[0]) if ids else None
 
-    def create(self, name, arguments):
+    def create(self, name, arguments, *, env=None):
         if self.by_name(name):
             raise ValueError("existing resource requires explicit reconciliation")
         flags = [flag for k, v in self.labels.items() for flag in ("--label", k + "=" + v)]
         try:
-            identity = self.command("create", "--name", name, *flags, *arguments).stdout.strip()
+            identity = self.command(
+                "create", "--name", name, *flags, *arguments, env=env
+            ).stdout.strip()
         except Exception:
             # A successful remote create may lose its SSH response. Never issue
             # a duplicate create until actual owner-labelled state is known.
@@ -267,6 +269,13 @@ class OwnedDocker:
     def remove(self, identity):
         self.inspect(identity)
         self.command("rm", "-f", identity)
+
+    def exists(self, identity):
+        # Query immutable ID without owner filters: a label change is not absence.
+        return (
+            identity
+            in self.command("ps", "-aq", "--no-trunc", "--filter", "id=" + identity).stdout.split()
+        )
 
     def owned(self):
         args = [
@@ -330,6 +339,105 @@ def _fixture(context, action):
             return run_hook(hook, context)
 
 
+def _fixture_receipt_identity(context):
+    fixture = context.job.workload.fixture
+    return hashlib.sha256(
+        json.dumps(fixture.model_dump(mode="json") if fixture else None, sort_keys=True).encode()
+    ).hexdigest()
+
+
+def _finish_release(context, journal, checkpoint):
+    """Resume only a durable, verified restore checkpoint; never reopen fixtures."""
+    labels = owner_labels(context.queue_id, context.job_id, context.trial_id)
+    hosts = [context.environment.generator]
+    if context.environment.backend != context.environment.generator:
+        hosts.append(context.environment.backend)
+    entries = journal.entries()
+    details = checkpoint["details"]
+    removed, reasons = [], []
+    try:
+        if details["owner"] != labels or details["fixture_identity"] != _fixture_receipt_identity(
+            context
+        ):
+            raise ValueError("release identity mismatch")
+        assignments = []
+        for lease in details["leases"]:
+            host = next(host for host in hosts if host.model_dump(mode="json") == lease["host"])
+            assignments.append((host, lease["id"]))
+        if len(
+            {
+                (json.dumps(host.model_dump(mode="json"), sort_keys=True), identity)
+                for host, identity in assignments
+            }
+        ) != len(assignments):
+            raise ValueError("duplicate release identity")
+        fixture_started = any(
+            entry["action"] == "fixture" for entry in entries[: checkpoint["sequence"]]
+        )
+        if fixture_started:
+            restore = entries[details["restore_sequence"]]
+            if (
+                restore["sequence"] >= checkpoint["sequence"]
+                or restore["action"] != "restore"
+                or restore["state"] != "done"
+                or restore["details"]["owner"] != labels
+                or restore["details"]["fixture_identity"] != details["fixture_identity"]
+                or (context.environment.backend, restore["details"]["backend_lease_id"])
+                not in assignments
+            ):
+                raise ValueError("release lacks verified restore receipt")
+        if any(
+            entry["action"] in {"fixture", "deploy", "load", "network", "stage_workload", "restore"}
+            for entry in entries[checkpoint["sequence"] + 1 :]
+        ):
+            raise ValueError("mutation after release checkpoint")
+        # Before any release, verify that no workload resources remain or appeared
+        # after the checkpoint. Unknown resource IDs cannot inherit its receipt.
+        for host in hosts:
+            docker = OwnedDocker(host, labels)
+            expected = {identity for owner_host, identity in assignments if owner_host == host}
+            if set(docker.owned()) - expected or docker.owned_networks():
+                raise ValueError("unexpected resource after restore checkpoint")
+            for identity in expected:
+                if docker.exists(identity):
+                    info = docker.inspect(identity)
+                    if info.get("Name") != "/bench-engine-lease":
+                        raise ValueError("release resource is not ownership lease")
+        for host, identity in assignments:
+            docker = OwnedDocker(host, labels)
+            if not docker.exists(identity):
+                continue
+            journal.record(
+                "lease_release", "intent", {"host": host.model_dump(mode="json"), "id": identity}
+            )
+            try:
+                docker.remove(identity)
+            except Exception:
+                # Successful SSH removal can lose its response. Actual immutable-ID
+                # absence is sufficient here because restoration is durable already.
+                if docker.exists(identity):
+                    raise
+            if docker.exists(identity):
+                raise ValueError("released lease still exists")
+            removed.append(identity)
+            journal.record(
+                "lease_release", "done", {"host": host.model_dump(mode="json"), "id": identity}
+            )
+        for host in hosts:
+            docker = OwnedDocker(host, labels)
+            if docker.owned() or docker.owned_networks():
+                raise ValueError("owned resources remain after release")
+    except Exception as exc:
+        reasons.append("lease release reconciliation failed: " + type(exc).__name__)
+    receipt = CleanupReceipt(not reasons, tuple(removed), tuple(reasons))
+    journal.record(
+        "cleanup",
+        "done" if receipt.verified else "failed",
+        {"removed": removed, "reasons": reasons},
+    )
+    return receipt
+
+
 def _cleanup(context, journal):
     labels = owner_labels(context.queue_id, context.job_id, context.trial_id)
     removed, reasons, leases = [], [], []
@@ -337,6 +445,16 @@ def _cleanup(context, journal):
     if entries and entries[-1]["action"] == "cleanup" and entries[-1]["state"] == "done":
         return CleanupReceipt(True)
     journal.record("cleanup", "intent")
+    checkpoint = next(
+        (
+            entry
+            for entry in reversed(entries)
+            if entry["action"] == "release" and entry["state"] == "intent"
+        ),
+        None,
+    )
+    if checkpoint is not None:
+        return _finish_release(context, journal, checkpoint)
     hosts = [context.environment.generator]
     if context.environment.backend != context.environment.generator:
         hosts.append(context.environment.backend)
@@ -371,14 +489,28 @@ def _cleanup(context, journal):
         except Exception as exc:
             reasons.append("owned network cleanup failed: " + type(exc).__name__)
     fixture_started = any(entry["action"] == "fixture" for entry in entries)
-    if not reasons and fixture_started and not leases:
+    backend_lease = next(
+        (identity for docker, identity in leases if docker.host == context.environment.backend),
+        None,
+    )
+    restore_sequence = None
+    if not reasons and fixture_started and backend_lease is None:
         reasons.append("fixture reconciliation requires retained ownership lease")
     if not reasons and fixture_started:
         try:
             journal.record("restore", "intent")
             _fixture(context, "reset")
             _fixture(context, "verify")
-            journal.record("restore", "done")
+            restore = journal.record(
+                "restore",
+                "done",
+                {
+                    "owner": labels,
+                    "backend_lease_id": backend_lease,
+                    "fixture_identity": _fixture_receipt_identity(context),
+                },
+            )
+            restore_sequence = restore["sequence"]
         except Exception as exc:
             reasons.append("fixture restore failed: " + type(exc).__name__)
     if not reasons:
@@ -394,12 +526,21 @@ def _cleanup(context, journal):
             except Exception:
                 reasons.append("staged workload cleanup failed")
     if not reasons:
-        for docker, identity in leases:
-            try:
-                docker.remove(identity)
-                removed.append(identity)
-            except Exception as exc:
-                reasons.append("lease cleanup failed: " + type(exc).__name__)
+        checkpoint = journal.record(
+            "release",
+            "intent",
+            {
+                "owner": labels,
+                "fixture_identity": _fixture_receipt_identity(context),
+                "restore_sequence": restore_sequence,
+                "leases": [
+                    {"host": docker.host.model_dump(mode="json"), "id": identity}
+                    for docker, identity in leases
+                ],
+            },
+        )
+        receipt = _finish_release(context, journal, checkpoint)
+        return CleanupReceipt(receipt.verified, tuple(removed) + receipt.removed, receipt.reasons)
     for host in hosts:
         try:
             if OwnedDocker(host, labels).owned() or OwnedDocker(host, labels).owned_networks():
@@ -621,8 +762,9 @@ def _run_trial(context, stop_requested):
                 network = backend.create_network(network_name)
                 args += ["--network", network["Id"]]
                 journal.record("network", "done", {"id": network["Id"]})
-        for key, ref in job.target.env.items():
-            args.extend(["-e", key + "=" + os.environ[ref.env]])
+        target_env = {key: os.environ[ref.env] for key, ref in job.target.env.items()}
+        for key in target_env:
+            args.extend(["-e", key])
         for key, value in job.target.labels.items():
             args.extend(["--label", key + "=" + value])
         if job.workload.adapter == "social":
@@ -631,7 +773,7 @@ def _run_trial(context, stop_requested):
         if stop_requested():
             raise InterruptedError("stop requested")
         journal.record("deploy", "intent", {"name": "bench-target-" + unique})
-        info = backend.create("bench-target-" + unique, args)
+        info = backend.create("bench-target-" + unique, args, env=target_env)
         identity = info["Id"]
         info = backend.start(identity)
         verify_resources(job.target, info)

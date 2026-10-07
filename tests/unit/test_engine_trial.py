@@ -147,6 +147,17 @@ def test_failure_cleanup_and_reconciliation(tmp_path, monkeypatch, crash):
     from tools.bench.engine.workloads import prepare_workload
 
     job = resolve_jobs(load_config(Path("examples/http/queue.yaml")))[0]
+    from tools.bench.engine.types import SecretRef
+
+    secret = "target-env-secret-only"
+    monkeypatch.setenv("TARGET_SECRET_REF", secret)
+    job = job.model_copy(
+        update={
+            "target": job.target.model_copy(
+                update={"env": {"BENCH_TOKEN": SecretRef(env="TARGET_SECRET_REF")}}
+            )
+        }
+    )
     prepared = prepare_workload(job.workload, tmp_path / "prepared")
     target = SimpleNamespace(
         image_id="sha256:target", build_snapshot=SimpleNamespace(identity="build")
@@ -157,10 +168,17 @@ def test_failure_cleanup_and_reconciliation(tmp_path, monkeypatch, crash):
     resources = {}
 
     class Docker:
-        def __init__(self, *args):
-            pass
+        def __init__(self, host, labels):
+            self.host = host
 
-        def create(self, name, args):
+        def exists(self, identity):
+            return identity in resources
+
+        def create(self, name, args, **kwargs):
+            if name.startswith("bench-target-"):
+                assert secret not in json.dumps(args)
+                assert "BENCH_TOKEN" in args
+                assert kwargs["env"] == {"BENCH_TOKEN": secret}
             info = {
                 "Id": name,
                 "Name": "/" + name,
@@ -413,3 +431,317 @@ def test_foreign_network_is_never_removed():
     with pytest.raises(ValueError, match="ownership"):
         docker.remove_network("network")
     assert not any("rm" in call for call in calls)
+
+
+@pytest.mark.parametrize("failure", ["controller_crash", "lost_response", "unexpected_resource"])
+def test_cleanup_recovers_after_successful_lease_removal(tmp_path, monkeypatch, failure):
+    import tools.bench.engine.trial as module
+    from tools.bench.engine.config import load_config, resolve_jobs
+
+    job = resolve_jobs(load_config(Path("examples/http/queue.yaml")))[0]
+    context = module.TrialContext(job, 2, tmp_path, "q", "cleanup-recovery")
+    journal = Journal(tmp_path)
+    journal.record("fixture", "done")
+    resources = {"lease-id": {"Id": "lease-id", "Name": "/bench-engine-lease"}}
+    calls = []
+
+    class ControllerCrash(BaseException):
+        pass
+
+    class Docker:
+        def __init__(self, host, labels):
+            self.host = host
+
+        def owned(self):
+            return list(resources)
+
+        def owned_networks(self):
+            return []
+
+        def inspect(self, identity):
+            return resources[identity]
+
+        def exists(self, identity):
+            return identity in resources
+
+        def remove(self, identity):
+            del resources[identity]
+            if failure != "lost_response":
+                raise ControllerCrash()
+            raise RuntimeError("SSH response lost after removal")
+
+    monkeypatch.setattr(module, "OwnedDocker", Docker)
+    monkeypatch.setattr(module, "_fixture", lambda context, action: calls.append(action))
+    if failure != "lost_response":
+        with pytest.raises(ControllerCrash):
+            module._cleanup(context, journal)
+        assert not resources
+        if failure == "unexpected_resource":
+            resources["new-target-id"] = {"Id": "new-target-id", "Name": "/bench-target-new"}
+        receipt = module._cleanup(context, journal)
+    else:
+        receipt = module._cleanup(context, journal)
+    if failure == "unexpected_resource":
+        assert not receipt.verified
+        assert "new-target-id" in resources
+    else:
+        assert receipt.verified, receipt.reasons
+    assert calls == ["reset", "verify"]
+    assert any(e["action"] == "release" and e["state"] == "intent" for e in journal.entries())
+
+
+def test_missing_lease_without_durable_restore_receipt_stays_blocked(tmp_path, monkeypatch):
+    import tools.bench.engine.trial as module
+    from tools.bench.engine.config import load_config, resolve_jobs
+
+    job = resolve_jobs(load_config(Path("examples/http/queue.yaml")))[0]
+    context = module.TrialContext(job, 2, tmp_path, "q", "missing-receipt")
+    journal = Journal(tmp_path)
+    journal.record("fixture", "done")
+    # Old/partial state is not proof that fixture verification completed.
+    journal.record("restore", "intent")
+
+    class Docker:
+        def __init__(self, *args):
+            pass
+
+        def owned(self):
+            return []
+
+        def owned_networks(self):
+            return []
+
+    monkeypatch.setattr(module, "OwnedDocker", Docker)
+    monkeypatch.setattr(
+        module, "_fixture", lambda *args: pytest.fail("must not restore without ownership")
+    )
+    assert not module._cleanup(context, journal).verified
+
+
+@pytest.mark.parametrize("transport", ["local", "ssh"])
+def test_owned_docker_create_secrets_use_transport_environment(transport):
+    secret = "credential-that-must-not-appear-in-argv"
+    calls = []
+    labels = {"bench.trial": "secret-test"}
+
+    def execute(host, argv, **kwargs):
+        calls.append((argv, kwargs))
+        if argv[1] == "ps":
+            return SimpleNamespace(stdout="")
+        if argv[1] == "create":
+            return SimpleNamespace(stdout="container-id")
+        return SimpleNamespace(
+            stdout=json.dumps([{"Id": "container-id", "Config": {"Labels": labels}}])
+        )
+
+    docker = OwnedDocker(
+        Host(transport=transport, host="test.example" if transport == "ssh" else None),
+        labels,
+        execute=execute,
+    )
+    docker.create("test-container", ["-e", "TOKEN", "sha256:image"], env={"TOKEN": secret})
+    assert all(secret not in json.dumps(argv) for argv, kwargs in calls)
+    assert next(kwargs["env"] for argv, kwargs in calls if argv[1] == "create") == {"TOKEN": secret}
+
+
+def run_baseline_samples(
+    tmp_path, monkeypatch, phase, states, *, timeout=20.0, stop_requested=lambda: False
+):
+    import tools.bench.engine.trial as module
+    from tools.bench.engine.config import load_config, resolve_jobs
+    from tools.bench.engine.types import Baseline
+
+    job = resolve_jobs(load_config(Path("examples/http/queue.yaml")))[0]
+    policy = Baseline(
+        enabled=True,
+        interval=1.0,
+        timeout=timeout,
+        consecutive_samples=2,
+        stopped_cpu_max=0.15,
+        ready_cpu_max=0.2,
+        stopped_memory_available=100.0,
+        ready_memory_available=50.0,
+        allowed_containers=["allowed-metrics"],
+    )
+    job = job.model_copy(
+        update={"environment": job.environment.model_copy(update={"baseline": policy})}
+    )
+    context = module.TrialContext(job, 2, tmp_path, "q", "baseline")
+    clock = [0.0]
+    samples = []
+    counters = [0, 0, 0, 0, 0, 0, 0, 0]
+    current = [None]
+
+    def execute(host, argv, **kwargs):
+        if argv[0] == "python3":
+            state = states[min(len(samples), len(states) - 1)]
+            cpu, memory, containers = state
+            counters[0] += round(cpu * 100)
+            counters[3] += 100 - round(cpu * 100)
+            current[0] = containers
+            point = {"epoch": clock[0], "cpu": list(counters), "memory_available": memory}
+            samples.append(point)
+            return SimpleNamespace(stdout=json.dumps(point))
+        return SimpleNamespace(
+            stdout="\n".join(
+                json.dumps({"ID": identity, "Names": name}) for identity, name in current[0]
+            )
+        )
+
+    monkeypatch.setattr(module, "execute_host", execute)
+    monkeypatch.setattr(module.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(
+        module.time, "sleep", lambda duration: clock.__setitem__(0, clock[0] + duration)
+    )
+    journal = Journal(tmp_path)
+    module._baseline(
+        context, phase, ("target-id",) if phase == "ready" else (), journal, stop_requested
+    )
+    return journal.entries(), samples
+
+
+def test_baseline_dirty_samples_reset_consecutive_clean_count(tmp_path, monkeypatch):
+    states = [
+        (0.0, 200.0, []),
+        (0.1, 200.0, []),
+        (0.3, 200.0, []),
+        (0.1, 200.0, []),
+        (0.1, 50.0, []),
+        (0.1, 200.0, []),
+        (0.1, 200.0, [("foreign-id", "foreign")]),
+        (0.1, 200.0, [("metrics-id", "allowed-metrics")]),
+        (0.1, 200.0, []),
+    ]
+    entries, samples = run_baseline_samples(tmp_path, monkeypatch, "stopped", states)
+    assert len(samples) == 9
+    assert [entry["details"]["okay"] for entry in entries if entry["state"] == "sample"] == [
+        False,
+        True,
+        False,
+        True,
+        False,
+        True,
+        False,
+        True,
+        True,
+    ]
+    assert entries[-1]["state"] == "done"
+
+
+def test_baseline_ready_uses_ready_thresholds_and_owned_target_allowance(tmp_path, monkeypatch):
+    entries, samples = run_baseline_samples(
+        tmp_path, monkeypatch, "ready", [(0.18, 75.0, [("target-id", "target")])]
+    )
+    assert len(samples) == 3 and entries[-1]["state"] == "done"
+
+
+def test_baseline_stopped_times_out_on_same_ready_only_conditions(tmp_path, monkeypatch):
+    with pytest.raises(TimeoutError, match="baseline"):
+        run_baseline_samples(tmp_path, monkeypatch, "stopped", [(0.18, 75.0, [])], timeout=3.0)
+    entries = Journal(tmp_path).entries()
+    assert len([e for e in entries if e["state"] == "sample"]) == 3
+    assert not any(e["state"] == "done" for e in entries)
+
+
+def test_baseline_cancellation_interrupts_sampling(tmp_path, monkeypatch):
+    checks = []
+
+    def stop():
+        checks.append(True)
+        return len(checks) == 3
+
+    with pytest.raises(InterruptedError, match="stop requested"):
+        run_baseline_samples(
+            tmp_path, monkeypatch, "stopped", [(0.9, 200.0, [])], stop_requested=stop
+        )
+    assert len([e for e in Journal(tmp_path).entries() if e["state"] == "sample"]) == 2
+
+
+@pytest.mark.parametrize("transport", ["local", "ssh"])
+def test_real_transport_keeps_docker_secret_out_of_all_argv(monkeypatch, transport):
+    import subprocess
+
+    import tools.bench.engine.targets as targets
+
+    secret = "transport-only-secret"
+    labels = {"bench.trial": "secret-transport"}
+    seen = []
+
+    def run(argv, **kwargs):
+        assert secret not in json.dumps(argv)
+        if transport == "ssh":
+            payload = json.loads(kwargs["input"])
+            child_argv, child_env = payload["argv"], payload["env"]
+        else:
+            child_argv, child_env = argv, kwargs["env"]
+        assert secret not in json.dumps(child_argv)
+        if child_argv[1] == "ps":
+            output = ""
+        elif child_argv[1] == "create":
+            assert child_env["TOKEN"] == secret
+            seen.append(child_argv)
+            output = "container-id"
+        else:
+            output = json.dumps([{"Id": "container-id", "Config": {"Labels": labels}}])
+        if transport == "ssh":
+            output = json.dumps({"returncode": 0, "stdout": output, "stderr": ""})
+        return subprocess.CompletedProcess(argv, 0, output, "")
+
+    monkeypatch.setattr(targets.subprocess, "run", run)
+    host = Host(transport=transport, host="test.example" if transport == "ssh" else None)
+    OwnedDocker(host, labels).create(
+        "test-container", ["-e", "TOKEN", "sha256:image"], env={"TOKEN": secret}
+    )
+    assert len(seen) == 1
+
+
+def test_cleanup_resumes_partial_two_host_release_without_repeating_restore(tmp_path, monkeypatch):
+    import tools.bench.engine.trial as module
+    from tools.bench.engine.config import load_config, resolve_jobs
+
+    job = resolve_jobs(load_config(Path("examples/http/queue.yaml")))[0]
+    generator = Host(transport="ssh", host="generator.example")
+    job = job.model_copy(
+        update={"environment": job.environment.model_copy(update={"generator": generator})}
+    )
+    context = module.TrialContext(job, 2, tmp_path, "q", "two-host-release")
+    journal = Journal(tmp_path)
+    journal.record("fixture", "done")
+    resources = {"local": {"backend-lease"}, "generator.example": {"generator-lease"}}
+    crash = [True]
+    fixture_calls = []
+
+    class ControllerCrash(BaseException):
+        pass
+
+    class Docker:
+        def __init__(self, host, labels):
+            self.host = host
+            self.key = host.host or "local"
+
+        def owned(self):
+            return list(resources[self.key])
+
+        def owned_networks(self):
+            return []
+
+        def exists(self, identity):
+            return identity in resources[self.key]
+
+        def inspect(self, identity):
+            return {"Id": identity, "Name": "/bench-engine-lease"}
+
+        def remove(self, identity):
+            resources[self.key].remove(identity)
+            if crash[0]:
+                crash[0] = False
+                raise ControllerCrash()
+
+    monkeypatch.setattr(module, "OwnedDocker", Docker)
+    monkeypatch.setattr(module, "_fixture", lambda context, action: fixture_calls.append(action))
+    with pytest.raises(ControllerCrash):
+        module._cleanup(context, journal)
+    assert resources == {"local": {"backend-lease"}, "generator.example": set()}
+    assert module._cleanup(context, journal).verified
+    assert fixture_calls == ["reset", "verify"]
+    assert not any(resources.values())
