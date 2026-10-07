@@ -428,6 +428,17 @@ def run_user_capacity(
             atomic_json(
                 audit, {"receipt": c["queue_extension_handoff"], "applied_epoch": time.time()}
             )
+    if c.get("resolution_handoff"):
+        audit = output_dir / "resolution-policy-handoff.json"
+        if not audit.exists():
+            atomic_json(
+                audit,
+                {
+                    "receipt": c["resolution_handoff"],
+                    "measurement_identity_sha256": measurement_identity(c),
+                    "applied_epoch": time.time(),
+                },
+            )
     results = {}
     ordinal = 0
     previous = None
@@ -473,7 +484,13 @@ def run_user_capacity(
             )
         if majority:
             results = {
-                cell: r for cell, r in results.items() if r.get("status") != "unstable_boundary"
+                cell: r
+                for cell, r in results.items()
+                if r.get("status") != "unstable_boundary"
+                and not (
+                    r.get("status") == "bracket_found"
+                    and r["failing_users"] - r["passing_users"] > c["resolution_users"]
+                )
             }
         ledger = {
             "policy": POLICY,

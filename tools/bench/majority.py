@@ -50,9 +50,27 @@ def measurement_identity(config):
 
 
 def projected_config(original, new):
-    """A queue extension can add only trailing cells and their hints/image identities."""
+    """Project audited search-resolution and queue changes onto original evidence."""
     old = normalize_config(original)
     current = normalize_config(new)
+    if old["resolution_users"] != current["resolution_users"]:
+        receipt = current.get("resolution_handoff", {})
+        previous = {**current, "resolution_users": old["resolution_users"]}
+        if (
+            old["resolution_users"] != 100
+            or current["resolution_users"] != 50
+            or not isinstance(receipt, dict)
+            or type(receipt.get("from")) is not int
+            or receipt.get("from") != 100
+            or type(receipt.get("to")) is not int
+            or receipt.get("to") != 50
+            or receipt.get("measurement_identity_sha256") != measurement_identity(previous)
+            or not isinstance(receipt.get("reason"), str)
+            or not receipt["reason"].strip()
+        ):
+            raise ValueError("resolution change requires audited 100-to-50 handoff receipt")
+        # Older queue/decision receipts attest the complete pre-refinement config.
+        current = previous
     if measurement_identity(old) == measurement_identity(current):
         return current
     receipt = current.get("queue_extension_handoff", {})
