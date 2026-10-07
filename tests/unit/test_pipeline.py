@@ -125,3 +125,39 @@ def test_stage_config_changed_while_observing_is_rejected(tmp_path, monkeypatch)
     with pytest.raises(RuntimeError, match="configuration changed"):
         run_pipeline(q, tmp_path / "state.json", sleep=edit)
     assert json.loads((tmp_path / "state.json").read_text())["status"] == "needs_attention"
+
+
+def test_restart_skips_idle_check_for_completed_earlier_stage(tmp_path, monkeypatch):
+    import hashlib
+
+    import bench.pipeline as m
+
+    first_dir = tmp_path / "first"
+    first_dir.mkdir()
+    first = stage(first_dir)
+    first["name"] = "first"
+    second_dir = tmp_path / "second"
+    second_dir.mkdir()
+    second = stage(second_dir)
+    second["name"] = "second"
+    q = tmp_path / "queue.json"
+    q.write_text(json.dumps({"stages": [first, second]}))
+    identity = hashlib.sha256(
+        q.read_bytes() + Path(first["config"]).read_bytes() + Path(second["config"]).read_bytes()
+    ).hexdigest()
+    state = tmp_path / "state.json"
+    state.write_text(
+        json.dumps(
+            {
+                "identity": identity,
+                "completed_stages": ["first"],
+                "stage": "second",
+                "status": "running_controller",
+            }
+        )
+    )
+    calls = []
+    monkeypatch.setattr(m, "verify_hosts_idle", lambda s: calls.append(s["name"]))
+    run_pipeline(q, state)
+    assert calls == ["second"]
+    assert json.loads(state.read_text())["completed_stages"] == ["first", "second"]

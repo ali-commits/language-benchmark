@@ -97,12 +97,23 @@ def run_pipeline(config_path, state_path, sleep=time.sleep):
     previous = read_status(state_path)
     if previous.get("identity") not in (None, identity):
         raise RuntimeError("pipeline configuration changed; preserve the original queue")
+    completed = previous.get("completed_stages", [])
+    if not isinstance(completed, list) or completed != [
+        s["name"] for s in stages[: len(completed)]
+    ]:
+        raise RuntimeError("pipeline completion receipts are not an ordered prefix")
     current = None
 
     def status(value, **details):
         atomic_json(
             state_path,
-            {"status": value, "identity": identity, "updated_epoch": time.time(), **details},
+            {
+                "status": value,
+                "identity": identity,
+                "completed_stages": list(completed),
+                "updated_epoch": time.time(),
+                **details,
+            },
         )
 
     with state_path.with_suffix(".lock").open("a") as lock:
@@ -111,6 +122,10 @@ def run_pipeline(config_path, state_path, sleep=time.sleep):
             for current in stages:
                 pinned()
                 name = current["name"]
+                if name in completed:
+                    # Revalidate immutable past evidence, not the hosts now owned by a later stage.
+                    verify_completion(current)
+                    continue
                 if current.get("observe_supervisor"):
                     while controller_active(current["controller"]) or controller_active(
                         current["observe_supervisor"]
@@ -132,6 +147,7 @@ def run_pipeline(config_path, state_path, sleep=time.sleep):
                 verify_completion(current)
                 verify_hosts_idle(current)
                 pinned()
+                completed.append(name)
                 status("stage_complete", stage=name)
             status("complete", stages=[s["name"] for s in stages])
         except KeyboardInterrupt:
