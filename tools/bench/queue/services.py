@@ -114,8 +114,7 @@ def install_service(
             "[Service]",
             "Type=simple",
             "ExecStart=" + " ".join(_quote(a) for a in argv),
-            "WorkingDirectory="
-            + _quote(Path(__file__).resolve().parents[3], expand_environment=False),
+            "WorkingDirectory=" + str(Path(__file__).resolve().parents[3]).replace("%", "%%"),
             *(
                 ["EnvironmentFile=" + _quote(private_environment, expand_environment=False)]
                 if private_environment
@@ -176,18 +175,23 @@ def resume_service(queue: str, state_dir: Path, *, environment_file: Path | None
 def _run(queue, state_dir):
     store = QueueStore(Path(state_dir) / "queue.db")
 
-    def stop(signum, frame):
-        store.request_stop(queue)
+    interrupted = False
 
-    signal.signal(signal.SIGTERM, stop)
-    signal.signal(signal.SIGINT, stop)
-    result = run_queue(store, queue)
-    if result["queues"][0]["state"] in {
-        "interrupted",
-        "needs_attention",
-        "completed",
-    } and shutil.which("systemctl"):
-        # Prevent a deliberate stop or attention failure from restarting at boot.
+    def stop(signum, frame):
+        # SIGTERM is also systemd's normal shutdown signal. Process interruption
+        # must not create the durable user-stop latch or disable reboot resume.
+        nonlocal interrupted
+        interrupted = True
+
+    previous = {sig: signal.signal(sig, stop) for sig in (signal.SIGTERM, signal.SIGINT)}
+    try:
+        result = run_queue(store, queue, interrupt_requested=lambda: interrupted)
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
+    deliberate_stop = store.stop_request(queue) is not None
+    terminal = result["queues"][0]["state"] in {"needs_attention", "completed"}
+    if (deliberate_stop or terminal) and shutil.which("systemctl"):
         try:
             _command(["systemctl", "--user", "disable", _unit_name(queue, Path(state_dir))])
         except ServiceUnavailable:

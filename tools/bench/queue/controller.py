@@ -22,6 +22,7 @@ from tools.bench.engine.search import (
     next_probe,
     record_probe,
     reserve_attempt,
+    reuse_evidence,
     search_result,
 )
 from tools.bench.engine.targets import (
@@ -54,8 +55,8 @@ def _save(store, queue, state, status=None):
     store.checkpoint(queue, state, state=status)
 
 
-def _check_stop(store, queue):
-    if store.stop_request(queue) is False:
+def _check_stop(store, queue, interrupt_requested=lambda: False):
+    if interrupt_requested() or store.stop_request(queue) is False:
         raise _Stopped()
 
 
@@ -84,7 +85,7 @@ def _identity(context):
     )
 
 
-def _prepare(store, queue, state, data, index, job):
+def _prepare(store, queue, state, data, index, job, interrupt_requested=lambda: False):
     # Resolve refs without persisting values; validate before Docker preparation.
     try:
         env = {key: os.environ[ref.env] for key, ref in job.target.env.items()}
@@ -96,7 +97,7 @@ def _prepare(store, queue, state, data, index, job):
         raise QueueConflict(
             "target environment requires portable names and single-line values (no CR, LF or NUL)"
         ) from exc
-    _check_stop(store, queue)
+    _check_stop(store, queue, interrupt_requested)
     key = str(index)
     prep = data["prepared"].get(key)
     directory = _root(store, queue) / data["directory"] / ("prepare-" + key)
@@ -131,7 +132,7 @@ def _prepare(store, queue, state, data, index, job):
             if retained_target["build"]
             else None,
         )
-        _check_stop(store, queue)
+        _check_stop(store, queue, interrupt_requested)
         cached = data["workloads"].get(job.workload_name)
         if cached is None:
             workload = prepare_workload(job.workload, directory / "workload")
@@ -175,7 +176,7 @@ def _prepare(store, queue, state, data, index, job):
         raise QueueConflict("execution identity changed; cannot resume")
     prep["execution_identity"] = identity
     _save(store, queue, state)
-    _check_stop(store, queue)
+    _check_stop(store, queue, interrupt_requested)
     return target, workload, prep["generator"]
 
 
@@ -248,6 +249,7 @@ def _recover_pending(store, queue, state, data):
             receipt = reconcile_trial(TrialContext.from_manifest(manifest))
             if not receipt.verified:
                 raise QueueConflict("trial cleanup requires attention")
+        pending["interrupted"] = True
         # Before manifest publication lifecycle has acquired no trial resources.
         evidence = TrialEvidence(
             trial_id=pending["id"],
@@ -269,7 +271,12 @@ def _recover_pending(store, queue, state, data):
     _save(store, queue, state)
 
 
-def _decide(store, queue, state, data, job):
+def _retry_key(data, job, users, objective):
+    population = users if job.test.type == "search" else data["cursor"]
+    return f"{data['target']}:{objective}:{population}"
+
+
+def _decide(store, queue, state, data, job, interrupt_requested=lambda: False):
     pending = data["pending"]
     evidence = TrialEvidence.model_validate_json(json.dumps(pending["evidence"]))
     if not evidence.cleanup_verified:
@@ -285,6 +292,9 @@ def _decide(store, queue, state, data, job):
         state="finalized",
     )
     criteria = tuple(job.criteria + job.objectives.get(pending["objective"], []))
+    retry_key = _retry_key(data, job, pending["users"], pending["objective"])
+    cancelled_now = interrupt_requested() or store.stop_request(queue) is False
+    interrupted = pending.get("interrupted", False) or cancelled_now
     evaluation = evaluate(evidence, criteria)
     # Evidence invalidity is authoritative even for an empty criteria set.
     if not evidence.valid:
@@ -308,21 +318,87 @@ def _decide(store, queue, state, data, job):
             "evaluation": evaluation.model_dump(mode="json"),
         }
     )
+    retries = data.setdefault("invalid_retries", {})
+    interruptions = data.setdefault("interruptions", {})
+    if evaluation.valid:
+        retries.pop(retry_key, None)
+    elif interrupted:
+        interruptions[retry_key] = interruptions.get(retry_key, 0) + 1
+    else:
+        retries[retry_key] = retries.get(retry_key, 0) + 1
+    data.setdefault("raw_trials", {})[pending["id"]] = {
+        "target": data["target"],
+        "objective": pending["objective"],
+        "path": pending["path"],
+        "identity": pending["identity"],
+    }
     data["pending"] = None
     _save(store, queue, state)
-    if not evidence.cleanup_verified:
-        raise QueueConflict("cleanup not verified")
     if not evaluation.valid:
-        if store.stop_request(queue) is False:
+        if cancelled_now:
             raise _Stopped()
-        raise QueueConflict("invalid infrastructure evidence; explicit resume required")
+        if interruptions.get(retry_key, 0) > MAX_RECOVERY_ATTEMPTS:
+            raise QueueConflict("interruption recovery budget exhausted")
+        if retries.get(retry_key, 0) > job.test.invalid_retries:
+            raise QueueConflict("invalid retry budget exhausted; needs attention")
+        # Cleanup-verified invalid attempts retry the same candidate. Search
+        # reservation/time limits remain authoritative and charge every launch.
 
 
 def _fixed_users(job):
     return [u for u in (job.test.users or [None]) for _ in range(job.test.repetitions)]
 
 
-def _execute_job(store, queue, state, claimed):
+def _reuse_probes(store, queue, data, job, target, workload, generator, objective, search):
+    """Reclassify immutable raw probes; previous objective labels are irrelevant."""
+    retained = dict(data.get("raw_trials", {}))
+    # Older controller checkpoints retained raw paths in the trial table only.
+    paths = {row["id"]: row["path"] for row in store.snapshot(queue)["trials"]}
+    for decision in data["decisions"]:
+        trial_id = decision["trial_id"]
+        if trial_id not in retained and trial_id in paths:
+            retained[trial_id] = {**decision, "path": paths[trial_id]}
+    decisions = []
+    criteria = tuple(job.criteria + job.objectives.get(objective, []))
+    for trial_id, source in retained.items():
+        if source["target"] != data["target"] or any(
+            o.trial_id == trial_id for o in search.observations
+        ):
+            continue
+        path = Path(source["path"]) / "result.json"
+        if not path.exists():
+            continue
+        evidence = TrialEvidence.model_validate_json(path.read_text())
+        if not evidence.valid or not evidence.cleanup_verified:
+            continue
+        expected = prepared_execution_identity(
+            job, evidence.users, target, workload, generator_image_id=generator
+        )
+        if evidence.trial_id != trial_id or evidence.execution_id != expected:
+            continue
+        try:
+            updated = reuse_evidence(search, evidence, execution_id=expected, criteria=criteria)
+        except ValueError as exc:
+            # The new criteria can settle an endpoint before all historical
+            # confirmations are consumed. Never add a fourth/decided vote.
+            if str(exc) == "candidate already decided; no fourth vote":
+                continue
+            raise
+        search = updated
+        decisions.append(
+            {
+                "trial_id": trial_id,
+                "target": data["target"],
+                "objective": objective,
+                "evaluation": search.observations[-1].evaluation.model_dump(mode="json"),
+                "reused": True,
+                "source_objective": source["objective"],
+            }
+        )
+    return search, decisions
+
+
+def _execute_job(store, queue, state, claimed, interrupt_requested=lambda: False):
     data = state["jobs"].get(claimed.job_id)
     if data is None:
         now = time.time()
@@ -346,7 +422,9 @@ def _execute_job(store, queue, state, claimed):
         _save(store, queue, state)
     while data["target"] < len(claimed.resolved_jobs):
         job = claimed.resolved_jobs[data["target"]]
-        target, workload, generator = _prepare(store, queue, state, data, data["target"], job)
+        target, workload, generator = _prepare(
+            store, queue, state, data, data["target"], job, interrupt_requested
+        )
         # Verify engine/fixture/prepared identity before consuming retained evidence.
         if data["pending"]:
             p = data["pending"]
@@ -355,7 +433,7 @@ def _execute_job(store, queue, state, claimed):
             )
             if _identity(context) != p["identity"]:
                 raise QueueConflict("execution identity changed; cannot resume")
-            _decide(store, queue, state, data, job)
+            _decide(store, queue, state, data, job, interrupt_requested)
         objectives = list(job.objectives) or ["default"]
         while data["objective"] < len(objectives):
             objective = objectives[data["objective"]]
@@ -365,6 +443,10 @@ def _execute_job(store, queue, state, claimed):
                         policy=SearchPolicy.from_test(job.test),
                         budget=JobBudget.model_validate(data["budget"]),
                     )
+                    search, reused_decisions = _reuse_probes(
+                        store, queue, data, job, target, workload, generator, objective, search
+                    )
+                    data["decisions"].extend(reused_decisions)
                 else:
                     search = SearchState.model_validate_json(json.dumps(data["search"]))
                 search = search.model_copy(update={"budget": search.budget.advance(time.time())})
@@ -377,6 +459,8 @@ def _execute_job(store, queue, state, claimed):
                         {
                             "target": data["target"],
                             "objective": objective,
+                            "observed_only": bool(search.observations)
+                            and all(o.reused for o in search.observations),
                             **search_result(search).model_dump(mode="json"),
                         }
                     )
@@ -390,7 +474,12 @@ def _execute_job(store, queue, state, claimed):
                     data["objective"] = len(objectives)
                     break
                 users = values[data["cursor"]]
-            _check_stop(store, queue)
+            _check_stop(store, queue, interrupt_requested)
+            retry_key = _retry_key(data, job, users, objective)
+            if data.get("invalid_retries", {}).get(retry_key, 0) > job.test.invalid_retries:
+                raise QueueConflict("invalid retry budget exhausted; needs attention")
+            if data.get("interruptions", {}).get(retry_key, 0) > MAX_RECOVERY_ATTEMPTS:
+                raise QueueConflict("interruption recovery budget exhausted")
             _reserve_hosts(store, queue, state, job, target, generator)
             trial_id = uuid4().hex
             directory = _root(store, queue) / data["directory"] / trial_id
@@ -421,9 +510,10 @@ def _execute_job(store, queue, state, claimed):
 
             def stop_requested():
                 nonlocal stopping
-                requested = store.stop_request(queue) is False
+                requested = interrupt_requested() or store.stop_request(queue) is False
                 if requested and not stopping:
                     stopping = True
+                    data["pending"]["interrupted"] = True
                     _save(store, queue, state, "stopping")
                 return requested
 
@@ -437,7 +527,7 @@ def _execute_job(store, queue, state, claimed):
                 immutable_json(directory / "result.json", evidence.model_dump(mode="json"))
             data["pending"]["evidence"] = evidence.model_dump(mode="json")
             _save(store, queue, state)
-            _decide(store, queue, state, data, job)
+            _decide(store, queue, state, data, job, interrupt_requested)
         data["target"] += 1
         data["cursor"] = 0
         data["objective"] = 0
@@ -475,7 +565,7 @@ def reconcile_queue(store: QueueStore, queue: str) -> QueueSnapshot:
     return store.snapshot(queue)
 
 
-def run_queue(store: QueueStore, queue: str) -> QueueSnapshot:
+def run_queue(store: QueueStore, queue: str, *, interrupt_requested=lambda: False) -> QueueSnapshot:
     """Run until completed, deliberately paused, or attention is required.
 
     Explicit resume calls clear_stop before this function. Active jobs retain
@@ -491,7 +581,7 @@ def run_queue(store: QueueStore, queue: str) -> QueueSnapshot:
             _reconcile(store, queue, state, lock)
             clean = True
             while True:
-                if store.stop_request(queue) is not None:
+                if interrupt_requested() or store.stop_request(queue) is not None:
                     status = "interrupted"
                     break
                 claimed = store.active_job(queue, state["owner"]) or store.claim_next(
@@ -500,7 +590,7 @@ def run_queue(store: QueueStore, queue: str) -> QueueSnapshot:
                 if claimed is None:
                     break
                 clean = False
-                _execute_job(store, queue, state, claimed)
+                _execute_job(store, queue, state, claimed, interrupt_requested)
                 clean = True
         except _Stopped:
             status = "interrupted"

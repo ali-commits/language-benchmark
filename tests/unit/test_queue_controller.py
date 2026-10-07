@@ -248,8 +248,10 @@ def test_search_objectives_share_budget(harness):
     controller.run_queue(store, "test")
     results = store.controller_state("test")["jobs"]["one"]["results"]
     assert [r["objective"] for r in results] == ["first", "second"]
-    assert results[1]["status"] == "incomplete"
-    assert results[1]["observations"] == []
+    assert results[1]["status"] == "lower_bound"
+    assert results[1]["observed_only"] is True
+    assert all(o["reused"] for o in results[1]["observations"])
+    assert results[1]["attempts"] == 2
     assert len(launches) == 2
 
 
@@ -303,6 +305,7 @@ def test_real_fixed_and_search_queue(tmp_path):
     search = fixed.model_copy(
         update={
             "id": "search",
+            "objectives": {"measured": [], "reanalysis": []},
             "test": TestPolicy.model_validate(
                 {
                     "type": "search",
@@ -329,6 +332,9 @@ def test_real_fixed_and_search_queue(tmp_path):
     assert [j.state for j in store.jobs(cfg.name)] == ["completed", "completed"]
     assert len(snapshot["trials"]) == 3
     assert checkpoint["leases"] == {}
+    results = checkpoint["jobs"]["search"]["results"]
+    assert [r["observed_only"] for r in results] == [False, True]
+    assert all(o["reused"] for o in results[1]["observations"])
     for row in snapshot["trials"]:
         evidence = TrialEvidence.model_validate_json(
             (Path(row["path"]) / "result.json").read_text()
@@ -415,3 +421,368 @@ def test_crash_at_trial_status_checkpoint_recovers_reference(harness, monkeypatc
     result = controller.run_queue(store, "test")
     assert result["trials"][0]["state"] == "finalized"
     assert len(launches) == 1
+
+
+@pytest.mark.parametrize("search", [False, True])
+def test_cleanup_verified_invalid_retries_automatically(harness, monkeypatch, search):
+    store, cfg, launches = harness
+    if search:
+        store, launches = search_store(harness, 3)
+    original = controller.run_trial
+
+    def transient(ctx, callback):
+        value = original(ctx, callback)
+        if len(launches) == 1:
+            return value.model_copy(
+                update={"valid": False, "invalid_reasons": ("temporary collector failure",)}
+            )
+        return value
+
+    monkeypatch.setattr(controller, "run_trial", transient)
+    assert controller.run_queue(store, "test")["queues"][0]["state"] == "completed"
+    assert [c.users for c in launches] == ([1, 1, 2] if search else [1, 1])
+    data = store.controller_state("test")["jobs"]["one"]
+    assert [d["evaluation"]["verdict"] for d in data["decisions"]][:2] == ["invalid", "pass"]
+    if search:
+        assert data["budget"]["attempts"] == 3
+
+
+def test_invalid_retry_exhaustion_survives_restart(harness, monkeypatch):
+    store, cfg, launches = harness
+    original = controller.run_trial
+
+    def invalid(ctx, callback):
+        return original(ctx, callback).model_copy(
+            update={"valid": False, "invalid_reasons": ("temporary failure",)}
+        )
+
+    monkeypatch.setattr(controller, "run_trial", invalid)
+    assert controller.run_queue(store, "test")["queues"][0]["state"] == "needs_attention"
+    assert len(launches) == 2
+    assert (
+        controller.run_queue(QueueStore(store.path), "test")["queues"][0]["state"]
+        == "needs_attention"
+    )
+    assert len(launches) == 2
+
+
+def test_shutdown_interruption_resumes_without_durable_stop(harness, monkeypatch):
+    store, cfg, launches = harness
+    interrupted = False
+    original = controller.run_trial
+
+    def shutdown(ctx, callback):
+        nonlocal interrupted
+        value = original(ctx, callback)
+        interrupted = True
+        assert callback()
+        return value.model_copy(update={"valid": False, "invalid_reasons": ("stop requested",)})
+
+    monkeypatch.setattr(controller, "run_trial", shutdown)
+    assert (
+        controller.run_queue(store, "test", interrupt_requested=lambda: interrupted)["queues"][0][
+            "state"
+        ]
+        == "interrupted"
+    )
+    assert store.stop_request("test") is None
+    assert len(launches) == 1
+    monkeypatch.setattr(controller, "run_trial", original)
+    assert controller.run_queue(QueueStore(store.path), "test")["queues"][0]["state"] == "completed"
+    assert len(launches) == 2
+
+
+def test_reused_probes_fresh_objective_evaluation(harness, monkeypatch):
+    from tools.bench.engine.types import Criterion, Job, ResolvedStage, Sample
+
+    store, launches = search_store(harness, 4)
+    row = store.snapshot("test")["jobs"][0]
+    first = Criterion(
+        metric="cpu_used", scope="backend_host", statistic="mean", operator="<=", value=1.0
+    )
+    second = first.model_copy(update={"value": 0.1})
+    job = Job.model_validate_json(row["definition"]).model_copy(
+        update={"objectives": {"lenient": [first], "strict": [second]}}
+    )
+    store.update("test", "one", job, store.jobs("test")[0].revision)
+    original = controller.run_trial
+
+    def measured(ctx, callback):
+        value = original(ctx, callback)
+        return value.model_copy(
+            update={
+                "stages": (
+                    ResolvedStage(
+                        id="hold",
+                        from_users=ctx.users,
+                        to_users=ctx.users,
+                        duration=2.0,
+                        evaluate=True,
+                        start_seconds=0.0,
+                        end_seconds=2.0,
+                    ),
+                ),
+                "samples": (
+                    Sample(
+                        metric="cpu_used",
+                        scope="backend_host",
+                        kind="interval",
+                        timestamp=0.0,
+                        end_seconds=2.0,
+                        value=0.5,
+                        normalization="all_host_cpus",
+                    ),
+                ),
+            }
+        )
+
+    monkeypatch.setattr(controller, "run_trial", measured)
+    from tools.bench.engine.metrics import evaluate
+
+    monkeypatch.setattr(controller, "evaluate", evaluate)
+    assert controller.run_queue(store, "test")["queues"][0]["state"] == "completed"
+    data = store.controller_state("test")["jobs"]["one"]
+    assert len(launches) == 2
+    assert data["results"][0]["passing_users"] == 2
+    assert data["results"][1]["status"] == "below_minimum"
+    assert data["results"][1]["observed_only"] is True
+    assert all(o["reused"] for o in data["results"][1]["observations"])
+    assert {o["trial_id"] for o in data["results"][1]["observations"]} == {
+        c.trial_id for c in launches
+    }
+    assert all(o["evaluation"]["verdict"] == "fail" for o in data["results"][1]["observations"])
+
+
+def test_invalid_retry_checkpoint_survives_crash(harness, monkeypatch):
+    store, cfg, launches = harness
+    original_run = controller.run_trial
+    monkeypatch.setattr(
+        controller,
+        "run_trial",
+        lambda ctx, callback: original_run(ctx, callback).model_copy(
+            update={"valid": False, "invalid_reasons": ("collector",)}
+        ),
+    )
+    original_decide = controller._decide
+
+    def crash(*args):
+        original_decide(*args)
+        raise KeyboardInterrupt()
+
+    monkeypatch.setattr(controller, "_decide", crash)
+    with pytest.raises(KeyboardInterrupt):
+        controller.run_queue(store, "test")
+    assert len(launches) == 1
+    monkeypatch.setattr(controller, "_decide", original_decide)
+    assert (
+        controller.run_queue(QueueStore(store.path), "test")["queues"][0]["state"]
+        == "needs_attention"
+    )
+    assert len(launches) == 2
+
+
+def test_reuse_majority_history_never_adds_decided_vote(harness, monkeypatch):
+    from tools.bench.engine.types import Criterion, Job, ResolvedStage, Sample
+
+    store, launches = search_store(harness, 6)
+    row = store.snapshot("test")["jobs"][0]
+    job = Job.model_validate_json(row["definition"])
+    criterion = Criterion(
+        metric="cpu_used", scope="backend_host", statistic="mean", operator="<=", value=1.0
+    )
+    policy = job.test.model_copy(
+        update={
+            "users": job.test.users.model_copy(update={"max": 1}),
+            "confirmation": "majority_on_disagreement",
+        }
+    )
+    job = job.model_copy(
+        update={
+            "test": policy,
+            "objectives": {
+                "first": [criterion],
+                "second": [criterion.model_copy(update={"value": 2.0})],
+                "third": [criterion.model_copy(update={"value": 2.0})],
+            },
+        }
+    )
+    store.update("test", "one", job, store.jobs("test")[0].revision)
+    original = controller.run_trial
+
+    def measured(ctx, callback):
+        value = original(ctx, callback)
+        return value.model_copy(
+            update={
+                "stages": (
+                    ResolvedStage(
+                        id="hold",
+                        from_users=1,
+                        to_users=1,
+                        duration=2.0,
+                        evaluate=True,
+                        start_seconds=0.0,
+                        end_seconds=2.0,
+                    ),
+                ),
+                "samples": (
+                    Sample(
+                        metric="cpu_used",
+                        scope="backend_host",
+                        kind="interval",
+                        timestamp=0.0,
+                        end_seconds=2.0,
+                        value=1.5 if len(launches) == 1 else 0.5,
+                        normalization="all_host_cpus",
+                    ),
+                ),
+            }
+        )
+
+    monkeypatch.setattr(controller, "run_trial", measured)
+    from tools.bench.engine.metrics import evaluate
+
+    monkeypatch.setattr(controller, "evaluate", evaluate)
+    assert controller.run_queue(store, "test")["queues"][0]["state"] == "completed"
+    data = store.controller_state("test")["jobs"]["one"]
+    assert len(launches) == 3
+    assert [len(r["observations"]) for r in data["results"]] == [3, 2, 2]
+    for result in data["results"][1:]:
+        assert result["observed_only"]
+        assert len({o["trial_id"] for o in result["observations"]}) == 2
+    assert controller.run_queue(store, "test")["queues"][0]["state"] == "completed"
+    assert len(launches) == 3
+
+
+def test_invalid_retry_allowance_resets_after_valid_vote(harness, monkeypatch):
+    from tools.bench.engine.types import Job
+
+    store, launches = search_store(harness, 5)
+    row = store.snapshot("test")["jobs"][0]
+    job = Job.model_validate_json(row["definition"])
+    policy = job.test.model_copy(
+        update={
+            "users": job.test.users.model_copy(update={"max": 1}),
+            "confirmation": "majority_on_disagreement",
+        }
+    )
+    store.update(
+        "test", "one", job.model_copy(update={"test": policy}), store.jobs("test")[0].revision
+    )
+    original = controller.run_trial
+
+    def alternating(ctx, callback):
+        value = original(ctx, callback)
+        return value.model_copy(update={"valid": len(launches) % 2 == 0})
+
+    monkeypatch.setattr(controller, "run_trial", alternating)
+    monkeypatch.setattr(controller, "evaluate", lambda *args: Evaluation(verdict="fail"))
+    assert controller.run_queue(store, "test")["queues"][0]["state"] == "completed"
+    assert len(launches) == 4
+
+
+def test_service_shutdown_and_fresh_worker_continue_job(harness, monkeypatch):
+    import signal
+
+    from tools.bench.queue import services
+
+    store, cfg, launches = harness
+    handlers = {}
+
+    def register(sig, handler):
+        previous = handlers.get(sig, signal.SIG_DFL)
+        handlers[sig] = handler
+        return previous
+
+    monkeypatch.setattr(services.signal, "signal", register)
+    commands = []
+    monkeypatch.setattr(services, "_command", lambda args: commands.append(args))
+    original = controller.run_trial
+
+    def shutdown(ctx, callback):
+        value = original(ctx, callback)
+        handlers[signal.SIGTERM](signal.SIGTERM, None)
+        assert callback()
+        return value.model_copy(update={"valid": False, "invalid_reasons": ("stop requested",)})
+
+    monkeypatch.setattr(controller, "run_trial", shutdown)
+    assert services._run("test", store.path.parent) == 0
+    assert store.stop_request("test") is None
+    assert store.jobs("test")[0].state == "active"
+    assert not any("disable" in command for command in commands)
+    assert store.controller_state("test")["jobs"]["one"]["invalid_retries"] == {}
+    monkeypatch.setattr(controller, "run_trial", original)
+    assert services._run("test", store.path.parent) == 0
+    assert store.jobs("test")[0].state == "completed"
+    assert len(launches) == 2
+
+
+def test_reuse_checkpoint_restart_is_idempotent(harness, monkeypatch):
+    from tools.bench.engine.types import Job
+
+    store, launches = search_store(harness, 4)
+    row = store.snapshot("test")["jobs"][0]
+    job = Job.model_validate_json(row["definition"]).model_copy(
+        update={"objectives": {"first": [], "second": []}}
+    )
+    store.update("test", "one", job, store.jobs("test")[0].revision)
+    original = controller._save
+    crashed = False
+
+    def crash(store, queue, state, status=None):
+        nonlocal crashed
+        original(store, queue, state, status)
+        data = state["jobs"].get("one", {})
+        observations = (data.get("search") or {}).get("observations", [])
+        if (
+            not crashed
+            and data.get("objective") == 1
+            and observations
+            and all(o["reused"] for o in observations)
+        ):
+            crashed = True
+            raise KeyboardInterrupt()
+
+    monkeypatch.setattr(controller, "_save", crash)
+    with pytest.raises(KeyboardInterrupt):
+        controller.run_queue(store, "test")
+    monkeypatch.setattr(controller, "_save", original)
+    assert controller.run_queue(QueueStore(store.path), "test")["queues"][0]["state"] == "completed"
+    decisions = store.controller_state("test")["jobs"]["one"]["decisions"]
+    assert len(decisions) == len({(d["objective"], d["trial_id"]) for d in decisions}) == 4
+    assert len(launches) == 2
+
+
+def test_reuse_rejects_incompatible_raw_identity(harness, tmp_path):
+    from tools.bench.engine.evidence import immutable_json
+    from tools.bench.engine.search import SearchPolicy, SearchState
+
+    store, launches = search_store(harness)
+    controller.run_queue(store, "test")
+    context = launches[0]
+    directory = tmp_path / "foreign"
+    immutable_json(
+        directory / "result.json",
+        TrialEvidence(
+            trial_id="foreign", users=1, execution_id="different-binary", cleanup_verified=True
+        ).model_dump(mode="json"),
+    )
+    data = {
+        "target": 0,
+        "decisions": [],
+        "raw_trials": {"foreign": {"target": 0, "path": str(directory), "objective": "old"}},
+    }
+    search = SearchState(policy=SearchPolicy.from_test(context.job.test))
+    result, decisions = controller._reuse_probes(
+        store,
+        "test",
+        data,
+        context.job,
+        context.prepared_target,
+        context.prepared_workload,
+        context.generator_image_id,
+        "default",
+        search,
+    )
+    assert result.observations == ()
+    assert result.budget.attempts == 0
+    assert decisions == []
