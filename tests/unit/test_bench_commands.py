@@ -85,7 +85,7 @@ def test_foreground_signal_is_durable(tmp_path, monkeypatch):
     def run(store, queue):
         signal.getsignal(signal.SIGINT)(signal.SIGINT, None)
         assert store.stop_request(queue) is False
-        store.checkpoint(queue, {}, state='interrupted')
+        store.checkpoint(queue, {'owner': 'test-controller', 'jobs': {}, 'leases': {}, 'last_error': None}, state='interrupted')
         return store.snapshot(queue)
     monkeypatch.setattr(controller, 'run_queue', run)
     assert commands.foreground(store, 'http-demo') == 1

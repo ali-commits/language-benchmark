@@ -8,8 +8,10 @@ and immutable container ID, a held controller lock, and verified trial cleanup.
 import fcntl
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TextIO
 
-from tools.bench.engine.targets import execute_host
+from tools.bench.engine.records import ContainerInfo
+from tools.bench.engine.targets import HostExecutor, execute_host
 from tools.bench.engine.trial import OwnedDocker
 from tools.bench.engine.types import Host
 
@@ -17,15 +19,15 @@ from .store import QueueConflict, require_local_storage
 
 
 class ControllerLock:
-    def __init__(self, path: Path):
+    def __init__(self, path: Path) -> None:
         self.path = Path(path).resolve()
-        self._file = None
+        self._file: TextIO | None = None
 
     @property
-    def held(self):
+    def held(self) -> bool:
         return self._file is not None
 
-    def __enter__(self):
+    def __enter__(self) -> "ControllerLock":
         if self.held:
             raise QueueConflict("controller lock already held")
         require_local_storage(self.path)
@@ -39,7 +41,7 @@ class ControllerLock:
         self._file = handle
         return self
 
-    def __exit__(self, *args):
+    def __exit__(self, *args: object) -> None:
         if self._file:
             fcntl.flock(self._file, fcntl.LOCK_UN)
             self._file.close()
@@ -57,7 +59,7 @@ class LeaseReceipt:
 class HostLease:
     name = "bench-queue-lease"
 
-    def __init__(self, host: Host, queue_id: str, owner: str, *, execute=None):
+    def __init__(self, host: Host, queue_id: str, owner: str, *, execute: HostExecutor | None = None) -> None:
         if not owner or not queue_id:
             raise QueueConflict("lease owner required")
         self.host, self.queue_id, self.owner = host, queue_id, owner
@@ -98,7 +100,7 @@ class HostLease:
         self._verify(receipt)
         return receipt
 
-    def _verify(self, receipt):
+    def _verify(self, receipt: LeaseReceipt) -> ContainerInfo:
         if (receipt.queue_id, receipt.owner) != (
             self.queue_id,
             self.owner,
@@ -109,7 +111,7 @@ class HostLease:
             raise QueueConflict("reservation name mismatch")
         return info
 
-    def release(self, receipt: LeaseReceipt, *, cleanup_verified: bool):
+    def release(self, receipt: LeaseReceipt, *, cleanup_verified: bool) -> None:
         if not cleanup_verified:
             raise QueueConflict("host remains reserved until cleanup is verified")
         self._verify(receipt)

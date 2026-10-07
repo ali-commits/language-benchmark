@@ -231,3 +231,26 @@ def test_included_queue_state_rejected_before_registration(tmp_path):
         store.register(cfg)
     with store._connection() as conn:
         assert conn.execute("SELECT COUNT(*) FROM queues").fetchone()[0] == 0
+
+
+def test_controller_checkpoint_preserves_nested_extension_metadata(tmp_path):
+    store = QueueStore(tmp_path / "queue.db")
+    store.register(config(tmp_path))
+    payload = {"owner": "worker", "jobs": {}, "leases": {}, "last_error": None,
+               "future_metadata": {"version": 2}}
+    store.checkpoint("test", payload)
+    retained = store.controller_state("test")
+    assert retained == payload
+    retained["last_error"] = "retained error"
+    store.checkpoint("test", retained)
+    assert store.controller_state("test")["future_metadata"] == {"version": 2}
+
+
+def test_malformed_controller_checkpoint_fails_closed(tmp_path):
+    store = QueueStore(tmp_path / "queue.db")
+    store.register(config(tmp_path))
+    with store._connection() as conn:
+        conn.execute("INSERT INTO controllers VALUES (?, ?)", ("test", '{"owner": 123}'))
+    with pytest.raises(ValueError):
+        store.controller_state("test")
+    assert store.jobs("test")[0].state == "pending"

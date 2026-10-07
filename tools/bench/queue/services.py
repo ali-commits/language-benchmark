@@ -7,8 +7,10 @@ import signal
 import stat
 import subprocess
 import sys
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from types import FrameType
 
 from .controller import run_queue
 from .store import QueueStore, require_local_storage
@@ -27,7 +29,7 @@ class ServiceReceipt:
     reboot_persistent: bool
 
 
-def _command(argv):
+def _command(argv: Sequence[str]) -> str:
     try:
         return subprocess.run(
             argv, check=True, capture_output=True, text=True, timeout=30
@@ -38,12 +40,12 @@ def _command(argv):
         ) from exc
 
 
-def _unit_name(queue, state_dir):
+def _unit_name(queue: str, state_dir: Path) -> str:
     token = hashlib.sha256((str(state_dir.resolve()) + "\0" + queue).encode()).hexdigest()[:24]
     return "bench-queue-" + token + ".service"
 
 
-def _quote(value, *, expand_environment=True):
+def _quote(value: str | Path, *, expand_environment: bool = True) -> str:
     value = str(value)
     if any(c in value for c in "\n\r\0"):
         raise ValueError("service arguments must be single-line")
@@ -139,18 +141,18 @@ def install_service(
     return ServiceReceipt(queue, name, path, state_dir, True)
 
 
-def start_service(queue: str, state_dir: Path):
+def start_service(queue: str, state_dir: Path) -> None:
     """Start the installed unit; stop requests must be cleared explicitly."""
     _command(["systemctl", "--user", "start", _unit_name(queue, Path(state_dir))])
 
 
-def stop_service(queue: str, state_dir: Path, *, after_current=False):
+def stop_service(queue: str, state_dir: Path, *, after_current: bool = False) -> None:
     """Persist deliberate stop and disable reboot activation without killing load."""
     QueueStore(Path(state_dir) / "queue.db").request_stop(queue, after_current=after_current)
     _command(["systemctl", "--user", "disable", _unit_name(queue, Path(state_dir))])
 
 
-def resume_service(queue: str, state_dir: Path, *, environment_file: Path | None = None):
+def resume_service(queue: str, state_dir: Path, *, environment_file: Path | None = None) -> ServiceReceipt:
     state_dir = Path(state_dir).resolve()
     name = _unit_name(queue, state_dir)
     config = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")).resolve()
@@ -172,12 +174,12 @@ def resume_service(queue: str, state_dir: Path, *, environment_file: Path | None
     return receipt
 
 
-def _run(queue, state_dir):
+def _run(queue: str, state_dir: Path) -> int:
     store = QueueStore(Path(state_dir) / "queue.db")
 
     interrupted = False
 
-    def stop(signum, frame):
+    def stop(signum: int, frame: FrameType | None) -> None:
         # SIGTERM is also systemd's normal shutdown signal. Process interruption
         # must not create the durable user-stop latch or disable reboot resume.
         nonlocal interrupted
@@ -203,4 +205,4 @@ def _run(queue, state_dir):
 if __name__ == "__main__":
     if len(sys.argv) != 4 or sys.argv[1] != "run":
         raise SystemExit("usage: python -m tools.bench.queue.services run QUEUE STATE_DIR")
-    raise SystemExit(_run(sys.argv[2], sys.argv[3]))
+    raise SystemExit(_run(sys.argv[2], Path(sys.argv[3])))

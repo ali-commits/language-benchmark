@@ -7,13 +7,44 @@ import re
 import signal
 import sys
 import time
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from importlib.resources import files
 from pathlib import Path
+from types import FrameType
+
+from pydantic import JsonValue
+
+from .engine.records import DockerImage
+from .engine.types import BenchmarkConfig, SearchUsers
+from .queue.records import PublicJob, PublicStatus
+from .queue.services import ServiceReceipt
+from .queue.store import JobReceipt, QueueReceipt, QueueStore
+from .records import checked_record
+
+
+class Arguments(argparse.Namespace):
+    command: str
+    action: str
+    template: str
+    output: Path
+    config: Path
+    env_file: Path | None
+    show_effective: bool
+    state_dir: Path
+    queue: str
+    job_id: str
+    job: Path
+    file: Path
+    expected_revision: int | None
+    detach: bool
+    after_current: bool
+    timeout: float
+    json: bool
 
 
 @contextmanager
-def environment_file(path):
+def environment_file(path: Path | None) -> Iterator[None]:
     previous = dict(os.environ)
     try:
         if path:
@@ -35,22 +66,23 @@ def environment_file(path):
         os.environ.update(previous)
 
 
-def receipt(value):
+def receipt(value: QueueReceipt | JobReceipt | ServiceReceipt) -> None:
     print(json.dumps(dataclasses.asdict(value), sort_keys=True, default=str))
 
 
-def public_status(store, queue):
+def public_status(store: QueueStore, queue: str) -> PublicStatus:
     snapshot = store.snapshot(queue)
+    state = store.controller_state(queue)
     return {'queue': queue, 'state': snapshot['queues'][0]['state'],
             'revision': snapshot['queues'][0]['revision'],
-            'jobs': [dataclasses.asdict(j) for j in store.jobs(queue)],
+            'jobs': [checked_record(dataclasses.asdict(j), PublicJob) for j in store.jobs(queue)],
             'trials': snapshot['trials'], 'stop_requested': store.stop_request(queue),
-            'last_error': (store.controller_state(queue) or {}).get('last_error')}
+            'last_error': state['last_error'] if state else None}
 
 
-def foreground(store, queue):
+def foreground(store: QueueStore, queue: str) -> int:
     from .queue.controller import run_queue
-    def stop(signum, frame):
+    def stop(signum: int, frame: FrameType | None) -> None:
         store.request_stop(queue)
     handlers = {s: signal.getsignal(s) for s in (signal.SIGINT, signal.SIGTERM)}
     try:
@@ -65,21 +97,26 @@ def foreground(store, queue):
     return 0 if result['queues'][0]['state'] == 'completed' else 1
 
 
-def show_plan(config):
+def show_plan(config: BenchmarkConfig) -> None:
     from .engine.config import resolve_jobs
     from .engine.stages import fixed_populations, resolve_stages
     for job in resolve_jobs(config):
-        populations = fixed_populations(job) if job.test.type == 'fixed' else (job.test.users.start,)
+        if job.test.type == 'fixed':
+            populations = fixed_populations(job)
+        else:
+            assert isinstance(job.test.users, SearchUsers) and job.test.limits is not None
+            populations = (job.test.users.start,)
         for users in populations:
             stages = resolve_stages(job, users)
             print(f'{job.id}/{job.target_name}: users={users}; scheduled={sum(s.duration for s in stages):g}s plus drain={job.drain:g}s; repetitions={job.test.repetitions}; preparation/cleanup additional')
             for stage in stages:
                 print(f'  {stage.id}: {stage.from_users} -> {stage.to_users} ({stage.duration:g}s), evaluate={stage.evaluate}')
         if job.test.type == 'search':
+            assert isinstance(job.test.users, SearchUsers) and job.test.limits is not None
             print(f'  search budget: {job.test.limits.model_dump()}; population max={job.test.users.max}; trials unknown until measured')
 
 
-def doctor(config):
+def doctor(config: BenchmarkConfig) -> int:
     import tempfile
 
     from .engine.collectors import collectors_for
@@ -94,6 +131,7 @@ def doctor(config):
             if job.test.type == 'fixed':
                 populations = fixed_populations(job)
             else:
+                assert isinstance(job.test.users, SearchUsers) and job.test.limits is not None
                 ceilings = [value for value in (job.test.users.max, job.test.limits.hard_users) if isinstance(value, int)]
                 capacity = preflight_social(job.workload)
                 ceilings.append(capacity['account_capacity'])
@@ -111,11 +149,12 @@ def doctor(config):
                 from .engine.resources import runtime_root
                 from .models import NativeCell
                 from .native_runtime import load_runtime_cell, native_image_metadata
+                assert job.workload.fixture is not None and job.workload.fixture.runtime_cell is not None
                 cell = load_runtime_cell(job.workload.fixture.runtime_cell, runtime_root())
                 if isinstance(cell, NativeCell):
-                    image = json.loads(inspection.stdout)[0]
+                    image = checked_record(json.loads(inspection.stdout), list[DockerImage])[0]
                     native_image_metadata({'id': image['Id'], 'os': image['Os'], 'architecture': image['Architecture'],
-                        'labels': image['Config'].get('Labels', {})}, cell, image['Id'])
+                        'labels': image['Config'].get('Labels') or {}}, cell, image['Id'])
         else:
             from .engine.types import Host
             execute_host(Host(transport='local'), ['docker', 'buildx', 'version'], timeout=20)
@@ -130,7 +169,7 @@ def doctor(config):
     return 0
 
 
-def main(argv=None):
+def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog='bench', description='Portable HTTP benchmark queues')
     commands = parser.add_subparsers(dest='command', required=True)
     init = commands.add_parser('init')
@@ -170,7 +209,7 @@ def main(argv=None):
     report.add_argument('queue')
     report.add_argument('--state-dir', type=Path, default=Path('.bench'))
     report.add_argument('--output', type=Path, required=True)
-    args = parser.parse_args(argv)
+    args = parser.parse_args(argv, namespace=Arguments())
     try:
         with environment_file(getattr(args, 'env_file', None)):
             return dispatch(args)
@@ -184,11 +223,11 @@ def main(argv=None):
         return 2
 
 
-def dispatch(args):
+def dispatch(args: Arguments) -> int:
     from .engine.config import load_config, resolve_jobs
     if args.command == 'init':
         output = args.output.resolve()
-        source = files('tools.bench').joinpath('templates', args.template)
+        source = files('tools.bench').joinpath('templates').joinpath(args.template)
         output.parent.mkdir(parents=True, exist_ok=True)
         if output.exists():
             raise FileExistsError('output already exists')
@@ -201,8 +240,8 @@ def dispatch(args):
         import yaml
 
         from .engine.config import UniqueLoader
-        data = yaml.load((assets / 'queue.yaml').read_text(), Loader=UniqueLoader)
-        def relocate(value):
+        data = checked_record(yaml.load((assets / 'queue.yaml').read_text(), Loader=UniqueLoader), JsonValue)
+        def relocate(value: JsonValue) -> JsonValue:
             if isinstance(value, dict):
                 return {key: relocate(item) for key, item in value.items()}
             if isinstance(value, list):
@@ -242,7 +281,7 @@ def dispatch(args):
         if action == 'logs':
             # Audit events deliberately omit frozen definitions and arbitrary hook/load text.
             for event in store.snapshot(args.queue)['events']:
-                print(json.dumps({key: event[key] for key in ('sequence', 'job', 'kind', 'revision')}))
+                print(json.dumps({'sequence': event['sequence'], 'job': event['job'], 'kind': event['kind'], 'revision': event['revision']}))
         else:
             print(json.dumps(status, indent=2) if args.json else f"{args.queue}: {status['state']}\n" + '\n'.join(f"  {j['job_id']}: {j['state']} (revision {j['revision']})" for j in status['jobs']))
         return 0
@@ -251,9 +290,9 @@ def dispatch(args):
         from .engine.types import BenchmarkConfig
         snapshot = store.snapshot(args.queue)
         config = BenchmarkConfig.model_validate_json(snapshot['queues'][0]['config'])
-        data = _read(args.job if action == 'append' else args.file)
+        job_data = _read(args.job if action == 'append' else args.file)
         # Full single-job YAML is also accepted; shared definitions remain frozen.
-        if 'version' in data:
+        if 'version' in job_data:
             loaded = load_config(args.job if action == 'append' else args.file)
             if len(loaded.jobs) != 1:
                 raise ValueError('replacement/append file must contain exactly one job')
@@ -267,7 +306,7 @@ def dispatch(args):
                 raise ValueError('shared defaults are frozen; supply a standalone full job replacement')
         else:
             normalized = config.model_dump(mode='python', by_alias=True)
-            normalized['jobs'] = [data]
+            normalized['jobs'] = [job_data]
             # Normalize criteria units through the same loader using frozen definitions.
             import tempfile
 

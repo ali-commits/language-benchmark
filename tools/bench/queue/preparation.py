@@ -1,0 +1,120 @@
+"""Pinned preparation and retained-copy reconstruction, independent of dispatch."""
+import os
+from collections.abc import Callable
+from pathlib import Path
+from typing import Protocol
+
+from tools.bench.engine.docker_env import validate_container_environment
+from tools.bench.engine.stages import fixed_populations
+from tools.bench.engine.targets import ResolvedTarget, load_build_snapshot, tree_checksums
+from tools.bench.engine.types import Environment, Host, ResolvedJob, SearchUsers, Target
+from tools.bench.engine.workloads import PreparedWorkload, prepare_workload
+from tools.bench.records import checked_record
+
+from .records import JobCheckpoint, PreparedPin, TargetPin
+from .store import QueueConflict
+
+MAX_RECOVERY_ATTEMPTS = 3
+
+class TargetResolver(Protocol):
+    def __call__(self, target: Target, environment: Environment, *, snapshot_directory: Path | None = None) -> ResolvedTarget: ...
+
+class ExecutionIdentity(Protocol):
+    def __call__(self, job: ResolvedJob, users: int | None, target: ResolvedTarget, workload: PreparedWorkload, /, *, generator_image_id: str) -> str: ...
+
+def prepare(data: JobCheckpoint, index: int, job: ResolvedJob, *, root: Path, save: Callable[[str | None], None], check_stop: Callable[[], None], resolve: TargetResolver, inspect_image: Callable[[Host, str], str], execution_identity: ExecutionIdentity) -> tuple[ResolvedTarget, PreparedWorkload, str]:
+    # Resolve refs without persisting values; validate before Docker preparation.
+    try:
+        env = {key: os.environ[ref.env] for key, ref in job.target.env.items()}
+    except KeyError as exc:
+        raise QueueConflict("required target environment reference is unset") from exc
+    try:
+        validate_container_environment(env)
+    except ValueError as exc:
+        raise QueueConflict(
+            "target environment requires portable names and single-line values (no CR, LF or NUL)"
+        ) from exc
+    check_stop()
+    key = str(index)
+    prep = data["prepared"].get(key)
+    directory = root / data["directory"] / ("prepare-" + key)
+    if prep is None:
+        data["preparation_attempts"][key] = data["preparation_attempts"].get(key, 0) + 1
+        if data["preparation_attempts"][key] > MAX_RECOVERY_ATTEMPTS:
+            raise QueueConflict("preparation attempt budget exhausted")
+        save("preparing")
+        # Each interrupted preparation gets a fresh path; never overwrite receipts.
+        directory /= str(data["preparation_attempts"][key])
+        retained_target = data.setdefault("target_pins", {}).get(key)
+        if retained_target is None:
+            target = resolve(
+                job.target, job.environment, snapshot_directory=directory / "build"
+            )
+            retained_target = checked_record({
+                "image": target.image_id,
+                "requested_image": target.requested_image,
+                "repo_digests": list(target.repo_digests),
+                "build": str(target.build_snapshot.context.parent)
+                if target.build_snapshot
+                else None,
+            }, TargetPin)
+            data["target_pins"][key] = retained_target
+            save(None)
+        target = ResolvedTarget(
+            job.target,
+            retained_target["requested_image"],
+            retained_target["image"],
+            tuple(retained_target["repo_digests"]),
+            load_build_snapshot(Path(retained_target["build"]))
+            if retained_target["build"]
+            else None,
+        )
+        check_stop()
+        cached = data["workloads"].get(job.workload_name)
+        if cached is None:
+            workload = prepare_workload(job.workload, directory / "workload")
+            cached = {
+                "directory": str(workload.directory),
+                "script": str(workload.script),
+                "checksums": workload.checksums,
+                "identity": workload.identity,
+            }
+            data["workloads"][job.workload_name] = cached
+        generator = inspect_image(job.environment.generator, "grafana/k6:1.4.2")
+        prep = checked_record({
+            "image": target.image_id,
+            "requested_image": target.requested_image,
+            "repo_digests": list(target.repo_digests),
+            "build": str(target.build_snapshot.context.parent) if target.build_snapshot else None,
+            "workload": cached,
+            "generator": generator,
+        }, PreparedPin)
+        data["prepared"][key] = prep
+        save(None)
+    build = load_build_snapshot(Path(prep["build"])) if prep["build"] else None
+    target = ResolvedTarget(
+        job.target, prep["requested_image"], prep["image"], tuple(prep["repo_digests"]), build
+    )
+    work = prep["workload"]
+    workload = PreparedWorkload(
+        Path(work["directory"]), Path(work["script"]), work["checksums"], work["identity"]
+    )
+    if tree_checksums(workload.directory) != workload.checksums:
+        raise QueueConflict("prepared workload changed")
+    inspect_image(job.environment.backend, target.image_id)
+    inspect_image(job.environment.generator, prep["generator"])
+    if job.test.type == "search":
+        assert isinstance(job.test.users, SearchUsers)
+        identity_users: int | None = job.test.users.min
+    else:
+        identity_users = fixed_populations(job)[0]
+    identity = execution_identity(
+        job, identity_users, target, workload, generator_image_id=prep["generator"]
+    )
+    if prep.get("execution_identity", identity) != identity:
+        raise QueueConflict("execution identity changed; cannot resume")
+    prep["execution_identity"] = identity
+    save(None)
+    check_stop()
+    return target, workload, prep["generator"]
+
