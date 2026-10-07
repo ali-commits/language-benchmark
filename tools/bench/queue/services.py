@@ -55,6 +55,24 @@ def _quote(value: str | Path, *, expand_environment: bool = True) -> str:
     return '"' + value + '"'
 
 
+def _environment_file_path(value: Path) -> str:
+    """EnvironmentFile is a raw absolute glob, not an ExecStart quoted argument."""
+    text = str(value)
+    if not value.is_absolute() or any(c in text for c in "\n\r\0"):
+        raise ValueError("environment file path must be absolute and single-line")
+    escapes = {
+        "%": "%%",
+        " ": "[ ]",
+        "\t": "[\t]",
+        "*": "[*]",
+        "?": "[?]",
+        "[": "[[]",
+        "]": "[]]",
+        "\\": "\\\\",
+    }
+    return "".join(escapes.get(c, c) for c in text)
+
+
 def install_service(
     queue: str, state_dir: Path, *, environment_file: Path | None = None
 ) -> ServiceReceipt:
@@ -118,7 +136,7 @@ def install_service(
             "ExecStart=" + " ".join(_quote(a) for a in argv),
             "WorkingDirectory=" + str(Path(__file__).resolve().parents[3]).replace("%", "%%"),
             *(
-                ["EnvironmentFile=" + _quote(private_environment, expand_environment=False)]
+                ["EnvironmentFile=" + _environment_file_path(private_environment)]
                 if private_environment
                 else []
             ),

@@ -46,7 +46,7 @@ def test_private_environment_file_only_path_in_unit(tmp_path, monkeypatch):
     private.chmod(0o600)
     receipt = services.install_service("q", tmp_path / "state", environment_file=private)
     unit = receipt.unit_path.read_text()
-    assert "EnvironmentFile=" in unit
+    assert "EnvironmentFile=" + str(private) + "\n" in unit
     assert str(private) in unit
     assert "secret-for-test" not in unit
     private.chmod(0o644)
@@ -66,11 +66,18 @@ def test_actual_systemd_parser_accepts_unit(tmp_path, monkeypatch, folder):
     monkeypatch.setattr(services, "__file__", str(project / "tools/bench/queue/services.py"))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
     monkeypatch.setattr(services, "_command", lambda args: "yes" if "show-user" in args else "")
-    receipt = services.install_service("queue % name", tmp_path / "state with % space")
+    private = project / "private.env"
+    private.write_text("BENCH_SERVICE_TEST=sentinel\n")
+    private.chmod(0o600)
+    receipt = services.install_service(
+        "queue % name", tmp_path / "state with % space", environment_file=private
+    )
     result = subprocess.run(
         [analyzer, "--user", "verify", str(receipt.unit_path)], capture_output=True, text=True
     )
     assert result.returncode == 0, result.stderr
+    assert "not absolute" not in result.stderr
+    assert "ignoring" not in result.stderr.lower()
     assert "WorkingDirectory=" + str(project).replace("%", "%%") in receipt.unit_path.read_text()
 
 
@@ -122,3 +129,65 @@ def test_explicit_stop_latch_survives_signal_and_worker(tmp_path, monkeypatch):
     assert store.stop_request("test") is False
     assert store.jobs("test")[0].state == "pending"
     assert any("disable" in call for call in calls)
+
+
+def test_environment_file_path_escapes_glob_and_specifiers():
+    from pathlib import Path
+
+    assert (
+        services._environment_file_path(Path("/tmp/space % *?[x]\\.env "))
+        == "/tmp/space[ ]%%[ ][*][?][[]x[]]\\\\.env[ ]"
+    )
+    for path in (Path("relative.env"), Path("/tmp/bad\nname.env")):
+        with pytest.raises(ValueError, match="absolute and single-line"):
+            services._environment_file_path(path)
+
+
+@pytest.mark.parametrize("filename", ["ordinary.env", "spaces %n $HOME *?[x]\\.env "])
+def test_actual_user_systemd_reads_exact_environment_file(tmp_path, filename):
+    import os
+    import subprocess
+    import sys
+    from uuid import uuid4
+
+    if os.environ.get("BENCH_SYSTEMD_ENV_SMOKE") != "1":
+        pytest.skip("opt-in ephemeral user-systemd execution")
+    control = services.shutil.which("systemctl")
+    if not control:
+        pytest.skip("systemctl unavailable")
+    private = tmp_path / filename
+    private.write_text("BENCH_SERVICE_TEST=expected-sentinel\n")
+    private.chmod(0o600)
+    name = "bench-env-smoke-" + uuid4().hex + ".service"
+    unit = tmp_path / name
+    argv = [
+        sys.executable,
+        "-c",
+        "import os; assert os.environ['BENCH_SERVICE_TEST']=='expected-sentinel'",
+    ]
+    unit.write_text(
+        "[Service]\nType=oneshot\nEnvironmentFile="
+        + services._environment_file_path(private)
+        + "\nExecStart="
+        + " ".join(services._quote(arg) for arg in argv)
+        + "\n"
+    )
+    try:
+        subprocess.run(
+            [control, "--user", "link", "--runtime", str(unit)],
+            check=True,
+            capture_output=True,
+            timeout=30,
+        )
+        result = subprocess.run(
+            [control, "--user", "start", "--wait", name], capture_output=True, text=True, timeout=30
+        )
+        assert result.returncode == 0, result.stderr
+    finally:
+        subprocess.run(
+            [control, "--user", "disable", "--runtime", name],
+            check=True,
+            capture_output=True,
+            timeout=30,
+        )
+        subprocess.run([control, "--user", "reset-failed", name], capture_output=True, timeout=30)
