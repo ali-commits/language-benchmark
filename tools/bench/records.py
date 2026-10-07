@@ -5,21 +5,32 @@ readers keep unknown keys for historical forward compatibility after checking th
 known fields; operational guards remain in their original callers.
 """
 
+from __future__ import annotations
+
+from datetime import datetime
 from typing import TypeVar, cast
+from functools import lru_cache
+from collections.abc import Hashable
 
 from pydantic import TypeAdapter
-from typing_extensions import TypedDict
+from typing_extensions import TypeForm, TypedDict
 
 JSONValue = str | int | float | bool | None | list['JSONValue'] | dict[str, 'JSONValue']
 T = TypeVar('T')
 
 
-def checked_record(value: object, schema: type[T]) -> T:
+def checked_record(value: object, schema: TypeForm[T]) -> T:
     """Validate known wire fields strictly, preserving original extra metadata."""
-    TypeAdapter(schema).validate_python(value, strict=True)
+    adapter: TypeAdapter[object] = _adapter(schema) if isinstance(schema, Hashable) else TypeAdapter(schema)
+    adapter.validate_python(value, strict=True)
     # The schema checked above establishes the exact target record. Preserve the
     # original mapping because TypedDict adapters intentionally drop unknown keys.
     return cast(T, value)
+
+
+@lru_cache(maxsize=128)
+def _adapter(schema: TypeForm[object]) -> TypeAdapter[object]:
+    return TypeAdapter(schema)
 
 
 class RuntimeCellRecord(TypedDict, total=False):
@@ -124,7 +135,7 @@ class NativeImage(TypedDict, total=False):
     labels: dict[str, str | None]
 
 
-class NativeAttestation(TypedDict):
+class NativeAttestation(TypedDict, total=False):
     cell: NativeCellRecord
     container: NativeContainer
     image: NativeImage
@@ -191,22 +202,22 @@ class Campaign(TypedDict, total=False):
     max_rate: int
     vus: int
     repeats: int
-    measure_seconds: int
-    warmup_seconds: int
+    measure_seconds: float
+    warmup_seconds: float
     seed: int
     database_allowlist: str
     profile: str
     experiment_type: str
     ramp_seconds: int
-    settle_seconds: int
+    settle_seconds: float
     hold_seconds: int
     backend_nofile_limit: int
     start_users: int
     step_users: int
     max_users: int
     resolution_users: int
-    wait_min: int
-    wait_max: int
+    wait_min: float
+    wait_max: float
     timeout_seconds: int
     success_fraction: float
     authentication_fraction: float
@@ -252,15 +263,15 @@ class Methodology(TypedDict, total=False):
     requested_profile: str
     configured_profile: str
     ramp_seconds: int
-    settle_seconds: int
+    settle_seconds: float
     hold_seconds: int
-    configured_trial_seconds: int
+    configured_trial_seconds: float
     steady_duration_seconds: int
     success_fraction: float
     authentication_fraction: float
     timeout_seconds: int
-    wait_min: int
-    wait_max: int
+    wait_min: float
+    wait_max: float
     mode: str
     classification_version: str
     description: str
@@ -343,7 +354,7 @@ class TrialResult(Lifecycle, total=False):
     label: str | None
     methodology: Methodology
     ramp_seconds: int
-    settle_seconds: int
+    settle_seconds: float
     hold_seconds: int
     execution_started_epoch: float
     execution_finished_epoch: float
@@ -513,7 +524,7 @@ class TrialManifest(TypedDict, total=False):
     image: dict[str, object]
     jit_engine_probe: dict[str, object]
     fixture: FixtureRecord
-    backend_baseline_ready: dict[str, object] | None
+    backend_baseline_ready: BaselineResult | None
 
 
 class Observation(TypedDict, total=False):
@@ -553,3 +564,145 @@ class AnalysisReport(TypedDict):
     invalid_observations: int
     observations: list[Observation]
     bounds: list[ObservedBound]
+
+
+class LoadToken(TypedDict):
+    expires_in: int
+    access_token: str
+
+
+class Actor(Credential, total=False):
+    id: int
+    token: str
+    cursor: str | None
+    created_at: str
+
+
+class LoadMetadata(TypedDict):
+    actors: int
+    pairs: int
+    expires_at: float
+
+
+class BaselineSample(TypedDict, total=False):
+    epoch: float
+    cpu_counters: list[int]
+    available_memory_mib: float
+    unexpected_jobs: list[dict[str, int | str]]
+    containers: list[dict[str, str]]
+
+
+class BaselineResult(TypedDict):
+    stage: str
+    status: str
+    cpu_limit_percent: float
+    available_memory_min_mib: float
+    interval_seconds: int
+    required_consecutive: int
+    samples: list[dict[str, object]]
+    definition: str
+
+
+class LoadContainer(TypedDict, total=False):
+    id: str
+    running: bool
+    project: str
+    service: str
+    working_dir: str
+
+
+class LoadCleanup(TypedDict):
+    discovered: list[str]
+    stopped: list[str]
+    removed: list[str]
+    verified_gone: bool
+    ownership: dict[str, str]
+
+
+class HostSample(TypedDict, total=False):
+    time: float
+    stat: str
+    meminfo: str
+    netdev: str
+    loadavg: str
+    cpuinfo: str
+    vmstat: str
+    error: str
+
+
+class TelemetrySample(TypedDict, total=False):
+    time: float
+    hosts: dict[str, HostSample]
+    worker_pools: list[dict[str, object]]
+    docker: str
+    database: tuple[object, ...] | None
+    waits: list[tuple[object, ...]]
+    database_error: str
+
+
+class RdsPoint(TypedDict, total=False):
+    Timestamp: datetime | str | float
+    Average: float
+    Maximum: float
+    Unit: str
+
+
+class RdsEvent(TypedDict, total=False):
+    Date: datetime | str | float
+    Message: str
+    SourceIdentifier: str
+    SourceType: str
+    EventCategories: list[str]
+    SourceArn: str
+
+
+class RdsEvidence(TypedDict, total=False):
+    CPUUtilization: list[RdsPoint]
+    DatabaseConnections: list[RdsPoint]
+    FreeableMemory: list[RdsPoint]
+    ReadIOPS: list[RdsPoint]
+    WriteIOPS: list[RdsPoint]
+    ReadLatency: list[RdsPoint]
+    WriteLatency: list[RdsPoint]
+    ReadThroughput: list[RdsPoint]
+    WriteThroughput: list[RdsPoint]
+    DiskQueueDepth: list[RdsPoint]
+    statistics_window: dict[str, str]
+    measurement_window: dict[str, str]
+    events: list[RdsEvent]
+    instance: dict[str, object]
+
+
+class ControllerStatus(TypedDict, total=False):
+    status: str
+    controller_attempts: int
+    updated_epoch: float
+    identity: str
+    completed_stages: list[str]
+
+
+class PipelineStage(TypedDict, total=False):
+    name: str
+    output: str
+    config: str
+    controller: str
+    state: str
+    observe_supervisor: str
+
+
+class PipelineConfig(TypedDict):
+    stages: list[PipelineStage]
+
+
+class LanguageVerification(TypedDict, total=False):
+    cell: NativeCellRecord
+    status: str
+    tls_verified: bool
+    image_id: str
+    resources: dict[str, int]
+    tls_hostname_rejected: bool
+
+
+class DockerVerification(TypedDict):
+    Image: str
+    HostConfig: dict[str, int | str | bool | None]

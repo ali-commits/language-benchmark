@@ -1,5 +1,11 @@
 """Private k6 inputs: real tokens, known mutation pairs, and nonfirst-page cursors."""
 
+from typing import TypeVar
+from typing_extensions import TypedDict
+
+from pydantic import TypeAdapter
+from .records import Credential, Actor, LoadToken, LoadMetadata, checked_record
+
 import json
 import os
 import time
@@ -9,22 +15,29 @@ import httpx
 import psycopg
 
 
-def validate_token_lifetime(remaining_seconds: int, required_valid_seconds: int):
+class FeedCursor(TypedDict):
+    next_cursor: str | None
+
+
+def validate_token_lifetime(remaining_seconds: int, required_valid_seconds: float) -> None:
     if remaining_seconds < required_valid_seconds + 60:
         raise ValueError("token expires before trial completes")
 
 
-def partition_actors(actors: list, shard: int, shards: int) -> list:
+T = TypeVar("T")
+
+
+def partition_actors(actors: list[T], shard: int, shards: int) -> list[T]:
     if not 0 <= shard < shards:
         raise ValueError("invalid shard")
     return actors[shard::shards]
 
 
 def prepare_load_data(
-    base_url: str, credentials_path: Path, output_path: Path, required_valid_seconds: int
-) -> dict:
-    credentials = json.loads(credentials_path.read_text())
-    actors = []
+    base_url: str, credentials_path: Path, output_path: Path, required_valid_seconds: float
+) -> LoadMetadata:
+    credentials = checked_record(json.loads(credentials_path.read_text()), list[Credential])
+    actors: list[Actor] = []
     start = time.time()
     with httpx.Client(base_url=base_url, timeout=30) as c:
         for cred in credentials:
@@ -33,7 +46,7 @@ def prepare_load_data(
                 json={"username": cred["username"], "password": cred["password"]},
             )
             r.raise_for_status()
-            t = r.json()
+            t = checked_record(r.json(), LoadToken)
             validate_token_lifetime(
                 t["expires_in"] - int(time.time() - start), required_valid_seconds
             )
@@ -45,13 +58,13 @@ def prepare_load_data(
             actors.append(
                 {
                     **cred,
-                    **me.json(),
+                    **checked_record(me.json(), Actor),
                     "token": t["access_token"],
-                    "cursor": feed.json()["next_cursor"],
+                    "cursor": checked_record(feed.json(), FeedCursor)["next_cursor"],
                 }
             )
     with psycopg.connect(os.environ["DATABASE_URL"]) as db:
-        posts = [r[0] for r in db.execute("SELECT id FROM posts ORDER BY id")]
+        posts = [checked_record(r[0], int) for r in db.execute("SELECT id FROM posts ORDER BY id")]
         known_likes = set(
             db.execute(
                 "SELECT user_id,post_id FROM likes WHERE user_id=ANY(%s)",
@@ -72,15 +85,16 @@ def prepare_load_data(
             break
     if len(pairs) < budget:
         raise ValueError("not enough distinct unliked pairs for trial")
+    expires_at = start + min(3600, t["expires_in"])
     data = {
         "actors": actors,
         "posts": posts,
         "like_pairs": pairs,
         "created_at": time.time(),
-        "expires_at": start + min(3600, t["expires_in"]),
+        "expires_at": expires_at,
     }
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(output_path, os.O_CREAT | os.O_TRUNC | os.O_WRONLY, 0o600)
     with os.fdopen(fd, "w") as f:
         json.dump(data, f)
-    return {"actors": len(actors), "pairs": len(pairs), "expires_at": data["expires_at"]}
+    return {"actors": len(actors), "pairs": len(pairs), "expires_at": expires_at}

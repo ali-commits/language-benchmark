@@ -1,5 +1,10 @@
 """Run stateful concurrent-user probes with guarded resets and bracket confirmation."""
 
+from collections.abc import Callable
+from typing import Literal
+from pydantic import TypeAdapter
+from .records import (Campaign, Trial, TrialResult, TrialManifest, Outcome, CapacityResult, ConfirmationPolicy, Decision, checked_record)
+
 import json
 import math
 import os
@@ -34,7 +39,7 @@ def backend_validity_flags(directory: Path) -> list[str]:
     return []
 
 
-def validate_config(c: dict):
+def validate_config(c: Campaign) -> None:
     decision = c.get("boundary_decision_policy", "legacy")
     if decision not in ("legacy", POLICY) or (
         decision == POLICY and c.get("experiment_type") != "capacity"
@@ -57,7 +62,7 @@ def validate_config(c: dict):
         raise ValueError("unknown benchmark profile")
     if c.get("mode") not in ("local", "aws") or not c.get("cells"):
         raise ValueError("mode and runtime cells required")
-    for key in (
+    positive_keys: tuple[Literal["start_users", "step_users", "max_users", "resolution_users", "ramp_seconds", "hold_seconds", "timeout_seconds"], ...] = (
         "start_users",
         "step_users",
         "max_users",
@@ -65,7 +70,8 @@ def validate_config(c: dict):
         "ramp_seconds",
         "hold_seconds",
         "timeout_seconds",
-    ):
+    )
+    for key in positive_keys:
         if type(c.get(key)) is not int or c[key] < 1:
             raise ValueError("invalid " + key)
     if c["start_users"] > c["max_users"] or c["max_users"] > 50000:
@@ -92,12 +98,13 @@ def validate_config(c: dict):
         raise ValueError("invalid response target/confirmations")
     if "confirmation_policy" in c:
         policy = c["confirmation_policy"]
+        confirmation_keys: tuple[Literal["passing_repeats", "failing_repeats"], ...] = ("passing_repeats", "failing_repeats")
         if (
             not isinstance(policy, dict)
             or set(policy) != {"passing_repeats", "failing_repeats", "stop_on_contradiction"}
             or any(
                 type(policy.get(k)) is not int or not 0 <= policy[k] <= 10
-                for k in ("passing_repeats", "failing_repeats")
+                for k in confirmation_keys
             )
             or policy["failing_repeats"] < 1
             or type(policy.get("stop_on_contradiction")) is not bool
@@ -105,9 +112,9 @@ def validate_config(c: dict):
             raise ValueError("invalid confirmation execution policy")
     if c.get("growth_strategy", "adaptive") not in ("adaptive", "geometric"):
         raise ValueError("unknown search growth strategy")
-    hint = c.get("initial_failing_hint")
-    if hint is not None and (
-        type(hint) is not int or not c["start_users"] < hint <= c["max_users"]
+    initial_hint = c.get("initial_failing_hint")
+    if initial_hint is not None and (
+        type(initial_hint) is not int or not c["start_users"] < initial_hint <= c["max_users"]
     ):
         raise ValueError("invalid measured starting hint")
     if "cell_starting_hints" in c:
@@ -161,7 +168,7 @@ def validate_config(c: dict):
         raise ValueError("fixture cannot provide enough unique accounts")
 
 
-def await_rds(c: dict, result: dict, directory: Path):
+def await_rds(c: Campaign, result: TrialResult, directory: Path) -> None:
     if (
         c["mode"] != "aws"
         or result.get("status") != "measured"
@@ -195,7 +202,7 @@ def await_rds(c: dict, result: dict, directory: Path):
         time.sleep(30)
 
 
-def qualify_trial_result(c, r, directory):
+def qualify_trial_result(c: Campaign, r: TrialResult, directory: Path) -> Outcome:
     reasons = list(r.get("reasons", [])) + backend_validity_flags(directory)
     if r.get("status") != "measured" or not r.get("reset_verified"):
         reasons.append("measurement or cleanup incomplete")
@@ -232,36 +239,36 @@ def qualify_trial_result(c, r, directory):
     }
 
 
-def finalize_pending_outcomes(c, root):
+def finalize_pending_outcomes(c: Campaign, root: Path) -> None:
     """Finish saved measurements through original validity checks before admitting another vote."""
     for path in sorted(root.glob("*/result.json")):
         target = path.with_name("capacity-outcome.json")
         if target.exists():
             continue
-        r = json.loads(path.read_text())
+        r = checked_record(json.loads(path.read_text()), TrialResult)
         if r.get("status") != "measured" or r.get("reset_verified") is not True:
             continue
-        recovery = {**c, "rds_wait_seconds": min(c.get("rds_wait_seconds", 180), 180)}
+        recovery: Campaign = {**c, "rds_wait_seconds": min(c.get("rds_wait_seconds", 180), 180)}
         await_rds(recovery, r, path.parent)
         summary = qualify_trial_result(c, r, path.parent)
         summary["finalized_after_restart"] = True
         atomic_json(target, summary)
 
 
-def next_start_users(previous: dict | None, default: int) -> int:
+def next_start_users(previous: CapacityResult | None, default: int) -> int:
     if previous and previous.get("status") in ("bracket_found", "ceiling_reached"):
         return previous.get("passing_users") or default
     return default
 
 
-def cell_starting_points(c, cell, previous, previous_upper):
+def cell_starting_points(c: Campaign, cell: str, previous: CapacityResult | None, previous_upper: int | None) -> tuple[int, int | None]:
     hint = c.get("cell_starting_hints", {}).get(cell)
     if hint is not None:
         return hint["start_users"], hint.get("initial_failing_hint")
     return next_start_users(previous, c["start_users"]), previous_upper
 
 
-def invalid_boundary(result: dict) -> bool:
+def invalid_boundary(result: CapacityResult) -> bool:
     return result.get("status") == "invalid" or any(
         item.get("outcome") == "invalid"
         for items in result.get("confirmations", {}).values()
@@ -269,11 +276,13 @@ def invalid_boundary(result: dict) -> bool:
     )
 
 
-def confirm_boundary(probe, result: dict, policy: dict):
-    result["confirmation_policy"] = dict(policy)
-    confirmations = result["confirmations"] = {}
+def confirm_boundary(probe: Callable[[int], Outcome], result: CapacityResult, policy: ConfirmationPolicy) -> None:
+    result["confirmation_policy"] = policy.copy()
+    confirmations: dict[str, list[Outcome]] = {}
+    result["confirmations"] = confirmations
     contradictory = False
-    for bound, expected in (("passing_users", "pass"), ("failing_users", "fail")):
+    endpoints: tuple[tuple[Literal["passing_users", "failing_users"], str], ...] = (("passing_users", "pass"), ("failing_users", "fail"))
+    for bound, expected in endpoints:
         users = result[bound]
         repeats = policy["passing_repeats" if bound == "passing_users" else "failing_repeats"]
         if not users or repeats == 0:
@@ -290,7 +299,7 @@ def confirm_boundary(probe, result: dict, policy: dict):
                 if policy["stop_on_contradiction"]:
                     result["status"] = "unstable_boundary"
                     return
-    for bound, expected in (("passing_users", "pass"), ("failing_users", "fail")):
+    for bound, expected in endpoints:
         if any(
             item["outcome"] != expected
             for item in result.get("prior_endpoint_trials", {}).get(bound, [])
@@ -300,7 +309,7 @@ def confirm_boundary(probe, result: dict, policy: dict):
         result["status"] = "unstable_boundary"
 
 
-def validate_resume_resource_policy(stored: dict, c: dict, reusable: bool):
+def validate_resume_resource_policy(stored: TrialManifest, c: Campaign, reusable: bool) -> None:
     saved = stored.get("campaign", {}).get("backend_nofile_limit")
     if type(saved) is not int or saved != c["backend_nofile_limit"]:
         raise ValueError("resume resource policy missing or differs: backend_nofile_limit")
@@ -321,10 +330,10 @@ def validate_resume_resource_policy(stored: dict, c: dict, reusable: bool):
         raise ValueError("resume checkpoint lacks matching actual nofile attestation")
 
 
-def _completed_trial_references(root):
-    references = set()
+def _completed_trial_references(root: Path) -> set[str]:
+    references: set[str] = set()
 
-    def walk(value, found):
+    def walk(value: object, found: set[str]) -> None:
         if isinstance(value, dict):
             if (
                 value.get("outcome") in ("pass", "fail")
@@ -343,7 +352,7 @@ def _completed_trial_references(root):
         if not path.exists():
             continue
         for result in json.loads(path.read_text()).values():
-            found = set()
+            found: set[str] = set()
             walk(result, found)
             if (
                 result.get("status")
@@ -357,14 +366,10 @@ def _completed_trial_references(root):
 
 def run_user_capacity(
     config_path: Path, output_dir: Path, resume: bool = False, retry_invalid: bool = False
-) -> dict:
-    c = normalize_config(json.loads(config_path.read_text()))
+) -> dict[str, CapacityResult]:
+    c = normalize_config(checked_record(json.loads(config_path.read_text()), Campaign))
     validate_config(c)
-    c.update(
-        operation="user-journey",
-        warmup_seconds=0,
-        measure_seconds=c["ramp_seconds"] + c["settle_seconds"] + c["hold_seconds"],
-    )
+    c.update({'operation': "user-journey", 'warmup_seconds': 0, 'measure_seconds': c["ramp_seconds"] + c["settle_seconds"] + c["hold_seconds"]})
     c.setdefault(
         "confirmation_policy",
         {
@@ -378,16 +383,16 @@ def run_user_capacity(
         manifests = sorted(output_dir.glob("*/manifest.json"))
         if not manifests:
             raise ValueError("resume requires original trial manifests")
-        original = json.loads(manifests[0].read_text())
+        original = checked_record(json.loads(manifests[0].read_text()), TrialManifest)
         references = _completed_trial_references(output_dir)
         known_ids = {json.loads(path.read_text()).get("trial", {}).get("id") for path in manifests}
         if not references <= known_ids:
             raise ValueError("completed checkpoint references missing original trial manifests")
         method_keys = MEASUREMENT_KEYS
         for manifest_path in manifests:
-            stored = json.loads(manifest_path.read_text())
+            stored = checked_record(json.loads(manifest_path.read_text()), TrialManifest)
             result_path = manifest_path.with_name("result.json")
-            measured = json.loads(result_path.read_text()) if result_path.exists() else {}
+            measured: TrialResult = checked_record(json.loads(result_path.read_text()), TrialResult) if result_path.exists() else {}
             reusable = (
                 measured.get("status") == "measured" and measured.get("reset_verified") is True
             ) or stored.get("trial", {}).get("id") in references
@@ -401,7 +406,7 @@ def run_user_capacity(
         from .native_runtime import load_runtime_cell, registry_metadata
 
         for manifest_path in manifests:
-            stored = json.loads(manifest_path.read_text())
+            stored = checked_record(json.loads(manifest_path.read_text()), TrialManifest)
             lock = stored.get("runtime_lock")
             if lock:
                 runtime = load_runtime_cell(stored["trial"]["cell"])
@@ -439,15 +444,15 @@ def run_user_capacity(
                     "applied_epoch": time.time(),
                 },
             )
-    results = {}
+    results: dict[str, CapacityResult] = {}
     ordinal = 0
     previous = None
     previous_upper = c.get("initial_failing_hint")
     if resume:
         finalize_pending_outcomes(c, output_dir)
     cached = qualified_cache(output_dir) if resume else {}
-    for key, queue in cached.items():
-        cached[key] = type(queue)(
+    for cache_key, queue in cached.items():
+        cached[cache_key] = type(queue)(
             item
             for item in queue
             if not backend_validity_flags(output_dir / item.get("trial_id", "missing"))
@@ -464,7 +469,7 @@ def run_user_capacity(
     ):
         if resume:
             results_file = output_dir / results_filename
-            results = json.loads(results_file.read_text()) if results_file.exists() else {}
+            results = checked_record(json.loads(results_file.read_text()), dict[str, CapacityResult]) if results_file.exists() else {}
             for path in output_dir.glob("*/result.json"):
                 if backend_validity_flags(path.parent):
                     bad_cell = json.loads(path.read_text()).get("trial", {}).get("cell")
@@ -489,13 +494,14 @@ def run_user_capacity(
                 if r.get("status") != "unstable_boundary"
                 and not (
                     r.get("status") == "bracket_found"
-                    and r["failing_users"] - r["passing_users"] > c["resolution_users"]
+                    and r["failing_users"] is not None and r["failing_users"] - r["passing_users"] > c["resolution_users"]
                 )
             }
-        ledger = {
+        ledger_cells: dict[str, dict[str, Decision]] = {}
+        ledger: dict[str, object] = {
             "policy": POLICY,
             "measurement_identity_sha256": measurement_identity(c),
-            "cells": {},
+            "cells": ledger_cells,
         }
         if majority:
             for name in {name for name, _ in prior_trials}:
@@ -504,7 +510,7 @@ def run_user_capacity(
                     for (current, users), items in prior_trials.items()
                     if current == name
                 }
-                ledger["cells"][name] = Consensus(None, prior, None).decisions()
+                ledger_cells[name] = Consensus(None, prior, None).decisions()
             atomic_json(output_dir / "boundary-decisions.json", ledger)
         for cell in c["cells"]:
             if cell in results:
@@ -514,9 +520,9 @@ def run_user_capacity(
                 continue
             start_users, initial_upper = cell_starting_points(c, cell, previous, previous_upper)
 
-            def probe_once(users):
+            def probe_once(users: int) -> Outcome:
                 nonlocal ordinal
-                trial = {
+                trial: Trial = {
                     "id": c["campaign_instance"][:12] + f"-{ordinal:04d}",
                     "campaign_id": c["campaign_instance"],
                     "cell": cell,
@@ -543,7 +549,7 @@ def run_user_capacity(
                 atomic_json(directory / "capacity-outcome.json", summary)
                 return summary
 
-            def fresh_probe(users):
+            def fresh_probe(users: int) -> Outcome:
                 return retry_probe(
                     probe_once,
                     users,
@@ -552,20 +558,20 @@ def run_user_capacity(
                     delay=c.get("recovery_delay_seconds", 30),
                 )
 
-            def probe(users):
+            def probe(users: int) -> Outcome:
                 queue = cached.get((cell, users))
                 if queue:
                     return {**queue.popleft(), "reused_after_restart": True}
                 return fresh_probe(users)
 
             if c["experiment_type"] == "fixed-load":
-                observations = []
+                observations: list[Outcome] = []
                 for population in c["fixed_users"]:
                     item = probe(population)
                     observations.append({"users": population, **item})
                     if item["outcome"] == "invalid":
                         break
-                result = {
+                result: CapacityResult = {
                     "status": "invalid"
                     if any(o["outcome"] == "invalid" for o in observations)
                     else "fixed_load_complete",
@@ -576,8 +582,8 @@ def run_user_capacity(
                 results[cell] = result
             elif majority:
 
-                def persist_decisions(decisions):
-                    ledger["cells"][cell] = decisions
+                def persist_decisions(decisions: dict[str, Decision]) -> None:
+                    ledger_cells[cell] = decisions
                     ledger["updated_epoch"] = time.time()
                     atomic_json(output_dir / "boundary-decisions.json", ledger)
 
@@ -612,9 +618,10 @@ def run_user_capacity(
                 )
                 # Search is exploratory; repeated endpoints determine whether the bracket is stable.
                 if result["status"] == "bracket_found":
+                    boundary_keys: tuple[Literal["passing_users", "failing_users"], ...] = ("passing_users", "failing_users")
                     result["prior_endpoint_trials"] = {
-                        bound: prior_trials.get((cell, result[bound]), [])
-                        for bound in ("passing_users", "failing_users")
+                        bound: prior_trials.get((cell, bound_population), []) if (bound_population := result[bound]) is not None else []
+                        for bound in boundary_keys
                     }
                     confirm_boundary(probe, result, c["confirmation_policy"])
                 result["starting_users"] = start_users

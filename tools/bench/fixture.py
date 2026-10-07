@@ -10,6 +10,7 @@ import psycopg
 from psycopg.conninfo import conninfo_to_dict
 
 from .models import FixtureManifest
+from .records import checked_record
 from .seed import COLUMNS, count_rows
 
 
@@ -81,10 +82,10 @@ def capture_fixture(dsn: str, output_dir: Path) -> FixtureManifest:
         "0001",
         hashlib.sha256(dump.read_bytes()).hexdigest(),
         dump.name,
-        marker[0],
+        checked_record(marker[0], str),
         counts,
         digests,
-        spec=marker[1],
+        spec=checked_record(marker[1], dict[str, int | str]),
     )
     (output_dir / "manifest.json").write_text(json.dumps(asdict(manifest), indent=2) + "\n")
     return manifest

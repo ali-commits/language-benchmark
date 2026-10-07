@@ -1,5 +1,7 @@
 """Build locked source images and applications. Smoke images cannot pass measured preflight."""
 
+from tools.bench.records import RuntimeLock, checked_record
+
 import argparse
 import json
 import subprocess
@@ -12,7 +14,7 @@ p.add_argument("--jobs", type=int, default=4)
 p.add_argument("--smoke", action="store_true")
 p.add_argument("--apps", action="store_true")
 a = p.parse_args()
-lock = json.loads(Path("runtimes/python/lock.json").read_text())
+lock = checked_record(json.loads(Path("runtimes/python/lock.json").read_text()), RuntimeLock)
 for s in lock["runtimes"]:
     if a.version and s["version"] not in a.version:
         continue

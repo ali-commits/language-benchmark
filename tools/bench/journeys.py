@@ -13,7 +13,7 @@ from .report import metric_lines, percentile
 
 
 def prepare_journey_data(credentials_path: Path, users: int, output_path: Path) -> dict[str, int]:
-    credentials = TypeAdapter(list[Credential]).validate_json(credentials_path.read_text(), strict=True)
+    credentials = checked_record(json.loads(credentials_path.read_text()), list[Credential])
     selected = credentials[:users]
     if (
         users < 1

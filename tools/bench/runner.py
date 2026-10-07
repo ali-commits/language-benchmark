@@ -1,3 +1,8 @@
+from collections.abc import Callable, Iterator
+from types import FrameType
+from pydantic import TypeAdapter
+from .records import Campaign, Trial, TrialResult, Lifecycle, WorkerSnapshot, checked_record
+
 import fcntl
 import json
 import os
@@ -36,7 +41,7 @@ from .transport import CommandFailure, copy_from, copy_to, execute
 
 
 @contextmanager
-def campaign_lock(path: Path):
+def campaign_lock(path: Path) -> Iterator[None]:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a") as f:
         try:
@@ -49,14 +54,14 @@ def campaign_lock(path: Path):
             fcntl.flock(f, fcntl.LOCK_UN)
 
 
-def run_trial(campaign: dict, trial: dict, output_dir: Path) -> dict:
+def run_trial(campaign: Campaign, trial: Trial, output_dir: Path) -> TrialResult:
     output_dir.mkdir(parents=True, exist_ok=False)
     cell = load_runtime_cell(trial["cell"])
     native = isinstance(cell, NativeCell)
-    expected_native_image = expected_image_id(campaign, cell) if native else None
+    expected_native_image = expected_image_id(campaign, cell) if isinstance(cell, NativeCell) else None
     journey = campaign.get("operation") == "user-journey"
     manifest = collect_manifest(campaign, trial)
-    result = {
+    result: TrialResult = {
         "status": "failed",
         "reasons": [],
         "reset_verified": False,
@@ -67,10 +72,10 @@ def run_trial(campaign: dict, trial: dict, output_dir: Path) -> dict:
         method = methodology(campaign)
         manifest["methodology"] = method
         result["methodology"] = method
-        result.update({k: campaign[k] for k in ("ramp_seconds", "settle_seconds", "hold_seconds")})
+        result.update({"ramp_seconds": campaign["ramp_seconds"], "settle_seconds": campaign["settle_seconds"], "hold_seconds": campaign["hold_seconds"]})
     atomic_json(output_dir / "manifest.json", manifest)
     if not cell.supported:
-        result.update(status="unsupported", reasons=cell.reasons)
+        result.update({'status': "unsupported", 'reasons': cell.reasons})
         atomic_json(output_dir / "result.json", result)
         return result
     dsn = os.environ["DATABASE_URL"]
@@ -94,22 +99,16 @@ def run_trial(campaign: dict, trial: dict, output_dir: Path) -> dict:
         "BIND_IP": campaign.get("bind_ip", "127.0.0.1"),
         "RDS_CA_FILE": os.environ.get("RDS_CA_FILE", str(Path("docker/README-ca.txt").resolve())),
     }
-    if native:
+    if isinstance(cell, NativeCell):
         env["BACKEND_CELL_ID"] = cell.id
         compose = ["docker", "compose", "-f", "compose.native.aws.yaml"]
         manifest["runtime_lock"] = registry_metadata(cell)
         manifest["lock_checksum"] = manifest["runtime_lock"]["sha256"]
     else:
-        env.update(
-            WORKERS=str(cell.workers),
-            ADAPTER=cell.adapter,
-            EXPECTED_GIL=str(cell.gil).lower(),
-            EXPECTED_JIT=str(cell.jit).lower(),
-            PYTHON_JIT=str(int(cell.jit)),
-        )
+        env.update({'WORKERS': str(cell.workers), 'ADAPTER': cell.adapter, 'EXPECTED_GIL': str(cell.gil).lower(), 'EXPECTED_JIT': str(cell.jit).lower(), 'PYTHON_JIT': str(int(cell.jit))})
         compose = ["docker", "compose", "-f", "compose.aws.yaml"]
 
-    def stop():
+    def stop() -> None:
         load_cleanup = stop_owned_load(load, load_project, execute_command=execute)
         with (output_dir / "load-cleanup.jsonl").open("a") as log:
             log.write(json.dumps({"epoch": time.time(), **load_cleanup}) + "\n")
@@ -148,10 +147,10 @@ def run_trial(campaign: dict, trial: dict, output_dir: Path) -> dict:
             result["reasons"].append("backend logs unavailable")
         execute(backend, compose + ["down"], env)
 
-    def reset():
+    def reset() -> None:
         restore_fixture(dsn, fixture, campaign["database_allowlist"])
 
-    def measure():
+    def measure() -> None:
         from .images import ensure_backend_image, verify_backend_limits
 
         gate = campaign.get("execution_policy", {}).get("backend_baseline_gate", {})
@@ -172,7 +171,8 @@ def run_trial(campaign: dict, trial: dict, output_dir: Path) -> dict:
             env,
             timeout=120,
         )
-        if native:
+        if isinstance(cell, NativeCell):
+            assert expected_native_image is not None
             attestation = native_preflight(
                 backend,
                 cell,
@@ -183,16 +183,16 @@ def run_trial(campaign: dict, trial: dict, output_dir: Path) -> dict:
                 expected_native_image,
             )
             manifest["native_runtime"] = attestation
-            manifest["image"] = attestation["image"]
+            manifest["image"] = dict(attestation["image"])
         else:
             verify_backend_limits(backend, compose, env)
             deadline = time.monotonic() + 120
-            snapshots = []
+            snapshots: list[WorkerSnapshot] = []
             while time.monotonic() < deadline:
                 code = "import pathlib,json,os; print(json.dumps([json.loads(p.read_text()) for p in pathlib.Path(os.environ['TARGET']).glob('*.json')]))"
-                snapshots = json.loads(
+                snapshots = checked_record(json.loads(
                     execute(backend, ["python3", "-c", code], {"TARGET": runtime}).stdout
-                )
+                ), list[WorkerSnapshot])
                 if len(snapshots) == cell.workers and all(
                     s["run_id"] == runtime_identity for s in snapshots
                 ):
@@ -250,8 +250,8 @@ def run_trial(campaign: dict, trial: dict, output_dir: Path) -> dict:
             prepare_journey_data(
                 Path(campaign["credentials"]), trial["users"], secret_inputs / "load-data.json"
             )
-            scenario = {
-                k: campaign[k]
+            scenario: dict[str, object] = {
+                k: campaign.get(k)
                 for k in (
                     "ramp_seconds",
                     "settle_seconds",
@@ -261,20 +261,15 @@ def run_trial(campaign: dict, trial: dict, output_dir: Path) -> dict:
                     "timeout_seconds",
                 )
             }
-            scenario.update(
-                users=trial["users"],
-                success_fraction=campaign.get("success_fraction", 0.99),
-                authentication_fraction=campaign.get(
+            scenario.update({'users': trial["users"], 'success_fraction': campaign.get("success_fraction", 0.99), 'authentication_fraction': campaign.get(
                     "authentication_fraction", campaign.get("success_fraction", 0.99)
-                ),
-                tags={
+                ), 'tags': {
                     "cell": cell.id,
                     "trial": trial["id"],
                     "campaign": trial["campaign_id"],
                     "workload": "user-journey",
                     "target_users": str(trial["users"]),
-                },
-            )
+                }})
         else:
             required = campaign["warmup_seconds"] + campaign["measure_seconds"] + 120
             os.environ["PAIR_BUDGET"] = str(
@@ -401,8 +396,8 @@ def run_trial(campaign: dict, trial: dict, output_dir: Path) -> dict:
             except Exception as e:
                 result["reasons"].append("RDS telemetry missing: " + type(e).__name__)
 
-    def persist_cleanup(state):
-        result.update(status=state["status"], reset_verified=state["reset_verified"])
+    def persist_cleanup(state: Lifecycle) -> None:
+        result.update({'status': state["status"], 'reset_verified': state["reset_verified"]})
         result["reasons"] += state["reasons"]
         atomic_json(output_dir / "result.json", result)
 
@@ -435,8 +430,8 @@ def run_trial(campaign: dict, trial: dict, output_dir: Path) -> dict:
     return result
 
 
-def run_campaign(config_path: Path, output_dir: Path) -> list[dict]:
-    cfg = json.loads(config_path.read_text())
+def run_campaign(config_path: Path, output_dir: Path) -> list[TrialResult]:
+    cfg = checked_record(json.loads(config_path.read_text()), Campaign)
     cfg["campaign_instance"] = uuid.uuid4().hex
     trials = schedule_trials(cfg)
     results = []
@@ -455,8 +450,8 @@ def run_campaign(config_path: Path, output_dir: Path) -> list[dict]:
 
 
 @contextmanager
-def defer_cleanup_signals():
-    pending = []
+def defer_cleanup_signals() -> Iterator[list[int]]:
+    pending: list[int] = []
     previous = {}
     if threading.current_thread() is threading.main_thread():
         for name in (signal.SIGINT, signal.SIGTERM):
@@ -469,8 +464,8 @@ def defer_cleanup_signals():
             signal.signal(name, handler)
 
 
-def trial_lifecycle(stop, reset, measure, persist=None):
-    result = {"status": "failed", "reset_verified": False, "reasons": []}
+def trial_lifecycle(stop: Callable[[], None], reset: Callable[[], None], measure: Callable[[], None], persist: Callable[[Lifecycle], None] | None = None) -> Lifecycle:
+    result: Lifecycle = {"status": "failed", "reset_verified": False, "reasons": []}
     try:
         stop()
         reset()
@@ -509,10 +504,11 @@ def trial_lifecycle(stop, reset, measure, persist=None):
 
 
 @contextmanager
-def database_campaign_lock(dsn: str):
+def database_campaign_lock(dsn: str) -> Iterator[None]:
     # Separate from the short reset lock: held throughout the whole campaign.
     with psycopg.connect(dsn, autocommit=True, application_name="lb-orchestrator") as connection:
-        if not connection.execute("SELECT pg_try_advisory_lock(20261005)").fetchone()[0]:
+        acquired = connection.execute("SELECT pg_try_advisory_lock(20261005)").fetchone()
+        if acquired is None or not acquired[0]:
             raise RuntimeError("another orchestrator owns this database campaign lock")
         try:
             yield

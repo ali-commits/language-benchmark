@@ -1,5 +1,9 @@
 """Build and verify the local-only non-Python matrix, without AWS access."""
 
+from collections.abc import Sequence, Mapping
+from typing_extensions import TypedDict, Unpack
+from .records import NativeCellRecord, NativeLock, LanguageVerification, checked_record
+
 import argparse
 import json
 import os
@@ -18,14 +22,21 @@ LANGUAGES = tuple(REGISTRY_LANGUAGES)
 SECRET = "test-secret-that-has-at-least-32-bytes"
 
 
-def execute(argv, **kwargs):
+class RunOptions(TypedDict, total=False):
+    cwd: str | Path
+    env: Mapping[str, str]
+    input: str
+    timeout: float
+
+
+def execute(argv: list[str], **kwargs: Unpack[RunOptions]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(argv, check=True, capture_output=True, text=True, **kwargs)
 
 
-def cells(selected):
+def cells(selected: Sequence[str]) -> list[NativeCellRecord]:
     result = []
     for language in selected:
-        lock = json.loads((Path("runtimes") / language / "lock.json").read_text())
+        lock = checked_record(json.loads((Path("runtimes") / language / "lock.json").read_text()), NativeLock)
         if lock.get("budget") != BUDGET:
             raise ValueError("uncontrolled native registry budget")
         if len(lock["cells"]) != 1:
@@ -38,14 +49,14 @@ def cells(selected):
     return result
 
 
-def build(selected):
+def build(selected: Sequence[str]) -> None:
     for cell in cells(selected):
         subprocess.run(
             ["docker", "build", "-f", cell["dockerfile"], "-t", cell["image"], "."], check=True
         )
 
 
-def wait_database(name):
+def wait_database(name: str) -> None:
     deadline = time.monotonic() + 90
     while time.monotonic() < deadline:
         ready = subprocess.run(
@@ -58,7 +69,7 @@ def wait_database(name):
     raise RuntimeError("disposable database did not become ready")
 
 
-def wait_ready(port):
+def wait_ready(port: int) -> None:
     deadline = time.monotonic() + 120
     with httpx.Client(timeout=3) as client:
         while time.monotonic() < deadline:
@@ -72,7 +83,7 @@ def wait_ready(port):
     raise RuntimeError("backend readiness deadline exceeded")
 
 
-def tls_files(folder):
+def tls_files(folder: str | Path) -> None:
     folder = Path(folder)
     folder.chmod(0o755)
     execute(
@@ -151,14 +162,14 @@ def tls_files(folder):
     )
 
 
-def verify(selected, output, db_port=55440, api_port=58040, tls=True):
+def verify(selected: Sequence[str], output: Path, db_port: int = 55440, api_port: int = 58040, tls: bool = True) -> list[LanguageVerification]:
     output.mkdir(parents=True, exist_ok=False)
     nonce = uuid.uuid4().hex[:10]
     network, db = "lb-contract-net-" + nonce, "lb-contract-db-" + nonce
     backend = "lb-contract-api-" + nonce
     password = "local-contract-only"
     database = "language_benchmark_matrix_test"
-    results = []
+    results: list[LanguageVerification] = []
     network_created = False
     with tempfile.TemporaryDirectory(prefix="lb-tls-") as folder:
         try:
@@ -266,7 +277,7 @@ def verify(selected, output, db_port=55440, api_port=58040, tls=True):
                         text=True,
                     )
                     (directory / "pytest.log").write_text(run.stdout + run.stderr)
-                    row = {
+                    row: LanguageVerification = {
                         "cell": cell,
                         "status": "pass" if run.returncode == 0 else "fail",
                         "tls_verified": tls,
@@ -332,7 +343,7 @@ def verify(selected, output, db_port=55440, api_port=58040, tls=True):
     return results
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=["list", "build", "verify"])
     parser.add_argument(

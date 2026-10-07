@@ -10,7 +10,7 @@ from .native_runtime import expected_image_id, load_runtime_cell
 from .user_capacity import run_user_capacity
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)

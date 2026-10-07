@@ -1,5 +1,9 @@
 """Sequential, checkpointed campaign supervision on the monitoring host."""
 
+from collections.abc import Callable
+from .models import NativeCell
+from .records import Campaign, CapacityResult, TrialManifest, TrialResult, PipelineStage, PipelineConfig, ControllerStatus
+
 import argparse
 import fcntl
 import hashlib
@@ -17,14 +21,14 @@ from .transport import execute
 from .user_capacity import validate_resume_resource_policy
 
 
-def verify_completion(stage):
+def verify_completion(stage: PipelineStage) -> None:
     output = Path(stage["output"])
     if read_status(output / "capacity-status.json").get("status") not in COMPLETE:
         raise RuntimeError("stage has not completed with qualified evidence")
-    config = read_status(Path(stage["config"]))
+    config = read_status(Path(stage["config"]), Campaign)
     fixed = config["experiment_type"] == "fixed-load"
     results = read_status(
-        output / ("fixed-load-results.json" if fixed else "capacity-results.json")
+        output / ("fixed-load-results.json" if fixed else "capacity-results.json"), dict[str, CapacityResult]
     )
     if set(results) != set(config["cells"]):
         raise RuntimeError("stage results do not cover the configured cells")
@@ -41,15 +45,18 @@ def verify_completion(stage):
         elif result.get("status") not in ("bracket_found", "ceiling_reached", "unstable_boundary"):
             raise RuntimeError("capacity stage has incomplete or invalid evidence")
         elif result.get("status") == "bracket_found":
-            gap = result.get("failing_users", 0) - result.get("passing_users", 0)
+            upper = result.get("failing_users", 0)
+            if upper is None:
+                raise RuntimeError("capacity bracket has no failing endpoint")
+            gap = upper - result.get("passing_users", 0)
             if not 0 < gap <= normalize_config(config)["resolution_users"]:
                 raise RuntimeError("capacity bracket exceeds configured resolution")
     manifests = sorted(output.glob("*/manifest.json"))
     if not manifests:
         raise RuntimeError("stage is missing original trial manifests")
     for path in manifests:
-        manifest = read_status(path)
-        saved = read_status(path.with_name("result.json"))
+        manifest = read_status(path, TrialManifest)
+        saved = read_status(path.with_name("result.json"), TrialResult)
         try:
             projected = validate_decision_handoff(manifest.get("campaign", {}), config)
         except ValueError as error:
@@ -65,46 +72,46 @@ def verify_completion(stage):
         )
         if manifest.get("runtime_lock"):
             runtime = load_runtime_cell(manifest["trial"]["cell"])
-            if manifest["runtime_lock"] != registry_metadata(runtime):
+            if not isinstance(runtime, NativeCell) or manifest["runtime_lock"] != registry_metadata(runtime):
                 raise RuntimeError("completed stage runtime registry differs from measured binary")
     latest = read_status(manifests[-1].with_name("result.json"))
     if latest.get("status") != "measured" or latest.get("reset_verified") is not True:
         raise RuntimeError("final fixture cleanup is not verified")
 
 
-def verify_hosts_idle(stage):
+def verify_hosts_idle(stage: PipelineStage) -> None:
     if controller_active(stage["controller"]):
         raise RuntimeError("previous controller remains active")
-    config = read_status(Path(stage["config"]))
+    config = read_status(Path(stage["config"]), Campaign)
     allowed = (
         config.get("execution_policy", {})
         .get("backend_baseline_gate", {})
         .get("allowed_telemetry_containers", ["language-benchmark-host-telemetry-node-exporter-1"])
     )
-    for key in ("backend_host", "load_host"):
-        output = execute(config[key], ["docker", "ps", "--format", "{{.Names}}"], timeout=30).stdout
+    for host in (config["backend_host"], config["load_host"]):
+        output = execute(host, ["docker", "ps", "--format", "{{.Names}}"], timeout=30).stdout
         if any(name not in allowed for name in output.splitlines() if name):
             raise RuntimeError("test containers remain after stage completion")
 
 
-def run_pipeline(config_path, state_path, sleep=time.sleep):
+def run_pipeline(config_path: str | Path, state_path: str | Path, sleep: Callable[[float], None] = time.sleep) -> None:
     config_path, state_path = Path(config_path), Path(state_path)
-    config = read_status(config_path)
+    config = read_status(config_path, PipelineConfig)
     stages = config["stages"]
 
-    def fingerprint():
+    def fingerprint() -> str:
         return hashlib.sha256(
             config_path.read_bytes() + b"".join(Path(s["config"]).read_bytes() for s in stages)
         ).hexdigest()
 
     identity = fingerprint()
 
-    def pinned():
+    def pinned() -> None:
         if fingerprint() != identity:
             raise RuntimeError("pipeline configuration changed during execution")
 
     state_path.parent.mkdir(parents=True, exist_ok=True)
-    previous = read_status(state_path)
+    previous = read_status(state_path, ControllerStatus)
     if previous.get("identity") not in (None, identity):
         raise RuntimeError("pipeline configuration changed; preserve the original queue")
     completed = previous.get("completed_stages", [])
@@ -114,7 +121,7 @@ def run_pipeline(config_path, state_path, sleep=time.sleep):
         raise RuntimeError("pipeline completion receipts are not an ordered prefix")
     current = None
 
-    def status(value, **details):
+    def status(value: str, **details: object) -> None:
         atomic_json(
             state_path,
             {
@@ -181,7 +188,7 @@ def run_pipeline(config_path, state_path, sleep=time.sleep):
             raise
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--state", type=Path, required=True)

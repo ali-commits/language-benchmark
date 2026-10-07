@@ -1,4 +1,6 @@
 from collections.abc import Mapping
+from typing import overload
+from .records import Campaign, Trial, TrialManifest, checked_record
 
 import hashlib
 import json
@@ -11,10 +13,16 @@ from pathlib import Path
 SECRET_KEYS = ("password", "secret", "token", "credentials", "database_url", "dsn")
 
 
+@overload
+def redact(value: str) -> str: ...
+
+@overload
+def redact(value: object) -> object: ...
+
 def redact(value: object) -> object:
     if isinstance(value, dict):
         return {
-            k: ("[redacted]" if any(s in str(k).lower() for s in SECRET_KEYS) else redact(v))
+            k: ("[redacted]" if any(s in k.lower() for s in SECRET_KEYS) else redact(v))
             for k, v in value.items()
         }
     if isinstance(value, list):
@@ -32,7 +40,7 @@ def redact(value: object) -> object:
     return value
 
 
-def collect_manifest(campaign: Mapping[str, object], trial: Mapping[str, object]) -> dict[str, object]:
+def collect_manifest(campaign: Campaign, trial: Trial) -> TrialManifest:
     rev = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
     dirty = bool(subprocess.check_output(["git", "status", "--porcelain"], text=True).strip())
     payload = {
@@ -41,14 +49,14 @@ def collect_manifest(campaign: Mapping[str, object], trial: Mapping[str, object]
             "git_revision": rev,
             "dirty": dirty,
             "orchestrator": platform.platform(),
-            "label": (str(campaign["mode"]).upper() + " SMOKE")
+            "label": (campaign["mode"].upper() + " SMOKE")
             if campaign.get("smoke")
-            else str(campaign["mode"]).upper(),
+            else campaign["mode"].upper(),
             "lock_checksum": hashlib.sha256(
                 Path("runtimes/python/lock.json").read_bytes()
             ).hexdigest(),
         }
-    return {key: redact(value) for key, value in payload.items()}
+    return checked_record({key: redact(value) for key, value in payload.items()}, TrialManifest)
 
 
 def atomic_json(path: Path, data: object) -> None:

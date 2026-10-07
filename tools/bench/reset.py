@@ -9,6 +9,7 @@ from psycopg.conninfo import conninfo_to_dict
 
 from .fixture import client_command, verify_fixture
 from .models import FixtureManifest
+from .records import FixtureRecord, checked_record
 
 
 def guard(dsn: str, allowed_database: str) -> None:
@@ -35,7 +36,7 @@ def mark_database(dsn: str, allowed_database: str) -> str:
 
 def restore_fixture(dsn: str, manifest_path: Path, allowed_database: str) -> FixtureManifest:
     guard(dsn, allowed_database)
-    m = FixtureManifest(**json.loads(manifest_path.read_text()))
+    m = FixtureManifest(**checked_record(json.loads(manifest_path.read_text()), FixtureRecord))
     dump = manifest_path.parent / m.dump
     if dump.resolve().parent != manifest_path.parent.resolve():
         raise ValueError("dump path escaped fixture directory")

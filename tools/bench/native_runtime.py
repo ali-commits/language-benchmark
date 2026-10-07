@@ -4,8 +4,6 @@ from collections.abc import Mapping
 from typing import overload
 from typing_extensions import Literal, TypedDict
 
-class ImageConfig(TypedDict, total=False):
-    expected_image_ids: dict[str, str]
 
 import hashlib
 import json
@@ -19,6 +17,10 @@ import httpx
 from .models import NativeCell, RuntimeCell
 from .transport import execute
 from .records import (RuntimeLock, NativeLock, NativeCellRecord, NativeContainer, NativeImage, NativeAttestation, Nofile, Ulimit, checked_record)
+
+class ImageConfig(TypedDict, total=False):
+    expected_image_ids: dict[str, str]
+
 
 NOFILE_LIMIT = 250000
 REGISTRY_LANGUAGES = {

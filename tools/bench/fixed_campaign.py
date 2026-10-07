@@ -1,5 +1,7 @@
 """Persistent mixed-language fixed-load controller; never starts a capacity search."""
 
+from .records import Campaign, checked_record
+
 import argparse
 import json
 import uuid
@@ -11,12 +13,12 @@ from .profiles import normalize_config
 from .user_capacity import run_user_capacity, validate_config
 
 
-def main(argv=None):
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args(argv)
-    config = normalize_config(json.loads(args.config.read_text()))
+    config = normalize_config(checked_record(json.loads(args.config.read_text()), Campaign))
     if config["experiment_type"] != "fixed-load":
         raise ValueError("fixed campaign requires experiment_type=fixed-load")
     validate_config(config)

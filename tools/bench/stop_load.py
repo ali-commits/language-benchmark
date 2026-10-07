@@ -1,11 +1,15 @@
 """Stop owned Compose load containers, including detached --rm one-offs."""
 
+from collections.abc import Callable, Mapping
+from subprocess import CompletedProcess
+from .records import LoadContainer, LoadCleanup, checked_record
+
 import json
 import re
 import time
 from pathlib import PurePosixPath
 
-from .transport import CommandFailure, execute
+from .transport import CommandFailure, ExecuteCommand, execute
 
 PROJECT = "language-benchmark-load"
 FORMAT = (
@@ -17,8 +21,9 @@ FORMAT = (
 
 
 def stop_owned_load(
-    host, working_dir, execute_command=execute, sleep=time.sleep, monotonic=time.monotonic
-):
+    host: Mapping[str, str], working_dir: str, execute_command: ExecuteCommand = execute,
+    sleep: Callable[[float], None] = time.sleep, monotonic: Callable[[], float] = time.monotonic
+) -> LoadCleanup:
     if not isinstance(working_dir, str) or not PurePosixPath(working_dir).is_absolute():
         raise ValueError("absolute Compose load working directory required")
     filters = [
@@ -30,7 +35,7 @@ def stop_owned_load(
         "label=com.docker.compose.project.working_dir=" + working_dir,
     ]
 
-    def listed():
+    def listed() -> list[str]:
         ids = execute_command(
             host, ["docker", "ps", "--all", "--quiet", "--no-trunc", *filters], timeout=30
         ).stdout.split()
@@ -38,7 +43,7 @@ def stop_owned_load(
             raise RuntimeError("invalid container identity")
         return ids
 
-    def optional(command, timeout=30):
+    def optional(command: list[str], timeout: int = 30) -> CompletedProcess[str] | None:
         try:
             return execute_command(host, command, timeout=timeout)
         except CommandFailure as e:
@@ -46,7 +51,7 @@ def stop_owned_load(
                 return None
             raise
 
-    def inspect(identity):
+    def inspect(identity: str) -> LoadContainer | None:
         raw = optional(["docker", "inspect", "--format", FORMAT, identity])
         if raw is None:
             return None
@@ -58,7 +63,7 @@ def stop_owned_load(
             or data.get("working_dir") != working_dir
         ):
             raise RuntimeError("load container ownership does not match the campaign")
-        return data
+        return checked_record(data, LoadContainer)
 
     found = listed()
     stopped = []

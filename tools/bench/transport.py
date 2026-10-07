@@ -21,7 +21,7 @@ class CommandFailure(RuntimeError):
 
 
 def execute(
-    host: Mapping[str, str], argv: list[str], env: Mapping[str, object] | None = None, timeout: int = 1800
+    host: Mapping[str, str], argv: list[str], env: Mapping[str, object] | None = None, timeout: float = 1800
 ) -> subprocess.CompletedProcess[str]:
     cwd = host.get("project", str(Path.cwd()))
     supplied = {str(k): str(v) for k, v in (env or {}).items()}
@@ -84,5 +84,5 @@ class ExecuteCommand(Protocol):
 
     def __call__(
         self, host: Mapping[str, str], argv: list[str],
-        env: Mapping[str, object] | None = None, timeout: int = 1800,
+        env: Mapping[str, object] | None = None, timeout: float = 1800,
     ) -> subprocess.CompletedProcess[str]: ...

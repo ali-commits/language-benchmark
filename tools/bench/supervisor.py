@@ -1,5 +1,10 @@
 """Monitor-host controller supervision with persisted, bounded recovery attempts."""
 
+from collections.abc import Callable
+from typing import TypeVar, overload
+from typing_extensions import TypeForm
+from .records import Campaign, ControllerStatus, checked_record
+
 import argparse
 import json
 import subprocess
@@ -12,25 +17,35 @@ from .manifest import atomic_json
 COMPLETE = {"complete", "complete_with_unstable_boundaries"}
 
 
-def read_status(path):
-    return json.loads(path.read_text()) if path.exists() else {}
+T = TypeVar("T")
 
 
-def controller_active(unit):
+@overload
+def read_status(path: Path) -> dict[str, object]: ...
+
+@overload
+def read_status(path: Path, schema: TypeForm[T]) -> T: ...
+
+def read_status(path: Path, schema: TypeForm[T] | None = None) -> T | dict[str, object]:
+    value = json.loads(path.read_text()) if path.exists() else {}
+    return checked_record(value, schema) if schema is not None else checked_record(value, dict[str, object])
+
+
+def controller_active(unit: str) -> bool:
     return (
         subprocess.run(["systemctl", "is-active", "--quiet", unit], capture_output=True).returncode
         == 0
     )
 
 
-def supervise(config_path, output, state_path, existing_unit, max_attempts=3, sleep=time.sleep):
-    config = json.loads(config_path.read_text())
+def supervise(config_path: Path, output: Path, state_path: Path, existing_unit: str, max_attempts: int = 3, sleep: Callable[[float], None] = time.sleep) -> None:
+    config = checked_record(json.loads(config_path.read_text()), Campaign)
     if not 1 <= max_attempts <= 3:
         raise ValueError("supervisor recovery budget must be between one and three")
-    previous = read_status(state_path)
+    previous = read_status(state_path, ControllerStatus)
     attempts = previous.get("controller_attempts", 0)
 
-    def status(value, **details):
+    def status(value: str | None, **details: object) -> None:
         atomic_json(
             state_path,
             {
@@ -46,7 +61,7 @@ def supervise(config_path, output, state_path, existing_unit, max_attempts=3, sl
         status("watching_existing_controller")
         sleep(15)
     campaign_status = output / "capacity-status.json"
-    current = read_status(campaign_status).get("status")
+    current = read_status(campaign_status, ControllerStatus).get("status")
     if current in COMPLETE:
         status(current)
         return
@@ -62,13 +77,13 @@ def supervise(config_path, output, state_path, existing_unit, max_attempts=3, sl
             )
             while controller_active(existing_unit):
                 sleep(15)
-            current = read_status(campaign_status).get("status")
+            current = read_status(campaign_status, ControllerStatus).get("status")
             if current in COMPLETE:
                 status(current)
                 return
             if (
                 current == "needs_attention"
-                and read_status(campaign_status).get("updated_epoch", 0) >= started
+                and read_status(campaign_status, ControllerStatus).get("updated_epoch", 0) >= started
             ):
                 # Probe-level retries have already exhausted their own bounded budget.
                 status(
@@ -82,7 +97,7 @@ def supervise(config_path, output, state_path, existing_unit, max_attempts=3, sl
     status("needs_attention", reason="controller recovery budget exhausted")
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
