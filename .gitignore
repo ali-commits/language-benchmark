@@ -10,3 +10,4 @@ fixtures/
 *.egg-info/
 *.pyc
 output
+tmp
