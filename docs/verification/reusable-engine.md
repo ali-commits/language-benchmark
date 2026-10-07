@@ -1,6 +1,6 @@
 # Reusable engine verification
 
-This is a functional acceptance record for the version-1 engine, not a capacity measurement. Verification uses disposable local Docker resources, an unprivileged loopback OpenSSH daemon and temporary queue state. No AWS experiment or database operation is part of this acceptance run.
+This is a functional acceptance record for the version-1 engine, not a capacity measurement. Verification uses disposable local Docker resources, an unprivileged loopback OpenSSH daemon and temporary queue state. The social integration test creates and restores only its own disposable local PostgreSQL database. No AWS experiment or existing database is used.
 
 ## Platform
 
@@ -9,26 +9,56 @@ Observed on 2026-10-07: Linux 7.2.9-1-cachyos, Python 3.14.8, uv 0.12.23, Docker
 ## Repeatable commands
 
 ```sh
-uv run pytest tests/unit -q
-uvx ruff check tools tests
-BENCH_INTEGRATION=1 uv run pytest tests/integration/test_engine_acceptance.py -q
-BENCH_INTEGRATION=1 uv run pytest tests/integration/test_queue_leases.py -q
+uv sync --locked
+bun install --frozen-lockfile
+uv run --locked mypy
+uv run --locked ruff check .
+uv run --locked ruff format --check .
+bun run typecheck
+bun run check
+uv run --locked pre-commit run --all-files
+uv run --locked pytest tests/unit -q
+BENCH_INTEGRATION=1 uv run --locked pytest tests/integration/test_engine_acceptance.py tests/integration/test_queue_leases.py tests/integration/test_engine_social.py tests/integration/test_engine_k6.py -q
 ```
 
 The opt-in suite needs Docker, cached/buildable HTTP example and k6 images, and OpenSSH server/client binaries. The service test additionally needs an available user bus and already-enabled lingering; it does not enable lingering. Its new unit name is derived from a unique queue and temporary state directory. It removes that unit after execution and never stops or changes an existing unrelated service.
 
 ## Observed outcomes
 
-- Final unit suite: **507 passed, 6 opt-in skips**.
-- Core acceptance (versions/stages/search, process recovery, SSH, fresh README installation): **4 passed in 239.27 seconds**.
-- Additional real disposable user-service lifecycle plus Docker lease integration: **4 passed** (one service test and three lease tests). All five acceptance tests were therefore exercised; the service test was added after the four-case run.
-- Review follow-up: the strengthened exact-version/evidence and subprocess recovery cases passed again (**2 passed in174.24 seconds**); a new actual owned-resource failure-cleanup regression also passed (**1 passed**).
-- Full `uvx ruff check tools tests` and `git diff --check`: passed.
-- The 54-test focused workload/CLI/service run also passed, including the real systemd parser for ordinary and space/percent paths.
+- Final post-refactor unit suite: **551 passed, 9 opt-in skips**, 22.14 seconds.
+- Full real acceptance after the stdout fix: **16 passed in 347.38 seconds**.
+  This includes all six core acceptance cases, three lease tests, three social
+  tests and four k6 lifecycle cases. Its production launcher used `--quiet --no-summary`; the
+  final source uses the equivalent canonical `--summary-mode=disabled` form.
+  With that production launcher, two-version acceptance and the four k6 cases
+  passed again: **5 passed in 148.62 seconds**. The low-level k6 launcher was then
+  aligned with the final flags and asserts JSON-only stdout, retained BENCH_EVENT
+  stderr and no deprecation warning: **4 passed in 33.18 seconds** after a failing
+  real stdout-purity regression.
+- Locked clean reinstallation: `uv sync --locked --reinstall` resolved 87 packages
+  and reinstalled 78; `bun install --frozen-lockfile --force` installed six packages.
+- Strict Mypy: **72 production files**, no errors. Tests are excluded from this
+  type scope and covered by Ruff and executed regressions.
+- Ruff lint passed; **144 files** already formatted. Strict TypeScript/checkJs
+  passed; Biome checked **30 eligible files**, with informational style suggestions.
+- All seven pre-commit all-files gates passed with the installed hook active.
+- Temporary Python and JavaScript source probes each assigned a number to a
+  string and failed their full configured checker with assignment diagnostics.
+  Both were removed; both full type gates then passed again.
+- A newly built, extracted wheel generated HTTP and social templates outside the
+  checkout. Both templates passed strict JavaScript checking with their packaged
+  canonical declarations. The unit suite also runs extracted-wheel social doctor.
+- All **181 protected SHA256 hashes** matched the Task 13 baseline. Backend tree:
+  `3f9dbff901a1b81e556b66487218a605bda799e1`.
 
 The real user service was stopped during load with systemd, cleaned up, remained enabled without a durable user-stop flag, resumed explicitly and completed with one valid result. Completion disabled its unit; final cleanup removed its file and enablement. No host reboot was attempted.
 
-Acceptance found a harmless `new.target` expression was incorrectly rejected as a meta import. A failing regression reproduced it; the parser now accepts it while retaining an explicit `import.meta` rejection test. The unquoted YAML `off` regression now asserts the generated quoted form before replacement. The broad lint failure was confined to the new engine/test files and was fixed by safe import cleanup, statement formatting and removing one unused test local.
+Final acceptance exposed interleaved k6 progress text inside native metric JSON
+on stdout (11 passed, one failed in the initial run). The generator now runs with
+`--quiet --summary-mode=disabled`; native JSON metrics and BENCH_EVENT logging remain enabled.
+The parser still invalidates malformed evidence. A launch regression failed before
+the fix and passed afterward. Earlier parser regressions continue to distinguish
+`new.target` from prohibited `import.meta`, and quoted YAML `off` remains covered.
 
 ## Acceptance coverage
 
@@ -48,6 +78,6 @@ Acceptance found a harmless `new.target` expression was incorrectly rejected as 
 
 ## Limits
 
-The loopback SSH test uses one Docker daemon through SSH and does not establish operation across independent machines, unsynchronized clocks or a production network. The service test exercises a real user-manager stop/resume, not a host reboot or power loss. Baseline gating stays disabled on this shared host; unit tests cover its rejection and cancellation behavior. These small populations test correctness, not generator capacity or target capacity.
+The loopback SSH test uses one Docker daemon through SSH and does not establish operation across independent machines, unsynchronized clocks or a production network. The service test exercises a real user-manager stop/resume, not a host reboot or power loss. Baseline gating stays disabled on this shared host; unit tests cover its rejection and cancellation behavior. These small populations test correctness, not generator capacity or target capacity. Target environment values remain single-line; CR, LF and NUL are rejected.
 
-No AWS/RDS calls or live CloudWatch evidence are claimed. The earlier disposable cached Go/PostgreSQL social smoke and fixture-restoration tests remain the social integration evidence; this acceptance does not repeat those database runs or claim Python social runtime deployment. Required missing evidence remains invalid; reports do not fill gaps with zero. Existing historical capacity measurements and artifacts are unchanged.
+No AWS/RDS calls or live CloudWatch evidence are claimed. The disposable cached Go/PostgreSQL social fixture-restoration test is included in the final acceptance command; this does not claim Python social runtime deployment. Required missing evidence remains invalid; reports do not fill gaps with zero. Existing historical capacity measurements and artifacts are unchanged.

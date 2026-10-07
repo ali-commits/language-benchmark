@@ -73,7 +73,12 @@ Docker acceptance is opt-in and uses disposable local resources:
 
 ```sh
 BENCH_INTEGRATION=1 uv run --locked pytest tests/integration/test_engine_k6.py -q
+BENCH_INTEGRATION=1 uv run --locked pytest tests/integration/test_engine_acceptance.py tests/integration/test_queue_leases.py tests/integration/test_engine_social.py -q
 ```
+
+Run Docker suites serially against a daemon because queue ownership is exclusive.
+The social suite requires cached `postgres:18-alpine` and `lb-go:1.27.1` images
+and creates its own disposable database; it must never target an existing database.
 
 Broader Docker/SSH/queue acceptance commands and requirements are documented in
 [reusable-engine verification](verification/reusable-engine.md).

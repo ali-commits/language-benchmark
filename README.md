@@ -26,7 +26,13 @@ Reports contain selected-window and per-stage metrics, objective decisions/bound
 Read [configuration](docs/configuration.md), [queues](docs/queues.md), [custom workloads](docs/custom-workloads.md), [environments](docs/environments.md) and [metrics](docs/metrics.md). The [October 2026 measured results](docs/results/2026-10/README.md) publish sanitized fixed/stress tables and immutable PDF copies. Those historical campaigns used their own timing and resource methodology; they do not establish performance of this reusable engine.
 
 ```sh
-uv run pytest tests/unit -q
+uv run --locked pytest tests/unit -q
 ```
+
+For development, run `uv sync --locked` and `bun install --frozen-lockfile`, then follow
+[developer checks](docs/development.md) for strict Python/JavaScript types, lint,
+formatting and the installed pre-commit gates. Tests are behavior-checked and
+Ruff-checked; strict Python typing covers all production tooling, runtimes,
+database helpers and Python examples.
 
 Docker integration is opt-in with `BENCH_INTEGRATION=1`. Full remote deployment, RDS telemetry and actual reboot persistence are not verified by local unit tests. Legacy AWS runbooks are historical operational records, not the current portable quick start.
