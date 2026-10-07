@@ -161,3 +161,41 @@ def test_restart_skips_idle_check_for_completed_earlier_stage(tmp_path, monkeypa
     run_pipeline(q, state)
     assert calls == ["second"]
     assert json.loads(state.read_text())["completed_stages"] == ["first", "second"]
+
+
+def test_interrupt_during_past_stage_validation_stops_owned_unfinished_controller(
+    tmp_path, monkeypatch
+):
+    import hashlib
+
+    import bench.pipeline as m
+
+    a = tmp_path / "a"
+    a.mkdir()
+    first = stage(a)
+    first.update(name="first", observe_supervisor="external")
+    b = tmp_path / "b"
+    b.mkdir()
+    second = stage(b)
+    second.update(name="second", controller="owned-controller")
+    q = tmp_path / "queue.json"
+    q.write_text(json.dumps({"stages": [first, second]}))
+    identity = hashlib.sha256(
+        q.read_bytes() + Path(first["config"]).read_bytes() + Path(second["config"]).read_bytes()
+    ).hexdigest()
+    state = tmp_path / "state.json"
+    state.write_text(
+        json.dumps({"identity": identity, "completed_stages": ["first"], "stage": "second"})
+    )
+
+    def interrupt(_):
+        raise KeyboardInterrupt
+
+    calls = []
+    monkeypatch.setattr(m, "verify_completion", interrupt)
+    monkeypatch.setattr(m.subprocess, "run", lambda args, **kw: calls.append(args))
+    with pytest.raises(KeyboardInterrupt):
+        run_pipeline(q, state)
+    assert calls == [["sudo", "systemctl", "stop", "owned-controller"]]
+    assert json.loads(state.read_text())["stage"] == "second"
+    assert json.loads(state.read_text())["completed_stages"] == ["first"]

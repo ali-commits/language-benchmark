@@ -153,13 +153,14 @@ def run_pipeline(config_path, state_path, sleep=time.sleep):
         except KeyboardInterrupt:
             # Stop only the owned stage; its controller performs protected cleanup.
             with defer_cleanup_signals():
-                if current and not current.get("observe_supervisor"):
+                unfinished = next((s for s in stages if s["name"] not in completed), None)
+                if unfinished and not unfinished.get("observe_supervisor"):
                     subprocess.run(
-                        ["sudo", "systemctl", "stop", current["controller"]],
+                        ["sudo", "systemctl", "stop", unfinished["controller"]],
                         check=True,
                         capture_output=True,
                     )
-                status("interrupted", stage=current["name"] if current else None)
+                status("interrupted", stage=unfinished["name"] if unfinished else None)
             raise
         except Exception as error:
             status(
