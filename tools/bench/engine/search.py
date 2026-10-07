@@ -34,7 +34,9 @@ class SearchPolicy(Model):
         return self
 
     @classmethod
-    def from_test(cls, test: TestPolicy, *, feasible_ceilings: dict[str, int] | None = None) -> "SearchPolicy":
+    def from_test(
+        cls, test: TestPolicy, *, feasible_ceilings: dict[str, int] | None = None
+    ) -> "SearchPolicy":
         if test.type != "search" or not isinstance(test.users, SearchUsers) or test.limits is None:
             raise ValueError("fixed tests do not use search confirmation")
         ceilings = dict(feasible_ceilings or {})
@@ -138,7 +140,9 @@ def search_result(state: SearchState) -> SearchResult:
     passing = max(passes, default=None)
     failing = min(fails, default=None)
     contradictions = tuple((f, p) for f in sorted(fails) for p in sorted(passes) if f < p)
-    status: Literal["searching", "complete", "lower_bound", "below_minimum", "incomplete", "unstable"] = "searching"
+    status: Literal[
+        "searching", "complete", "lower_bound", "below_minimum", "incomplete", "unstable"
+    ] = "searching"
     reason = None
     if contradictions:
         status = "unstable"
@@ -269,7 +273,11 @@ def record_probe(
 
 
 def reuse_evidence(
-    state: SearchState, evidence: TrialEvidence, *, execution_id: str, criteria: tuple[Criterion, ...]
+    state: SearchState,
+    evidence: TrialEvidence,
+    *,
+    execution_id: str,
+    criteria: tuple[Criterion, ...],
 ) -> SearchState:
     """Reevaluate immutable samples for this objective; never inherit stored labels."""
     from .metrics import evaluate

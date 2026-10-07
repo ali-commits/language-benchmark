@@ -64,7 +64,14 @@ except subprocess.TimeoutExpired:
 """
 
 
-def execute_host(host: Host, argv: list[str], *, env: dict[str, str] | None = None, timeout: float = 1800, input_data: str | None = None) -> subprocess.CompletedProcess[str]:
+def execute_host(
+    host: Host,
+    argv: list[str],
+    *,
+    env: dict[str, str] | None = None,
+    timeout: float = 1800,
+    input_data: str | None = None,
+) -> subprocess.CompletedProcess[str]:
     if not argv or any(not isinstance(v, str) for v in argv):
         raise ValueError("command must be a nonempty argv list")
     supplied = {str(k): str(v) for k, v in (env or {}).items()}
@@ -295,9 +302,14 @@ def resolve_target(
                 execute_host(environment.backend, ["docker", "load", "--input", remote])
             finally:
                 execute_host(environment.backend, ["rm", "-f", "--", remote])
-            loaded = checked_record(json.loads(
-                execute_host(environment.backend, ["docker", "image", "inspect", image_id]).stdout
-            ), list[DockerImage])[0]
+            loaded = checked_record(
+                json.loads(
+                    execute_host(
+                        environment.backend, ["docker", "image", "inspect", image_id]
+                    ).stdout
+                ),
+                list[DockerImage],
+            )[0]
             if loaded["Id"] != image_id:
                 raise ValueError("loaded image identity mismatch")
         finally:
@@ -333,7 +345,9 @@ def verify_resources(target: Target, inspection: ContainerInfo) -> None:
         raise ValueError("container memory limit mismatch")
     if actual.get("MemorySwap") != int(wanted.memory + wanted.swap):
         raise ValueError("container swap limit mismatch")
-    nofile: Ulimit = next((v for v in (actual.get("Ulimits") or []) if v["Name"] == "nofile"), Ulimit())
+    nofile: Ulimit = next(
+        (v for v in (actual.get("Ulimits") or []) if v["Name"] == "nofile"), Ulimit()
+    )
     if nofile.get("Soft") != wanted.nofile or nofile.get("Hard") != wanted.nofile:
         raise ValueError("container nofile limit mismatch")
 
@@ -389,7 +403,12 @@ def load_build_snapshot(directory: Path) -> BuildSnapshot:
 
 
 def prepared_execution_identity(
-    job: ResolvedJob, users: int | None, resolved_target: ResolvedTarget, prepared_workload: "PreparedWorkload", *, generator_image_id: str | None = None
+    job: ResolvedJob,
+    users: int | None,
+    resolved_target: ResolvedTarget,
+    prepared_workload: "PreparedWorkload",
+    *,
+    generator_image_id: str | None = None,
 ) -> str:
     """Canonical identity from preparation receipts, independent of mutable source."""
     from .evidence import execution_identity
@@ -407,11 +426,7 @@ def prepared_execution_identity(
             if job.workload.fixture and job.workload.fixture.manifest
             else None,
             "wrapper_sha256": {
-                name: hashlib.sha256(
-                    (
-                        wrapper_path(name)
-                    ).read_bytes()
-                ).hexdigest()
+                name: hashlib.sha256((wrapper_path(name)).read_bytes()).hexdigest()
                 for name in ("runner.js", "metrics.js")
             },
             "build_input_identity": resolved_target.build_snapshot.identity
@@ -423,4 +438,12 @@ def prepared_execution_identity(
 
 
 class HostExecutor(Protocol):
-    def __call__(self, host: Host, argv: list[str], *, env: dict[str, str] | None = None, timeout: float = 1800, input_data: str | None = None) -> subprocess.CompletedProcess[str]: ...
+    def __call__(
+        self,
+        host: Host,
+        argv: list[str],
+        *,
+        env: dict[str, str] | None = None,
+        timeout: float = 1800,
+        input_data: str | None = None,
+    ) -> subprocess.CompletedProcess[str]: ...

@@ -55,34 +55,38 @@ class SocialAdapter:
 
     def prepare(self, context: "TrialContext") -> None:
         self._dsn()
-        manifest = FixtureManifest(**checked_record(json.loads(self.manifest_path.read_text()), FixtureRecord))
+        manifest = FixtureManifest(
+            **checked_record(json.loads(self.manifest_path.read_text()), FixtureRecord)
+        )
         from .stages import resolve_stages
 
         stages = resolve_stages(context.job, context.users)
         peak = max(max(s.from_users, s.to_users) for s in stages)
         if manifest.counts.get("users", 0) < peak:
             raise ValueError("social fixture contains fewer accounts than target")
-        load_runtime_cell(
-            self.runtime_cell, runtime_root()
-        )
+        load_runtime_cell(self.runtime_cell, runtime_root())
 
     def reset(self, context: "TrialContext") -> FixtureManifest:
         return restore_fixture(self._dsn(), self.manifest_path, self.allowed_database)
 
     def verify(self, context: "TrialContext") -> None:
-        manifest = FixtureManifest(**checked_record(json.loads(self.manifest_path.read_text()), FixtureRecord))
+        manifest = FixtureManifest(
+            **checked_record(json.loads(self.manifest_path.read_text()), FixtureRecord)
+        )
         if verify_fixture(self._dsn(), manifest):
             raise ValueError("social fixture fingerprints differ")
 
     def attest(self, context: "TrialContext", container_id: str) -> None:
         host = context.environment.backend
-        cell = load_runtime_cell(
-            self.runtime_cell, runtime_root()
-        )
-        info = checked_record(json.loads(execute_host(host, ["docker", "inspect", container_id]).stdout), list[ContainerInfo])[0]
-        image = checked_record(json.loads(
-            execute_host(host, ["docker", "image", "inspect", info["Image"]]).stdout
-        ), list[DockerImage])[0]
+        cell = load_runtime_cell(self.runtime_cell, runtime_root())
+        info = checked_record(
+            json.loads(execute_host(host, ["docker", "inspect", container_id]).stdout),
+            list[ContainerInfo],
+        )[0]
+        image = checked_record(
+            json.loads(execute_host(host, ["docker", "image", "inspect", info["Image"]]).stdout),
+            list[DockerImage],
+        )[0]
         receipt: dict[str, object] = {"cell": cell.id, "image_id": image["Id"]}
         if isinstance(cell, NativeCell):
             receipt["runtime"] = native_image_metadata(
@@ -104,11 +108,14 @@ class SocialAdapter:
             deadline = time.monotonic() + context.job.target.readiness.timeout
             snapshots: list[WorkerSnapshot] = []
             while time.monotonic() < deadline:
-                snapshots = checked_record(json.loads(
-                    execute_host(
-                        host, ["docker", "exec", container_id, "python", "-c", code]
-                    ).stdout
-                ), list[WorkerSnapshot])
+                snapshots = checked_record(
+                    json.loads(
+                        execute_host(
+                            host, ["docker", "exec", container_id, "python", "-c", code]
+                        ).stdout
+                    ),
+                    list[WorkerSnapshot],
+                )
                 if len(snapshots) == cell.workers:
                     break
                 time.sleep(0.1)
@@ -155,14 +162,29 @@ def social_adapter(spec: Workload) -> SocialAdapter:
 def preflight_social(workload: Workload, required_users: int | None = None) -> "SocialPreflight":
     """Validate local inputs only: no database connection/reset or container start."""
     import hashlib
+
     adapter = SocialAdapter(workload)
     adapter._dsn()  # Pure DSN allowlist validation, no database IO.
     manifest_path = adapter.manifest_path
     try:
-        manifest = FixtureManifest(**checked_record(json.loads(manifest_path.read_text()), FixtureRecord))
-        if not all(isinstance(value, str) and value for value in (manifest.schema_revision, manifest.identity, manifest.dump, manifest.checksum)):
+        manifest = FixtureManifest(
+            **checked_record(json.loads(manifest_path.read_text()), FixtureRecord)
+        )
+        if not all(
+            isinstance(value, str) and value
+            for value in (
+                manifest.schema_revision,
+                manifest.identity,
+                manifest.dump,
+                manifest.checksum,
+            )
+        ):
             raise ValueError()
-        if not isinstance(manifest.counts, dict) or type(manifest.counts.get('users')) is not int or manifest.counts['users'] <= 0:
+        if (
+            not isinstance(manifest.counts, dict)
+            or type(manifest.counts.get("users")) is not int
+            or manifest.counts["users"] <= 0
+        ):
             raise ValueError()
         if not isinstance(manifest.fingerprints, dict) or not manifest.fingerprints:
             raise ValueError()
@@ -172,35 +194,54 @@ def preflight_social(workload: Workload, required_users: int | None = None) -> "
         if hashlib.sha256(dump.read_bytes()).hexdigest() != manifest.checksum:
             raise ValueError()
     except (OSError, TypeError, KeyError, ValueError):
-        raise ValueError('social fixture manifest/archive is missing, malformed or checksum-invalid') from None
+        raise ValueError(
+            "social fixture manifest/archive is missing, malformed or checksum-invalid"
+        ) from None
     cell = load_runtime_cell(adapter.runtime_cell, runtime_root())
-    actors_paths = [path for path in workload.dependencies if path.name == 'actors.json']
+    actors_paths = [path for path in workload.dependencies if path.name == "actors.json"]
     if len(actors_paths) != 1:
-        raise ValueError('social requires one declared actors.json dependency')
+        raise ValueError("social requires one declared actors.json dependency")
     try:
-        actors = checked_record(json.loads(actors_paths[0].read_text()), ActorsDocument)['actors']
+        actors = checked_record(json.loads(actors_paths[0].read_text()), ActorsDocument)["actors"]
         if not isinstance(actors, list) or not actors:
             raise ValueError()
         names = []
         for actor in actors:
-            if not isinstance(actor, dict) or not isinstance(actor.get('username'), str) or not actor['username'].strip() or not isinstance(actor.get('password'), str) or not actor['password']:
+            if (
+                not isinstance(actor, dict)
+                or not isinstance(actor.get("username"), str)
+                or not actor["username"].strip()
+                or not isinstance(actor.get("password"), str)
+                or not actor["password"]
+            ):
                 raise ValueError()
-            names.append(actor['username'].casefold())
+            names.append(actor["username"].casefold())
     except (OSError, TypeError, KeyError, ValueError):
-        raise ValueError('social actors must contain nonempty username/password records') from None
+        raise ValueError("social actors must contain nonempty username/password records") from None
     if len(names) != len(set(names)):
-        raise ValueError('social actor account names must be case-insensitively unique')
-    capacity = min(len(names), manifest.counts['users'])
+        raise ValueError("social actor account names must be case-insensitively unique")
+    capacity = min(len(names), manifest.counts["users"])
     if required_users is not None and required_users > capacity:
-        raise ValueError(f'social account capacity {capacity} is below configured peak/ceiling {required_users}')
-    if not isinstance(cell, NativeCell) and not dependency_lock_path(cell.dependency_lock).is_file():
-        raise ValueError('social runtime dependency attestation lock is missing')
-    return {'fixture_users': manifest.counts['users'], 'actors': len(names), 'account_capacity': capacity,
-            'required_peak': required_users, 'runtime_cell': cell.id}
+        raise ValueError(
+            f"social account capacity {capacity} is below configured peak/ceiling {required_users}"
+        )
+    if (
+        not isinstance(cell, NativeCell)
+        and not dependency_lock_path(cell.dependency_lock).is_file()
+    ):
+        raise ValueError("social runtime dependency attestation lock is missing")
+    return {
+        "fixture_users": manifest.counts["users"],
+        "actors": len(names),
+        "account_capacity": capacity,
+        "required_peak": required_users,
+        "runtime_cell": cell.id,
+    }
 
 
 class ActorsDocument(TypedDict):
     actors: list[Credential]
+
 
 class SocialPreflight(TypedDict):
     fixture_users: int

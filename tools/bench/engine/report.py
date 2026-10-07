@@ -16,19 +16,23 @@ from .types import Criterion, SampleScope, TrialEvidence
 
 Catalog = dict[tuple[SampleScope, str, str | None], set[str]]
 
+
 class Expansion(TypedDict, total=False):
     workload: RawWorkload
     criteria: list[RawCriterion]
     objectives: dict[str, list[RawCriterion]]
+
 
 class ReportJob(TypedDict, total=False):
     id: str
     state: str
     resolved: str | list[Expansion]
 
+
 class QueueRow(TypedDict):
     state: str
     revision: int
+
 
 class TrialReference(TypedDict):
     id: str
@@ -36,25 +40,31 @@ class TrialReference(TypedDict):
     state: str
     path: str
 
+
 class ReportSnapshot(TypedDict):
     queues: list[QueueRow]
     jobs: list[ReportJob]
     trials: list[TrialReference]
 
+
 class JobState(TypedDict, total=False):
     results: list[dict[str, object]]
     decisions: list[dict[str, object]]
 
+
 class ReportState(TypedDict, total=False):
     jobs: dict[str, JobState]
+
 
 class ReportStore(Protocol):
     def snapshot(self, queue: str) -> object: ...
     def controller_state(self, queue: str) -> object: ...
 
+
 class Window(TypedDict):
     name: str
     metrics: list[dict[str, object]]
+
 
 class TrialReport(TypedDict, total=False):
     id: str
@@ -68,6 +78,7 @@ class TrialReport(TypedDict, total=False):
     cleanup_verified: bool
     invalid_reasons: list[str]
     stages: list[dict[str, object]]
+
 
 class QueueReport(TypedDict):
     version: int
@@ -88,7 +99,11 @@ def _metric_catalog(job: ReportJob) -> Catalog:
     catalog: Catalog = {}
     for expansion in resolved:
         for name, declaration in expansion.get("workload", {}).get("metrics", {}).items():
-            key: tuple[SampleScope, str, str | None] = ("workload", declaration.get("name", name), declaration.get("unit"))
+            key: tuple[SampleScope, str, str | None] = (
+                "workload",
+                declaration.get("name", name),
+                declaration.get("unit"),
+            )
             catalog.setdefault(key, set()).add(
                 "rate" if declaration.get("type") == "rate" else "mean"
             )
@@ -107,9 +122,13 @@ def _metric_catalog(job: ReportJob) -> Catalog:
     return catalog
 
 
-def _metrics(evidence: TrialEvidence, stages: list[str], catalog: Catalog | None = None) -> list[dict[str, object]]:
+def _metrics(
+    evidence: TrialEvidence, stages: list[str], catalog: Catalog | None = None
+) -> list[dict[str, object]]:
     catalog = catalog or {}
-    pairs: set[tuple[SampleScope, str, str | None]] = {(s.scope, s.metric, s.unit) for s in evidence.samples}
+    pairs: set[tuple[SampleScope, str, str | None]] = {
+        (s.scope, s.metric, s.unit) for s in evidence.samples
+    }
     pairs.update(catalog)
     pairs.update(
         {
@@ -174,8 +193,12 @@ def _metrics(evidence: TrialEvidence, stages: list[str], catalog: Catalog | None
             selected = [s for s in samples if any(a <= s.timestamp < b for a, b in windows)]
             seconds = sum(b - a for a, b in windows)
             if row["status"] == "available" and seconds:
-                row["attempted_rps"] = sum(s.denominator for s in selected if s.denominator is not None) / seconds
-                row["successful_rps"] = sum(s.numerator for s in selected if s.numerator is not None) / seconds
+                row["attempted_rps"] = (
+                    sum(s.denominator for s in selected if s.denominator is not None) / seconds
+                )
+                row["successful_rps"] = (
+                    sum(s.numerator for s in selected if s.numerator is not None) / seconds
+                )
             else:
                 row["attempted_rps"] = row["successful_rps"] = None
         rows.append(row)
@@ -324,14 +347,16 @@ def write_queue_report(store: ReportStore, queue: str, output: Path) -> Path:
                 artifact.write_text(json.dumps(public_evidence, indent=2, allow_nan=False) + "\n")
                 trial["evidence"] = "evidence/" + artifact_name
                 trial["source_sha256"] = hashlib.sha256(source.read_bytes()).hexdigest()
-                trial.update({
-                    "status": "valid" if evidence.valid else "invalid",
-                    "users": evidence.users,
-                    "cleanup_verified": evidence.cleanup_verified,
-                    "invalid_reasons": list(evidence.invalid_reasons),
-                    "stages": [s.model_dump(mode="json") for s in evidence.stages],
-                    "windows": [],
-                })
+                trial.update(
+                    {
+                        "status": "valid" if evidence.valid else "invalid",
+                        "users": evidence.users,
+                        "cleanup_verified": evidence.cleanup_verified,
+                        "invalid_reasons": list(evidence.invalid_reasons),
+                        "stages": [s.model_dump(mode="json") for s in evidence.stages],
+                        "windows": [],
+                    }
+                )
                 selected = [s.id for s in evidence.stages if s.evaluate]
                 for name, ids in [
                     ("selected", selected),
@@ -358,7 +383,9 @@ def write_queue_report(store: ReportStore, queue: str, output: Path) -> Path:
                                 (
                                     s.timestamp,
                                     s.numerator / s.denominator
-                                    if s.kind == "rate" and s.denominator and s.numerator is not None
+                                    if s.kind == "rate"
+                                    and s.denominator
+                                    and s.numerator is not None
                                     else s.value,
                                 )
                                 for s in evidence.samples
@@ -380,7 +407,11 @@ def write_queue_report(store: ReportStore, queue: str, output: Path) -> Path:
         + html.escape(report["state"])
         + "</p><p>Unavailable evidence is never zero. Bounds belong to their objective; observed_only means reused observations, not an independent search. CPU temporal means are time weighted. Shared generator/backend hosts can interfere. Raw private configuration and logs are excluded.</p>"
     )
-    for key, rows in (("jobs", report["jobs"]), ("objectives", report["objectives"]), ("decisions", report["decisions"])):
+    for key, rows in (
+        ("jobs", report["jobs"]),
+        ("objectives", report["objectives"]),
+        ("decisions", report["decisions"]),
+    ):
         body += "<h2>" + key + "</h2>" + _table(rows)
     for trial in report["trials"]:
         body += (

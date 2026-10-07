@@ -119,7 +119,8 @@ def _result(evidence: TrialEvidence, criterion: Criterion) -> CriterionResult:
         stat = criterion.statistic
         if stat == "mean":
             value = (
-                sum((b - a) * v for a, b, v in pieces if v is not None) / sum(b - a for a, b, v in pieces)
+                sum((b - a) * v for a, b, v in pieces if v is not None)
+                / sum(b - a for a, b, v in pieces)
                 if temporal
                 else sum(values) / count
             )

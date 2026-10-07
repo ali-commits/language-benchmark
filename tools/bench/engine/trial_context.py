@@ -1,4 +1,5 @@
 """Receipts shared by trial orchestration and ownership recovery."""
+
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -48,5 +49,3 @@ class CleanupReceipt:
     verified: bool
     removed: tuple[str, ...] = ()
     reasons: tuple[str, ...] = ()
-
-

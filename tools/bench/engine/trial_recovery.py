@@ -1,4 +1,5 @@
 """Durable fixture restoration and exact-ID ownership lease release."""
+
 import hashlib
 import json
 from typing import Callable, Literal
@@ -22,7 +23,9 @@ DockerFactory = Callable[[Host, dict[str, str]], OwnedDocker]
 def fixture(context: TrialContext, action: FixtureAction) -> FixtureReceipt:
     fixture = context.job.workload.fixture
     if fixture and fixture.manifest:
-        manifest = checked_record(json.loads((context.directory / "manifest.json").read_text()), Manifest)
+        manifest = checked_record(
+            json.loads((context.directory / "manifest.json").read_text()), Manifest
+        )
         actual = hashlib.sha256(fixture.manifest.read_bytes()).hexdigest()
         if actual != manifest.get("fixture_manifest_sha256"):
             raise ValueError("fixture identity changed since trial preparation")
@@ -40,7 +43,9 @@ def fixture(context: TrialContext, action: FixtureAction) -> FixtureReceipt:
     if fixture:
         if fixture.adapter != "hooks":
             raise ValueError("unknown fixture adapter")
-        hook = {"prepare": fixture.prepare, "reset": fixture.reset, "verify": fixture.verify}[action]
+        hook = {"prepare": fixture.prepare, "reset": fixture.reset, "verify": fixture.verify}[
+            action
+        ]
         if hook:
             return run_hook(hook, context)
     return None
@@ -53,7 +58,13 @@ def fixture_receipt_identity(context: TrialContext) -> str:
     ).hexdigest()
 
 
-def finish_release(context: TrialContext, journal: Journal, checkpoint: JournalEntry, *, docker_factory: DockerFactory) -> CleanupReceipt:
+def finish_release(
+    context: TrialContext,
+    journal: Journal,
+    checkpoint: JournalEntry,
+    *,
+    docker_factory: DockerFactory,
+) -> CleanupReceipt:
     """Resume only a durable, verified restore checkpoint; never reopen fixtures."""
     labels = owner_labels(context.queue_id, context.job_id, context.trial_id)
     hosts = [context.environment.generator]
@@ -149,7 +160,14 @@ def finish_release(context: TrialContext, journal: Journal, checkpoint: JournalE
     return receipt
 
 
-def cleanup(context: TrialContext, journal: Journal, *, docker_factory: DockerFactory, fixture_action: FixtureCallback, execute: HostExecutor) -> CleanupReceipt:
+def cleanup(
+    context: TrialContext,
+    journal: Journal,
+    *,
+    docker_factory: DockerFactory,
+    fixture_action: FixtureCallback,
+    execute: HostExecutor,
+) -> CleanupReceipt:
     labels = owner_labels(context.queue_id, context.job_id, context.trial_id)
     removed: list[str] = []
     reasons: list[str] = []
@@ -256,7 +274,10 @@ def cleanup(context: TrialContext, journal: Journal, *, docker_factory: DockerFa
         return CleanupReceipt(receipt.verified, tuple(removed) + receipt.removed, receipt.reasons)
     for host in hosts:
         try:
-            if docker_factory(host, labels).owned() or docker_factory(host, labels).owned_networks():
+            if (
+                docker_factory(host, labels).owned()
+                or docker_factory(host, labels).owned_networks()
+            ):
                 reasons.append("owned resources remain")
         except Exception:
             reasons.append("cleanup verification unavailable")
@@ -267,4 +288,3 @@ def cleanup(context: TrialContext, journal: Journal, *, docker_factory: DockerFa
         {"removed": removed, "reasons": reasons},
     )
     return receipt
-

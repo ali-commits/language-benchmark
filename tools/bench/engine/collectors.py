@@ -67,7 +67,9 @@ class Collector:
                 execute_host(self.host, argv, timeout=15)
                 return {"epoch": time.time()}
             argv = ["python3", "-c", DOCKER_PROBE, self.container_id]
-        point = checked_record(json.loads(execute_host(self.host, argv, timeout=15).stdout), ProbePoint)
+        point = checked_record(
+            json.loads(execute_host(self.host, argv, timeout=15).stdout), ProbePoint
+        )
         if self.scope != "container":
             checked_record(point, HostPoint)
         return point

@@ -1,4 +1,5 @@
 """Resolve and publish immutable trial preparation before lifecycle side effects."""
+
 import hashlib
 import json
 import os
@@ -76,11 +77,14 @@ def prepare_trial(context: TrialContext, *, execute: HostExecutor) -> Preparatio
     bundle = bundle_workload(context, prepared_workload)
     generator_image_id = (
         context.generator_image_id
-        or checked_record(json.loads(
-            execute(
-                job.environment.generator, ["docker", "image", "inspect", "grafana/k6:1.4.2"]
-            ).stdout
-        ), list[DockerImage])[0]["Id"]
+        or checked_record(
+            json.loads(
+                execute(
+                    job.environment.generator, ["docker", "image", "inspect", "grafana/k6:1.4.2"]
+                ).stdout
+            ),
+            list[DockerImage],
+        )[0]["Id"]
     )
     execution_id = prepared_execution_identity(
         job,
@@ -113,5 +117,14 @@ def prepare_trial(context: TrialContext, *, execute: HostExecutor) -> Preparatio
         "colocated_generator": job.environment.backend == job.environment.generator,
     }
     immutable_json(directory / "manifest.json", manifest)
-    return Preparation(directory, prepared_target, prepared_workload, bundle, stages,
-                       generator_image_id, execution_id, labels, target_env)
+    return Preparation(
+        directory,
+        prepared_target,
+        prepared_workload,
+        bundle,
+        stages,
+        generator_image_id,
+        execution_id,
+        labels,
+        target_env,
+    )

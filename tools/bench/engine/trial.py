@@ -33,7 +33,10 @@ from .workloads import transfer_tree
 
 class OwnedDocker(_OwnedDocker):
     """Compatibility facade captures the current trial transport at construction."""
-    def __init__(self, host: Host, labels: dict[str, str], execute: HostExecutor | None = None) -> None:
+
+    def __init__(
+        self, host: Host, labels: dict[str, str], execute: HostExecutor | None = None
+    ) -> None:
         super().__init__(host, labels, execute or execute_host)
 
 
@@ -50,7 +53,9 @@ def _fixture(context: TrialContext, action: FixtureAction) -> FixtureReceipt:
 
 
 def _cleanup(context: TrialContext, journal: Journal) -> CleanupReceipt:
-    return cleanup(context, journal, docker_factory=OwnedDocker, fixture_action=_fixture, execute=execute_host)
+    return cleanup(
+        context, journal, docker_factory=OwnedDocker, fixture_action=_fixture, execute=execute_host
+    )
 
 
 def reconcile_trial(context: TrialContext) -> CleanupReceipt:
@@ -66,7 +71,13 @@ def reconcile_trial(context: TrialContext) -> CleanupReceipt:
         return _cleanup(context, journal)
 
 
-def _baseline(context: TrialContext, phase: Literal["stopped", "ready"], allowed: tuple[str, ...], journal: Journal, stop_requested: Callable[[], bool]) -> None:
+def _baseline(
+    context: TrialContext,
+    phase: Literal["stopped", "ready"],
+    allowed: tuple[str, ...],
+    journal: Journal,
+    stop_requested: Callable[[], bool],
+) -> None:
     policy = context.environment.baseline
     if not policy.enabled:
         journal.record("baseline_" + phase, "disabled")
@@ -79,15 +90,20 @@ def _baseline(context: TrialContext, phase: Literal["stopped", "ready"], allowed
     while time.monotonic() < deadline:
         if stop_requested():
             raise InterruptedError("stop requested")
-        point = checked_record(json.loads(
-            execute_host(
-                context.environment.backend, ["python3", "-c", HOST_PROBE], timeout=15
-            ).stdout
-        ), BaselinePoint)
+        point = checked_record(
+            json.loads(
+                execute_host(
+                    context.environment.backend, ["python3", "-c", HOST_PROBE], timeout=15
+                ).stdout
+            ),
+            BaselinePoint,
+        )
         running = docker.command("ps", "--no-trunc", "--format", "{{json .}}").stdout
         foreign = [
             p
-            for p in (checked_record(json.loads(row), RunningContainer) for row in running.splitlines())
+            for p in (
+                checked_record(json.loads(row), RunningContainer) for row in running.splitlines()
+            )
             if p["ID"] not in allowed and p["Names"] not in policy.allowed_containers
         ]
         cpu = None
@@ -98,7 +114,12 @@ def _baseline(context: TrialContext, phase: Literal["stopped", "ready"], allowed
         okay = (
             cpu is not None
             and cpu <= (policy.stopped_cpu_max if phase == "stopped" else policy.ready_cpu_max)
-            and point["memory_available"] >= (policy.stopped_memory_available if phase == "stopped" else policy.ready_memory_available)
+            and point["memory_available"]
+            >= (
+                policy.stopped_memory_available
+                if phase == "stopped"
+                else policy.ready_memory_available
+            )
             and not foreign
         )
         good = good + 1 if okay else 0
@@ -117,8 +138,6 @@ def _baseline(context: TrialContext, phase: Literal["stopped", "ready"], allowed
             return
         time.sleep(min(policy.interval, max(0, deadline - time.monotonic())))
     raise TimeoutError("clean baseline gate timed out")
-
-
 
 
 def run_trial(

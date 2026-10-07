@@ -1,4 +1,5 @@
 """Checked wire records at the engine's process and artifact boundaries."""
+
 from typing_extensions import TypedDict
 
 from ..records import Ulimit
@@ -10,8 +11,10 @@ class CommandResponse(TypedDict, total=False):
     stdout: str
     stderr: str
 
+
 class ImageConfig(TypedDict, total=False):
     Labels: dict[str, str | None] | None
+
 
 class DockerImage(TypedDict, total=False):
     Id: str
@@ -20,8 +23,10 @@ class DockerImage(TypedDict, total=False):
     Architecture: str
     Config: ImageConfig
 
+
 class ContainerConfig(TypedDict, total=False):
     Labels: dict[str, str] | None
+
 
 class ContainerState(TypedDict, total=False):
     Running: bool
@@ -29,17 +34,21 @@ class ContainerState(TypedDict, total=False):
     ExitCode: int
     OOMKilled: bool
 
+
 class HostConfig(TypedDict, total=False):
     NanoCpus: int
     Memory: int
     MemorySwap: int
     Ulimits: list[Ulimit] | None
 
+
 class PortBinding(TypedDict):
     HostPort: str
 
+
 class NetworkSettings(TypedDict):
     Ports: dict[str, list[PortBinding] | None]
+
 
 class ContainerInfo(TypedDict, total=False):
     Id: str
@@ -50,9 +59,11 @@ class ContainerInfo(TypedDict, total=False):
     HostConfig: HostConfig
     NetworkSettings: NetworkSettings
 
+
 class NetworkInfo(TypedDict, total=False):
     Id: str
     Labels: dict[str, str] | None
+
 
 class BuildManifest(TypedDict):
     checksums: dict[str, str]
@@ -60,20 +71,25 @@ class BuildManifest(TypedDict):
     build_args_sha256: str
     identity: str
 
+
 class HostPoint(TypedDict):
     epoch: float
     cpu: list[int]
     memory_total: int
     memory_available: int
 
+
 class CpuUsage(TypedDict):
     total_usage: int
+
 
 class CpuStats(TypedDict):
     cpu_usage: CpuUsage
 
+
 class MemoryStats(TypedDict, total=False):
     usage: int
+
 
 class ProbePoint(TypedDict, total=False):
     epoch: float
@@ -83,14 +99,17 @@ class ProbePoint(TypedDict, total=False):
     cpu_stats: CpuStats
     memory_stats: MemoryStats
 
+
 class RunningContainer(TypedDict):
     ID: str
     Names: str
+
 
 class Authentication(TypedDict):
     distinct_accounts: int
     target_accounts: int
     fraction: float | None
+
 
 class JournalEntry(TypedDict):
     sequence: int
@@ -99,14 +118,17 @@ class JournalEntry(TypedDict):
     epoch: float
     details: dict[str, object]
 
+
 class RestoreDetails(TypedDict):
     owner: dict[str, str]
     backend_lease_id: str
     fixture_identity: str
 
+
 class LeaseAssignment(TypedDict):
     host: dict[str, object]
     id: str
+
 
 class ReleaseDetails(TypedDict):
     owner: dict[str, str]
@@ -114,8 +136,10 @@ class ReleaseDetails(TypedDict):
     restore_sequence: int | None
     leases: list[LeaseAssignment]
 
+
 class StageDetails(TypedDict):
     path: str
+
 
 class Manifest(TypedDict, total=False):
     version: int
@@ -125,10 +149,12 @@ class Manifest(TypedDict, total=False):
     trial_id: str
     fixture_manifest_sha256: str | None
 
+
 class RawMetric(TypedDict, total=False):
     name: str
     type: str
     unit: str
+
 
 class RawCriterion(TypedDict, total=False):
     metric: str
@@ -137,15 +163,19 @@ class RawCriterion(TypedDict, total=False):
     value: str | int | float
     unit: str
 
+
 class RawWorkload(TypedDict, total=False):
     metrics: dict[str, RawMetric]
+
 
 class RawDefaults(TypedDict, total=False):
     workload: str | None
     criteria: list[RawCriterion]
 
+
 class RawJob(RawDefaults, total=False):
     objectives: dict[str, list[RawCriterion]]
+
 
 class RawConfig(TypedDict, total=False):
     version: int
@@ -156,15 +186,18 @@ class RawConfig(TypedDict, total=False):
     defaults: RawDefaults
     jobs: list[RawJob]
 
+
 class RdsConfig(TypedDict):
     provider: str
     region: str
     identifier: str
 
+
 class BaselinePoint(TypedDict):
     epoch: float
     cpu: list[int]
     memory_available: float
+
 
 class TrialManifest(Manifest):
     execution_id: str
@@ -173,6 +206,7 @@ class TrialManifest(Manifest):
     workload_identity: str
     wrapper_sha256: dict[str, str]
     colocated_generator: bool
+
 
 class PreparedProvenance(TypedDict, total=False):
     image_id: str

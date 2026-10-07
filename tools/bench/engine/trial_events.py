@@ -1,4 +1,5 @@
 """Interpret workload logs and validate measured hold occupancy."""
+
 import json
 import math
 from collections.abc import Sequence
@@ -14,6 +15,7 @@ class EventMetadata(TypedDict, total=False):
     type: str
     load_start_epoch_ms: float
     stages: list[dict[str, object]]
+
 
 class WorkloadEvent(EventMetadata, total=False):
     sample: dict[str, object]
@@ -127,7 +129,9 @@ def parse_events(raw: str) -> Events:
     return Events(samples, metadata, counts, list(dict.fromkeys(reasons)))
 
 
-def verify_occupancy(samples: Sequence[Sample], stages: Sequence[ResolvedStage], tolerance: OccupancyTolerance) -> list[str]:
+def verify_occupancy(
+    samples: Sequence[Sample], stages: Sequence[ResolvedStage], tolerance: OccupancyTolerance
+) -> list[str]:
     """Require actual hold gauges with coverage and bounds; never pass an empty hold."""
     observations = sorted(
         (s for s in samples if s.scope == "generator" and s.metric == "active_users"),
@@ -167,4 +171,3 @@ def verify_occupancy(samples: Sequence[Sample], stages: Sequence[ResolvedStage],
         if covered / (end - begin) < 0.95:
             reasons.append(f"insufficient occupancy coverage: {stage.id}")
     return list(dict.fromkeys(reasons))
-

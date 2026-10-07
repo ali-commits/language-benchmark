@@ -1,4 +1,5 @@
 """Ownership-checked Docker operations over a captured host transport."""
+
 import json
 import subprocess
 
@@ -10,15 +11,27 @@ from .types import Host
 
 
 class OwnedDocker:
-    def __init__(self, host: Host, labels: dict[str, str], execute: HostExecutor = execute_host) -> None:
+    def __init__(
+        self, host: Host, labels: dict[str, str], execute: HostExecutor = execute_host
+    ) -> None:
         self.host, self.labels = host, labels
         self.execute = execute
 
-    def command(self, *argv: str, env: dict[str, str] | None = None, timeout: float = 1800, input_data: str | None = None) -> subprocess.CompletedProcess[str]:
-        return self.execute(self.host, ["docker", *argv], env=env, timeout=timeout, input_data=input_data)
+    def command(
+        self,
+        *argv: str,
+        env: dict[str, str] | None = None,
+        timeout: float = 1800,
+        input_data: str | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        return self.execute(
+            self.host, ["docker", *argv], env=env, timeout=timeout, input_data=input_data
+        )
 
     def inspect(self, identity: str) -> ContainerInfo:
-        info = checked_record(json.loads(self.command("inspect", identity).stdout), list[ContainerInfo])[0]
+        info = checked_record(
+            json.loads(self.command("inspect", identity).stdout), list[ContainerInfo]
+        )[0]
         if any(
             (info.get("Config", {}).get("Labels") or {}).get(k) != v for k, v in self.labels.items()
         ):
@@ -29,7 +42,9 @@ class OwnedDocker:
         ids = self.command("ps", "-aq", "--no-trunc", "--filter", f"name=^/{name}$").stdout.split()
         return self.inspect(ids[0]) if ids else None
 
-    def create(self, name: str, arguments: list[str], *, env: dict[str, str] | None = None) -> ContainerInfo:
+    def create(
+        self, name: str, arguments: list[str], *, env: dict[str, str] | None = None
+    ) -> ContainerInfo:
         validate_container_environment(env or {})
         if self.by_name(name):
             raise ValueError("existing resource requires explicit reconciliation")
@@ -84,7 +99,9 @@ class OwnedDocker:
         return self.command("ps", "-aq", "--no-trunc", *args).stdout.split()
 
     def inspect_network(self, identity: str) -> NetworkInfo:
-        info = checked_record(json.loads(self.command("network", "inspect", identity).stdout), list[NetworkInfo])[0]
+        info = checked_record(
+            json.loads(self.command("network", "inspect", identity).stdout), list[NetworkInfo]
+        )[0]
         if any((info.get("Labels") or {}).get(key) != value for key, value in self.labels.items()):
             raise ValueError("network ownership mismatch")
         return info
@@ -110,4 +127,3 @@ class OwnedDocker:
             for flag in ("--filter", "label=" + key + "=" + value)
         ]
         return self.command("network", "ls", "-q", *flags).stdout.split()
-

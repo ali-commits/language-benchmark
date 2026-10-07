@@ -85,8 +85,7 @@ def _source_references(text: str, suffix: str = ".js") -> list[tuple[str, str]]:
             if dependency is not None:
                 references.append(("module", literal(dependency)))
         elif node.type == "import" or (
-            node.type == "meta_property"
-            and any(child.type == "import" for child in node.children)
+            node.type == "meta_property" and any(child.type == "import" for child in node.children)
         ):
             raise ValueError("dynamic/meta workload imports are not reproducible")
         elif node.type in ("identifier", "property_identifier", "shorthand_property_identifier"):
@@ -98,7 +97,8 @@ def _source_references(text: str, suffix: str = ".js") -> list[tuple[str, str]]:
             if name == "open" and node.type == "identifier":
                 parent = node.parent
                 if (
-                    parent is None or parent.type != "call_expression"
+                    parent is None
+                    or parent.type != "call_expression"
                     or parent.child_by_field_name("function") != node
                 ):
                     raise ValueError("workload data loader aliases are not reproducible")
@@ -201,7 +201,9 @@ with tempfile.TemporaryDirectory(prefix='.bench-transfer-',dir=dest.parent) as t
 """
 
 
-def _ssh(host: Host, code: str, payload: dict[str, object], data: bytes, timeout: float = 600) -> bytes:
+def _ssh(
+    host: Host, code: str, payload: dict[str, object], data: bytes, timeout: float = 600
+) -> bytes:
     argv = ["ssh", "-o", "BatchMode=yes", "-p", str(host.port)]
     if host.identity_file:
         argv += ["-i", str(host.identity_file)]
@@ -220,7 +222,9 @@ def _ssh(host: Host, code: str, payload: dict[str, object], data: bytes, timeout
     return result.stdout
 
 
-def transfer_tree(source: Path, host: Host, destination: str, *, expected_checksums: dict[str, str] | None = None) -> dict[str, str]:
+def transfer_tree(
+    source: Path, host: Host, destination: str, *, expected_checksums: dict[str, str] | None = None
+) -> dict[str, str]:
     checksums = tree_checksums(source)
     if expected_checksums is not None and checksums != expected_checksums:
         raise ValueError("source checksum mismatch before transfer")
@@ -285,7 +289,9 @@ finally:
     return checksum
 
 
-def stage_workload(prepared: PreparedWorkload, host: Host, destination: Path | str) -> StagedWorkload:
+def stage_workload(
+    prepared: PreparedWorkload, host: Host, destination: Path | str
+) -> StagedWorkload:
     if tree_checksums(prepared.directory) != prepared.checksums:
         raise ValueError("prepared workload checksum mismatch")
     transfer_tree(prepared.directory, host, str(destination), expected_checksums=prepared.checksums)
@@ -306,7 +312,9 @@ def run_hook(hook: Hook, context: HookContext) -> HookReceipt:
     host = (
         Host(transport="local")
         if hook.host == "controller"
-        else context.environment.backend if hook.host == "backend" else context.environment.generator
+        else context.environment.backend
+        if hook.host == "backend"
+        else context.environment.generator
     )
     env = {}
     for key, reference in hook.env.items():
