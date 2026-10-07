@@ -7,6 +7,13 @@ from .types import CriterionResult, Evaluation, TrialEvidence
 _OPERATORS = {'<=':operator.le, '>=':operator.ge, '<':operator.lt, '>':operator.gt, '==':operator.eq}
 
 
+class _Invalid(ValueError):
+    def __init__(self, reason, count, coverage):
+        super().__init__(reason)
+        self.count = count
+        self.coverage = coverage
+
+
 def _finite(value):
     return value is not None and math.isfinite(value)
 
@@ -45,28 +52,30 @@ def _result(evidence, criterion):
             raise ValueError('nonfinite timestamp')
         coverage=None
     count=len(selected)
+    def invalid(reason):
+        raise _Invalid(reason,count,coverage)
     if count<criterion.minimum_samples:
-        raise ValueError('insufficient samples')
+        invalid('insufficient samples')
     if any(s.unit is not None and criterion.unit is not None and s.unit!=criterion.unit for s in selected):
-        raise ValueError('contradictory metric units')
+        invalid('contradictory metric units')
     if len({s.includes_failures for s in selected})>1:
-        raise ValueError('contradictory latency populations')
+        invalid('contradictory latency populations')
     if criterion.metric=='cpu_used':
         expected={'backend_host':'all_host_cpus','container':'container_quota'}.get(criterion.scope)
         if expected and any(s.normalization!=expected for s in selected):
-            raise ValueError('contradictory CPU normalization')
+            invalid('contradictory CPU normalization')
     if coverage is not None and coverage+1e-12<criterion.minimum_coverage:
-        raise ValueError('insufficient temporal coverage')
+        invalid('insufficient temporal coverage')
     if criterion.statistic=='rate':
         if any(s.kind!='rate' or not _finite(s.numerator) or not _finite(s.denominator) or s.denominator<0 or s.numerator<0 or s.numerator>s.denominator for s in selected):
-            raise ValueError('invalid rate numerator/denominator')
+            invalid('invalid rate numerator/denominator')
         denominator=sum(s.denominator for s in selected)
         if denominator<=0:
-            raise ValueError('empty rate denominator')
+            invalid('empty rate denominator')
         value=sum(s.numerator for s in selected)/denominator
     else:
         if any(not _finite(s.value) for s in selected):
-            raise ValueError('missing or nonfinite required value')
+            invalid('missing or nonfinite required value')
         values=sorted(s.value for s in selected)
         stat=criterion.statistic
         if stat=='mean':
@@ -77,11 +86,11 @@ def _result(evidence, criterion):
         elif stat=='sum': value=sum(values)
         elif stat.startswith('p') and not temporal:
             q=float(stat[1:])/100
-            if not 0<=q<=1: raise ValueError('invalid quantile')
+            if not 0<=q<=1: invalid('invalid quantile')
             pos=(count-1)*q
             lo=int(pos)
             value=values[lo]+(values[min(lo+1,count-1)]-values[lo])*(pos-lo)
-        else: raise ValueError('unsupported statistic')
+        else: invalid('unsupported statistic')
     return CriterionResult(criterion=criterion,valid=True,passed=_OPERATORS[criterion.operator](value,criterion.value),value=value,sample_count=count,coverage=coverage)
 
 
@@ -92,7 +101,7 @@ def evaluate(evidence: TrialEvidence, criteria: tuple) -> Evaluation:
         try:
             result=_result(evidence,criterion)
         except (ValueError, ZeroDivisionError) as exc:
-            result=CriterionResult(criterion=criterion,valid=False,reason=str(exc))
+            result=CriterionResult(criterion=criterion,valid=False,reason=str(exc),sample_count=getattr(exc,'count',0),coverage=getattr(exc,'coverage',None))
         results.append(result)
         if criterion.statistic.startswith('p') and result.valid and float(criterion.statistic[1:])>=99 and result.sample_count<1000:
             warnings.append(f'{criterion.metric}: high quantile from {result.sample_count} samples is descriptive')

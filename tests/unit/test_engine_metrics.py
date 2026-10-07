@@ -93,3 +93,8 @@ def test_identity_requires_script(tmp_path):
     j.workload.script.unlink()
     with pytest.raises(ValueError,match='not a file'):
         execution_identity(j,100)
+
+
+def test_invalid_result_retains_observed_count():
+    result=evaluate(evidence(Sample(metric='latency',timestamp=1.,value=float('nan'))),(criterion(),))
+    assert result.results[0].sample_count==1
