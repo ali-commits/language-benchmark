@@ -11,6 +11,7 @@ import subprocess
 import sys
 import time
 import uuid
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -92,21 +93,63 @@ def assert_clean(queue):
     assert not docker("network", "ls", "-q", "--filter", "label=bench.queue=" + queue)
 
 
+def cleanup_owned_queue(queue):
+    """Best-effort test cleanup; recheck ownership and remove immutable IDs only."""
+    errors = []
+    for kind, listing in (
+        ("container", ("ps", "-aq", "--no-trunc")),
+        ("network", ("network", "ls", "-q", "--no-trunc")),
+    ):
+        try:
+            identifiers = docker(*listing, "--filter", "label=bench.queue=" + queue).split()
+        except (OSError, subprocess.SubprocessError) as exc:
+            errors.append(type(exc).__name__)
+            continue
+        for identifier in identifiers:
+            try:
+                info = json.loads(docker(kind, "inspect", identifier))[0]
+                labels = (
+                    info["Config"].get("Labels", {})
+                    if kind == "container"
+                    else info.get("Labels", {})
+                )
+                if info["Id"] != identifier or labels.get("bench.queue") != queue:
+                    errors.append("ownership changed; resource preserved")
+                    continue
+                docker(kind, "rm", *(["-f"] if kind == "container" else []), identifier)
+            except (OSError, subprocess.SubprocessError, ValueError, KeyError) as exc:
+                errors.append(type(exc).__name__)
+    return errors
+
+
+def finish_cleanup(errors):
+    """Keep the original test failure primary if cleanup also encounters trouble."""
+    if not errors:
+        return
+    message = "acceptance cleanup errors: " + ", ".join(errors)
+    active = sys.exc_info()[1]
+    if active is None:
+        pytest.fail(message)
+    elif hasattr(active, "add_note"):
+        active.add_note(message)
+
+
 def test_two_versions_fixed_stages_metric_search(config_file, tmp_path):
     path, data = config_file
     target = copy.deepcopy(data["targets"]["http"])
     # Distinct immutable images, deliberately unrelated to the language registry.
     source = path.parent / target["build"]["context"]
     tags = []
+    image_ids = {}
     foreign = None
+    foreign_queue = data["name"] + "-sentinel"
     try:
         for version in ("orchid", "copper"):
             tag = f"bench-acceptance-{uuid.uuid4().hex[:12]}:{version}"
             docker("build", "--label", "acceptance.version=" + version, "-t", tag, source)
             tags.append(tag)
-        assert docker("image", "inspect", tags[0], "--format", "{{.Id}}") != docker(
-            "image", "inspect", tags[1], "--format", "{{.Id}}"
-        )
+            image_ids[version] = docker("image", "inspect", tag, "--format", "{{.Id}}")
+        assert image_ids["orchid"] != image_ids["copper"]
         data["targets"] = {
             version: {**{k: v for k, v in target.items() if k != "build"}, "image": tag}
             for version, tag in zip(("orchid", "copper"), tags, strict=True)
@@ -159,19 +202,44 @@ def test_two_versions_fixed_stages_metric_search(config_file, tmp_path):
         budget["test"]["limits"]["max_trials"] = 1
         data["jobs"] = [fixed, staged, search, budget]
         path.write_text(yaml.safe_dump(data))
-        foreign = docker("create", "--label", "bench.queue=acceptance-foreign", "grafana/k6:1.4.2")
+        foreign = docker("create", "--label", "bench.queue=" + foreign_queue, "grafana/k6:1.4.2")
         state = tmp_path / "state"
         cli("validate", path)
         cli("queue", "start", path, "--state-dir", state, timeout=300)
         store = QueueStore(state / "queue.db")
         evidence = results(store, data["name"])
         assert all(e.valid and e.cleanup_verified for e in evidence)
-        fixed_evidence = [
-            e
+        manifests = {e.trial_id: json.loads(e.manifest_path.read_text()) for e in evidence}
+        assert len(evidence) == len(manifests) == len(store.snapshot(data["name"])["trials"]) == 10
+        actual = Counter(
+            (
+                manifests[e.trial_id]["job"]["id"],
+                manifests[e.trial_id]["job"]["target_name"],
+                e.users,
+            )
             for e in evidence
-            if json.loads(e.manifest_path.read_text())["job"]["id"] == fixed["id"]
-        ]
-        assert sorted(e.users for e in fixed_evidence) == [1, 1, 2, 2]
+        )
+        assert actual == Counter(
+            [
+                ("http-fixed", "orchid", 1),
+                ("http-fixed", "orchid", 2),
+                ("http-fixed", "copper", 1),
+                ("http-fixed", "copper", 2),
+                ("recovery", "orchid", None),
+                ("search", "copper", 1),
+                ("search", "copper", 2),
+                ("search", "copper", 4),
+                ("search", "copper", 3),
+                ("budget", "copper", 1),
+            ]
+        )
+        for evidence_item in evidence:
+            manifest = manifests[evidence_item.trial_id]
+            version = manifest["job"]["target_name"]
+            assert manifest["image_id"] == image_ids[version]
+            assert manifest["job"]["target"]["image"] == data["targets"][version]["image"]
+            assert manifest["trial_id"] == evidence_item.trial_id
+            assert manifest["users"] == evidence_item.users
         recovery = next(
             e
             for e in evidence
@@ -202,10 +270,26 @@ def test_two_versions_fixed_stages_metric_search(config_file, tmp_path):
         assert_clean(data["name"])
         assert docker("inspect", foreign, "--format", "{{.Config.Labels}}")
     finally:
+        errors = cleanup_owned_queue(data["name"])
         if foreign:
-            docker("rm", foreign)
+            # The sentinel has its own unique owner; queue cleanup must not touch it.
+            try:
+                info = json.loads(docker("container", "inspect", foreign))[0]
+                if (
+                    info["Id"] == foreign
+                    and info["Config"]["Labels"].get("bench.queue") == foreign_queue
+                ):
+                    docker("container", "rm", foreign)
+                else:
+                    errors.append("sentinel ownership changed; preserved")
+            except (OSError, subprocess.SubprocessError, ValueError, KeyError) as exc:
+                errors.append(type(exc).__name__)
         for tag in tags:
-            docker("image", "rm", tag)
+            try:
+                docker("image", "rm", tag)
+            except (OSError, subprocess.SubprocessError) as exc:
+                errors.append(type(exc).__name__)
+        finish_cleanup(errors)
 
 
 def test_process_mutations_stop_resume_and_crash(config_file, tmp_path):
@@ -297,10 +381,21 @@ def test_process_mutations_stop_resume_and_crash(config_file, tmp_path):
         assert store.controller_state(queue)["leases"] == {}
         assert_clean(queue)
     finally:
-        if process.poll() is None:
-            process.terminate()
-            process.wait(timeout=60)
-        output.close()
+        errors = []
+        try:
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=60)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=10)
+        except (OSError, subprocess.SubprocessError) as exc:
+            errors.append(type(exc).__name__)
+        finally:
+            output.close()
+            errors.extend(cleanup_owned_queue(queue))
+        finish_cleanup(errors)
 
 
 @pytest.fixture
@@ -513,3 +608,34 @@ def test_disposable_user_service_shutdown_resume(config_file, tmp_path):
             command("systemctl", "--user", "disable", name)
             unit.unlink()
             command("systemctl", "--user", "daemon-reload")
+
+
+def test_owned_queue_failure_cleanup_preserves_foreign(monkeypatch):
+    queue = "acceptance-finalizer-" + uuid.uuid4().hex[:12]
+    foreign_queue = queue + "-sentinel"
+    foreign = None
+    try:
+        docker("create", "--label", "bench.queue=" + queue, "grafana/k6:1.4.2")
+        docker("network", "create", "--label", "bench.queue=" + queue, queue)
+        foreign = docker("create", "--label", "bench.queue=" + foreign_queue, "grafana/k6:1.4.2")
+        with pytest.raises(AssertionError, match="original acceptance failure"):
+            try:
+                raise AssertionError("original acceptance failure")
+            finally:
+                finish_cleanup(cleanup_owned_queue(queue))
+        assert_clean(queue)
+        assert json.loads(docker("inspect", foreign))[0]["Id"] == foreign
+        with monkeypatch.context() as patch:
+
+            def unavailable(*args):
+                raise subprocess.TimeoutExpired(args, 1)
+
+            patch.setattr(sys.modules[__name__], "docker", unavailable)
+            with pytest.raises(AssertionError, match="original acceptance failure") as failure:
+                try:
+                    raise AssertionError("original acceptance failure")
+                finally:
+                    finish_cleanup(cleanup_owned_queue(queue))
+            assert any("cleanup errors" in note for note in failure.value.__notes__)
+    finally:
+        finish_cleanup(cleanup_owned_queue(queue) + cleanup_owned_queue(foreign_queue))
