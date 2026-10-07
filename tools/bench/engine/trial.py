@@ -15,6 +15,7 @@ from typing import Callable
 from .collectors import HOST_PROBE, Collection, collectors_for, health_reasons
 from .docker_env import CREATE_WITH_ENV, validate_container_environment
 from .evidence import Journal, immutable_json
+from .resources import wrapper_path
 from .stages import resolve_stages
 from .targets import (
     execute_host,
@@ -634,7 +635,7 @@ def _bundle(context, prepared):
     bundle.mkdir()
     shutil.copytree(prepared.directory, bundle / "workload")
     for name in ("runner.js", "metrics.js"):
-        shutil.copy(ROOT / "benchmarks/k6/engine" / name, bundle / name)
+        shutil.copy(wrapper_path(name), bundle / name)
     runner = bundle / "runner.js"
     entry = "./workload/" + prepared.script.relative_to(prepared.directory).as_posix()
     runner.write_text(runner.read_text().replace("'./workload.js'", json.dumps(entry)))

@@ -1,0 +1,63 @@
+version: 1
+name: social-demo
+targets:
+  http:
+    image: language-benchmark-go:local
+    env: {DATABASE_URL: {env: BENCH_DATABASE_URL}}
+    port: 8000
+    resources: {cpus: 1, memory: 256MiB, swap: 0}
+workloads:
+  http:
+    adapter: social
+    script: ../../benchmarks/k6/engine/social.js
+    dependencies: [./actors.json]
+    fixture:
+      adapter: social
+      dsn: {env: BENCH_DATABASE_URL}
+      manifest: ./fixture.json
+      allowed_database: language_benchmark_test
+      runtime_cell: go
+    parameters: {wait: 0.02}
+    metrics:
+      latency: {name: latency, type: trend, unit: ms, includes_failures: true}
+      success: {name: success, type: rate, unit: fraction}
+environments:
+  local:
+    backend: {transport: local}
+    generator: {transport: local}
+    network: {mode: host}
+    telemetry: {host: optional, container: optional, database: "off"}
+defaults:
+  workload: http
+  environment: local
+  drain: 5s
+  graceful_ramp_down: 0.2s
+  hold_tolerance: {grace: 1.1s}
+  stages:
+    - {id: ramp, from: 0, to: target, duration: 3s}
+    - {id: hold, from: target, to: target, duration: 5s, evaluate: true}
+    - {id: cool, from: target, to: 0, duration: 2s}
+    - {id: idle, from: 0, to: 0, duration: 3s}
+  criteria:
+    - {metric: success, statistic: rate, operator: ">=", value: 99%}
+jobs:
+  - id: http-fixed
+    targets: [http]
+    test: {type: fixed, users: [100, 500, 1000]}
+  - id: http-search
+    targets: [http]
+    test:
+      type: search
+      users: {min: 1, start: 100, max: auto}
+      limits: {max_trials: 20, max_elapsed: 30m, hard_users: 2000}
+    objectives:
+      p99:
+        - {metric: latency, statistic: p99, operator: "<=", value: 500ms}
+      cpu:
+        - {metric: cpu_used, scope: container, statistic: mean, operator: "<=", value: 80%}
+      ram:
+        - {metric: memory_used, scope: container, statistic: max, operator: "<=", value: 200MiB}
+      combined:
+        - {metric: latency, statistic: p99, operator: "<=", value: 500ms}
+        - {metric: cpu_used, scope: container, statistic: mean, operator: "<=", value: 80%}
+        - {metric: memory_used, scope: container, statistic: max, operator: "<=", value: 200MiB}

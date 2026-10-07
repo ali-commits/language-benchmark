@@ -1,0 +1,1 @@
+Run docker pull grafana/k6:1.4.2 once. Docker Buildx is required. This template builds its self-contained standard-library HTTP target. Initial fixed populations are 100/500/1000; reduce to [4] for a smoke test. No database or AWS configuration is needed.

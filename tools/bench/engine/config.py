@@ -1,8 +1,8 @@
 """Safe YAML loading, quantity normalization and explicit default resolution."""
-from copy import deepcopy
 import math
 import os
 import re
+from copy import deepcopy
 from pathlib import Path
 
 import yaml
@@ -16,7 +16,16 @@ class ConfigError(ValueError):
 
 
 class UniqueLoader(yaml.SafeLoader):
-    pass
+    # YAML 1.2 booleans: off/on remain strings (e.g. telemetry: off).
+    yaml_implicit_resolvers = {
+        key: [(tag, pattern) for tag, pattern in rules
+              if tag != 'tag:yaml.org,2002:bool']
+        for key, rules in yaml.SafeLoader.yaml_implicit_resolvers.items()
+    }
+
+
+UniqueLoader.add_implicit_resolver('tag:yaml.org,2002:bool',
+    re.compile(r'^(?:true|false|True|False|TRUE|FALSE)$'), list('tTfF'))
 
 
 def _mapping(loader, node, deep=False):

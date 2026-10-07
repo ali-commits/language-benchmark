@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
 
+from .resources import wrapper_path
 from .types import Build, Environment, Host, Target
 
 
@@ -399,7 +400,7 @@ def prepared_execution_identity(
             "wrapper_sha256": {
                 name: hashlib.sha256(
                     (
-                        Path(__file__).resolve().parents[3] / "benchmarks/k6/engine" / name
+                        wrapper_path(name)
                     ).read_bytes()
                 ).hexdigest()
                 for name in ("runner.js", "metrics.js")
