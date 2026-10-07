@@ -1,3 +1,5 @@
+> Historical campaign document. Current portable engine usage is documented in [README](../README.md) and [configuration](configuration.md). Operational status statements below describe the original campaign, not a currently running service.
+
 # Future mixed-language campaigns
 
 The staged examples compare the modern Python 3.14.8 reference with Java/Spring Boot, PHP/Laravel, Go/net-http, Rust/Axum, Node/Express and Bun/Express. They do not modify or extend the currently running AWS queue. Use a fresh private configuration and output directory for changed timing, thresholds, experiment type, populations, images or runtime locks.

@@ -27,3 +27,12 @@ Additional backend directories are java/spring-boot, php/laravel, go, rust, node
 Current Python runtime cell IDs begin `python-`; app image names begin `lb-python-baseline` or `lb-python-modern`. This avoids collisions when another language adds its own baseline.
 
 C# is registered as `csharp-aspnet-core` in `runtimes/csharp/lock.json`, using one ASP.NET Core process and a 20-connection Npgsql pool. The generic native preflight enforces the same six image labels, read-only RDS CA, 250,000-file descriptor limit, 2 vCPUs, 3 GiB and no swap. Registration does not enroll a new runtime in a running campaign: the image must pass local HTTP/TLS verification and then be appended through an explicitly approved queue-extension audit.
+
+## Reusable engine
+
+- `tools/bench/engine/`: configuration, stage resolution, preparation, raw evidence, collectors, lifecycle, search and reports.
+- `tools/bench/queue/`: durable SQLite store, serial controller, host leases and optional user services.
+- `tools/bench/commands.py`: public `bench` entrypoint (`cli.py` retains legacy commands).
+- `tools/bench/templates/`: self-contained init templates.
+- `docs/results/2026-10/`: sanitized historical CSV reductions, provenance hashes and exact PDF copies.
+- `tests/unit/test_engine_report.py`: report validity, reductions, escaping and curves.

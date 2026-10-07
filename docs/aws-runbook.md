@@ -1,3 +1,5 @@
+> Historical campaign document. Current portable engine usage is documented in [README](../README.md) and [configuration](configuration.md). Operational status statements below describe the original campaign, not a currently running service.
+
 # AWS runbook
 
 ## Topology

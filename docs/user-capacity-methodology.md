@@ -1,3 +1,5 @@
+> Historical campaign document. Current portable engine usage is documented in [README](../README.md) and [configuration](configuration.md). Operational status statements below describe the original campaign, not a currently running service.
+
 # User journeys, capacity and fixed populations
 
 The primary workload emulates distinct users rather than treating operations/sec as a user count. The earlier arrival-rate pilot remains separate historical evidence.

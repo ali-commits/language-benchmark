@@ -1,0 +1,58 @@
+{
+  "sources": [
+    {
+      "file": "all-experiments-2026-10-07.json",
+      "sha256": "574a3b06ac0c1e8503a099242f44221f9985df40fdb1e688919f1908bf78daa5"
+    },
+    {
+      "file": "stress-results-2026-10-07.json",
+      "sha256": "8b34e70a6f460e4129a3dccf6fd7d1c61b794730c6be9fb71ef4d1ca38d3aa46"
+    }
+  ],
+  "inventory_trials": 234,
+  "fixed_trials": 27,
+  "stress_trials": 100,
+  "stress_bounds": 9,
+  "fixed_timing_seconds": {
+    "ramp": 180,
+    "settle": 0,
+    "hold": 240
+  },
+  "stress_timing_seconds": {
+    "ramp": 300,
+    "settle": 0,
+    "hold": 120
+  },
+  "private_artifacts_not_distributed": [
+    "raw load logs and environment configurations",
+    "raw remote artifact paths and database instance identity"
+  ],
+  "pdfs": [
+    {
+      "file": "language-benchmark-report-2026-10-07.pdf",
+      "sha256": "b49df9d53c21f48bfe2fbdbe6cc17ce746dba7caf188d9f4368beb85f04ab987",
+      "publication": "exact original copy; strict IPv4/private-address, credential and personal-path extracted-text scan passed",
+      "page_count": 95,
+      "public_file": "reports/language-benchmark-report-2026-10-07.pdf",
+      "public_sha256": "b49df9d53c21f48bfe2fbdbe6cc17ce746dba7caf188d9f4368beb85f04ab987"
+    },
+    {
+      "file": "language-benchmark-stress-report-2026-10-07.pdf",
+      "sha256": "69cc77c95775056c3956d81e51fecda45b5340338e3faa8537e3db0097865b10",
+      "publication": "exact original copy; strict IPv4/private-address, credential and personal-path extracted-text scan passed",
+      "page_count": 54,
+      "public_file": "reports/language-benchmark-stress-report-2026-10-07.pdf",
+      "public_sha256": "69cc77c95775056c3956d81e51fecda45b5340338e3faa8537e3db0097865b10"
+    }
+  ],
+  "public_tables": [
+    {
+      "file": "fixed-load.csv",
+      "sha256": "69d94c78962c34264ec6314746f8b24047058348e72a4185ac55b96592aa9e44"
+    },
+    {
+      "file": "stress.csv",
+      "sha256": "4fd473f4d3e8e8156cbf1bc3aa8f8a829539714a4759deb46cb1fe0f9dcc1e8d"
+    }
+  ]
+}
