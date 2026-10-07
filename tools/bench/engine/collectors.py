@@ -3,10 +3,18 @@
 import json
 import threading
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Literal
 
+from pydantic import JsonValue
+from typing_extensions import TypedDict
+
+from ..records import checked_record
+from .records import HostPoint, ProbePoint, RdsConfig
 from .targets import execute_host
-from .types import Sample
+from .types import Host, ResolvedJob, Sample, SampleScope
 
 HOST_PROBE = """import json,pathlib,time
 stat=[int(v) for v in pathlib.Path('/proc/stat').read_text().splitlines()[0].split()[1:9]]
@@ -25,29 +33,30 @@ d=json.load(r);d['epoch']=time.time();print(json.dumps(d))
 
 @dataclass
 class Collector:
-    scope: str
-    host: object
+    scope: SampleScope
+    host: Host
     mode: str
     interval: float
     container_id: str | None = None
     quota: float | None = None
     available: bool = False
     reason: str | None = None
-    raw: list = field(default_factory=list)
-    errors: list = field(default_factory=list)
-    database: dict | None = None
+    raw: list[ProbePoint] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+    database: dict[str, JsonValue] | None = None
 
-    def probe(self):
+    def probe(self) -> ProbePoint:
         if self.scope == "database":
             if not self.database or self.database.get("provider") != "rds":
                 raise ValueError("database collector requires explicit RDS provider")
             import boto3
 
+            config = checked_record(self.database, RdsConfig)
             # A read-only capability request happens only when explicitly opted in.
-            boto3.client("cloudwatch", region_name=self.database["region"]).list_metrics(
+            boto3.client("cloudwatch", region_name=config["region"]).list_metrics(
                 Namespace="AWS/RDS",
                 MetricName="CPUUtilization",
-                Dimensions=[{"Name": "DBInstanceIdentifier", "Value": self.database["identifier"]}],
+                Dimensions=[{"Name": "DBInstanceIdentifier", "Value": config["identifier"]}],
             )
             return {"epoch": time.time()}
         argv = ["python3", "-c", HOST_PROBE]
@@ -58,9 +67,12 @@ class Collector:
                 execute_host(self.host, argv, timeout=15)
                 return {"epoch": time.time()}
             argv = ["python3", "-c", DOCKER_PROBE, self.container_id]
-        return json.loads(execute_host(self.host, argv, timeout=15).stdout)
+        point = checked_record(json.loads(execute_host(self.host, argv, timeout=15).stdout), ProbePoint)
+        if self.scope != "container":
+            checked_record(point, HostPoint)
+        return point
 
-    def discover(self):
+    def discover(self) -> "Collector":
         if self.mode == "off":
             self.reason = "disabled by configuration"
             return self
@@ -73,13 +85,15 @@ class Collector:
                 raise RuntimeError(f"required {self.scope} collector unavailable") from None
         return self
 
-    def samples(self, origin):
+    def samples(self, origin: float) -> list[Sample]:
         result = []
         for previous, point in zip(self.raw, self.raw[1:]):
             begin, end = previous["epoch"] - origin, point["epoch"] - origin
             if end <= begin or end - begin > max(self.interval * 4, 2):
                 continue
             if self.scope == "container":
+                if self.quota is None or self.quota <= 0:
+                    raise ValueError("container collector requires positive CPU quota")
                 before = previous["cpu_stats"]["cpu_usage"]["total_usage"]
                 after = point["cpu_stats"]["cpu_usage"]["total_usage"]
                 cpu = (after - before) / ((end - begin) * 1e9 * self.quota)
@@ -94,7 +108,7 @@ class Collector:
                 memory = point["memory_total"] - point["memory_available"]
                 normalization = "all_host_cpus"
                 formula = "1 - delta(idle+iowait) / delta(all_cpu_ticks)"
-            common = dict(
+            common = SampleCommon(
                 scope=self.scope,
                 kind="interval",
                 timestamp=begin,
@@ -129,18 +143,19 @@ class Collector:
         return result
 
 
-def collectors_for(job):
+def collectors_for(job: ResolvedJob) -> tuple[Collector, ...]:
     policy = job.environment.telemetry
     required = {
         c.scope for c in [*job.criteria, *(c for group in job.objectives.values() for c in group)]
     }
     result = []
-    for scope, mode, host in [
+    sources: list[tuple[SampleScope, str, Host]] = [
         ("backend_host", policy.host, job.environment.backend),
         ("container", policy.container, job.environment.backend),
         ("generator", policy.generator, job.environment.generator),
         ("database", policy.database, job.environment.backend),
-    ]:
+    ]
+    for scope, mode, host in sources:
         if scope in required:
             mode = "required"
         result.append(
@@ -157,14 +172,14 @@ def collectors_for(job):
 
 
 class Collection:
-    def __init__(self, collectors, directory=None):
+    def __init__(self, collectors: Sequence[Collector], directory: Path | None = None) -> None:
         self.directory = directory
         self.collectors = collectors
         self.stop = threading.Event()
-        self.threads = []
+        self.threads: list[threading.Thread] = []
 
-    def start(self):
-        def loop(collector):
+    def start(self) -> None:
+        def loop(collector: Collector) -> None:
             while not self.stop.is_set():
                 started = time.monotonic()
                 try:
@@ -190,7 +205,7 @@ class Collection:
                 self.threads.append(thread)
                 thread.start()
 
-    def finish(self):
+    def finish(self) -> None:
         self.stop.set()
         for thread in self.threads:
             thread.join(20)
@@ -198,14 +213,14 @@ class Collection:
                 raise RuntimeError("collector did not stop")
 
 
-def rds_samples(collector, origin, end):
+def rds_samples(collector: Collector, origin: float, end: float) -> list[Sample]:
     """CloudWatch averages are explicit minute intervals, including edge overlap."""
     import math
     from datetime import datetime, timezone
 
     import boto3
 
-    config = collector.database
+    config = checked_record(collector.database, RdsConfig)
     client = boto3.client("cloudwatch", region_name=config["region"])
     result = []
     for metric, name, unit, factor in [
@@ -247,12 +262,21 @@ def rds_samples(collector, origin, end):
     return result
 
 
-def health_reasons(collector, samples, cpu_max):
+def health_reasons(collector: Collector, samples: Sequence[Sample], cpu_max: float) -> list[str]:
     reasons = []
     if collector.mode == "required" and (collector.errors or not samples):
         reasons.append("missing required " + collector.scope + " evidence")
     if collector.scope == "generator" and any(
-        s.metric == "cpu_used" and s.value >= cpu_max for s in samples
+        s.metric == "cpu_used" and s.value is not None and s.value >= cpu_max for s in samples
     ):
         reasons.append("load generator saturated")
     return reasons
+
+
+class SampleCommon(TypedDict):
+    scope: SampleScope
+    kind: Literal["interval"]
+    timestamp: float
+    end_seconds: float
+    collection_interval: float
+    provider_fields: dict[str, JsonValue]

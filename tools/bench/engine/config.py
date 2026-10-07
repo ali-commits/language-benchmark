@@ -4,10 +4,13 @@ import os
 import re
 from copy import deepcopy
 from pathlib import Path
+from typing import TypeVar
 
 import yaml
 from pydantic import ValidationError
 
+from ..records import checked_record
+from .records import RawConfig, RawJob
 from .types import BenchmarkConfig, ResolvedJob
 
 
@@ -28,8 +31,8 @@ UniqueLoader.add_implicit_resolver('tag:yaml.org,2002:bool',
     re.compile(r'^(?:true|false|True|False|TRUE|FALSE)$'), list('tTfF'))
 
 
-def _mapping(loader, node, deep=False):
-    result = {}
+def _mapping(loader: yaml.SafeLoader, node: yaml.MappingNode, deep: bool = False) -> dict[str, object]:
+    result: dict[str, object] = {}
     for key_node, value_node in node.value:
         key = loader.construct_object(key_node, deep=deep)
         if not isinstance(key, str) or key in result:
@@ -40,14 +43,14 @@ def _mapping(loader, node, deep=False):
 
 UniqueLoader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, _mapping)
 
-_FACTORS = {'seconds': {'ms': .001, 's': 1, 'm': 60, 'h': 3600},
+_FACTORS: dict[str, dict[str, float]] = {'seconds': {'ms': .001, 's': 1, 'm': 60, 'h': 3600},
             'ms': {'ms': 1, 's': 1000, 'm': 60000},
             'bytes': {'B': 1, 'KB': 1000, 'MB': 1000000, 'GB': 1000000000,
                       'KiB': 1024, 'MiB': 1048576, 'GiB': 1073741824},
             'fraction': {'%': .01}, 'count': {}}
 
 
-def parse_quantity(value, unit):
+def parse_quantity(value: object, unit: str) -> float:
     if isinstance(value, bool):
         raise ConfigError('boolean is not a quantity')
     if isinstance(value, str):
@@ -60,7 +63,7 @@ def parse_quantity(value, unit):
     return value
 
 
-def _normalize(value, base, key=''):
+def _normalize(value: object, base: Path, key: str = '') -> object:
     if isinstance(value, dict):
         if key == 'hold_tolerance' and 'fraction' in value:
             value = {**value, 'fraction': parse_quantity(value['fraction'], 'fraction')}
@@ -86,50 +89,48 @@ def _normalize(value, base, key=''):
     return value
 
 
-def _read(path):
+def _read(path: Path) -> dict[str, object]:
     try:
         data = yaml.load(path.read_text(), Loader=UniqueLoader)
     except (OSError, yaml.YAMLError) as exc:
         raise ConfigError(f'cannot read configuration {path}: {exc}') from exc
     if not isinstance(data, dict):
         raise ConfigError('configuration must be a mapping')
-    return _normalize(data, path.parent)
+    return checked_record(_normalize(data, path.parent), dict[str, object])
 
 
 def _load_config(path: Path) -> BenchmarkConfig:
     path = Path(path).resolve()
-    data = _read(path)
+    data = checked_record(_read(path), RawConfig)
     if type(data.get('version')) is not int or data['version'] != 1:
         raise ConfigError('version must be integer 1')
     imports = data.get('definitions', [])
     if not isinstance(imports, list) or any(not isinstance(p, str) for p in imports):
         raise ConfigError('definitions must be a list of paths')
-    data['definitions'] = [(path.parent / item).resolve() for item in imports]
-    for imported in data['definitions']:
-        definitions = _read(imported)
+    imported_paths = [(path.parent / item).resolve() for item in imports]
+    for imported in imported_paths:
+        definitions = checked_record(_read(imported), RawConfig)
         if set(definitions) - {'version', 'targets', 'workloads', 'environments'} or type(definitions.get('version')) is not int or definitions['version'] != 1:
             raise ConfigError('definition files accept version, targets, workloads and environments only')
-        for group in ('targets', 'workloads', 'environments'):
-            for name, definition in definitions.get(group, {}).items():
-                if name in data.setdefault(group, {}):
-                    raise ConfigError(f'conflicting imported definition: {group}.{name}')
-                data[group][name] = definition
+        _merge_group(data.setdefault("targets", {}), definitions.get("targets", {}), "targets")
+        _merge_group(data.setdefault("workloads", {}), definitions.get("workloads", {}), "workloads")
+        _merge_group(data.setdefault("environments", {}), definitions.get("environments", {}), "environments")
     # Criteria need the selected workload's metric contract before model validation.
     defaults = data.get('defaults', {})
     jobs = data.get('jobs', [])
     original_criteria = deepcopy(defaults.get('criteria', []))
     default_workload = defaults.get('workload') or next(
         (job.get('workload') for job in jobs if isinstance(job, dict) and job.get('workload')), None)
-    default_criteria_job = {'workload': default_workload, 'criteria': deepcopy(original_criteria)}
+    default_criteria_job: RawJob = {'workload': default_workload, 'criteria': deepcopy(original_criteria)}
     for job in [*jobs, default_criteria_job]:
         if 'criteria' not in job:
             job['criteria'] = deepcopy(original_criteria)
-        workload = data.get('workloads', {}).get(job.get('workload', defaults.get('workload')), {})
+        workload = data.get('workloads', {}).get(job.get('workload', defaults.get('workload')) or '', {})
         metrics = {m['name']: m for m in workload.get('metrics', {}).values()}
         groups = [job.get('criteria', defaults.get('criteria', [])), *job.get('objectives', {}).values()]
         for criteria in groups:
             for criterion in criteria:
-                metric = metrics.get(criterion.get('metric'))
+                metric = metrics.get(criterion.get('metric', ''))
                 scope = criterion.get('scope', 'workload')
                 if metric is None and scope == 'workload':
                     raise ConfigError(f'unknown workload metric: {criterion.get("metric")}')
@@ -146,14 +147,15 @@ def _load_config(path: Path) -> BenchmarkConfig:
                 unit = metric.get('unit') or ('fraction' if metric['type'] == 'rate' else 'count')
                 if criterion.get('unit', unit) != unit:
                     raise ConfigError('criterion unit incompatible with metric')
-                criterion['value'] = parse_quantity(criterion.get('value'), 'seconds' if unit == 's' else unit)
+                quantity = parse_quantity(criterion.get('value'), 'seconds' if unit == 's' else unit)
+                criterion['value'] = quantity
                 criterion['unit'] = unit
-                if metric['type'] == 'rate' and not 0 < criterion['value'] <= 1:
+                if metric['type'] == 'rate' and not 0 < quantity <= 1:
                     raise ConfigError('rate criterion must be in (0, 1]')
     if 'criteria' in defaults:
         defaults['criteria'] = default_criteria_job['criteria']
     try:
-        config = BenchmarkConfig.model_validate({**data, 'source': path})
+        config = BenchmarkConfig.model_validate({**data, 'definitions': imported_paths, 'source': path})
         resolve_jobs(config)
         return config
     except (ValidationError, KeyError, TypeError) as exc:
@@ -169,7 +171,7 @@ def resolve_jobs(config: BenchmarkConfig) -> list[ResolvedJob]:
         ids.add(job.id)
         environment_name = job.environment or config.defaults.environment
         workload_name = job.workload or config.defaults.workload
-        if environment_name not in config.environments or workload_name not in config.workloads:
+        if environment_name is None or workload_name is None or environment_name not in config.environments or workload_name not in config.workloads:
             raise ConfigError('unresolved environment or workload reference')
         if not job.targets or len(set(job.targets)) != len(job.targets):
             raise ConfigError('targets must be nonempty and unique')
@@ -208,3 +210,12 @@ def load_config(path: Path) -> BenchmarkConfig:
         raise
     except (ValidationError, AttributeError, TypeError, KeyError, ValueError) as exc:
         raise ConfigError(f'invalid configuration structure: {exc}') from exc
+
+
+Definition = TypeVar("Definition")
+
+def _merge_group(target: dict[str, Definition], source: dict[str, Definition], group: str) -> None:
+    for name, definition in source.items():
+        if name in target:
+            raise ConfigError(f"conflicting imported definition: {group}.{name}")
+        target[name] = definition

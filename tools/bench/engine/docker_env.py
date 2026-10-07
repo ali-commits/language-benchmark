@@ -1,9 +1,10 @@
 """Container environment channel isolated from the Docker client's environment."""
 
 import re
+from collections.abc import Mapping
 
 
-def validate_container_environment(environment):
+def validate_container_environment(environment: Mapping[str, str]) -> None:
     for key, value in environment.items():
         if not isinstance(key, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
             raise ValueError("container environment requires portable variable names")

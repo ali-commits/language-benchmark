@@ -2,9 +2,11 @@
 
 import math
 import operator
+from collections.abc import Sequence
+from typing import Literal, NoReturn, TypeGuard
 
 from .stages import criterion_windows
-from .types import CriterionResult, Evaluation, TrialEvidence
+from .types import Criterion, CriterionResult, Evaluation, TrialEvidence
 
 _OPERATORS = {
     "<=": operator.le,
@@ -16,17 +18,17 @@ _OPERATORS = {
 
 
 class _Invalid(ValueError):
-    def __init__(self, reason, count, coverage):
+    def __init__(self, reason: str, count: int, coverage: float | None) -> None:
         super().__init__(reason)
         self.count = count
         self.coverage = coverage
 
 
-def _finite(value):
+def _finite(value: float | None) -> TypeGuard[float]:
     return value is not None and math.isfinite(value)
 
 
-def _result(evidence, criterion):
+def _result(evidence: TrialEvidence, criterion: Criterion) -> CriterionResult:
     windows = criterion_windows(evidence.stages, criterion)
     samples = sorted(
         (
@@ -37,7 +39,7 @@ def _result(evidence, criterion):
         key=lambda s: s.timestamp,
     )
     temporal = any(s.kind in {"gauge", "interval"} for s in samples)
-    pieces = []
+    pieces: list[tuple[float, float, float | None]] = []
     selected = []
     if temporal:
         if len({s.kind for s in samples}) > 1:
@@ -75,7 +77,7 @@ def _result(evidence, criterion):
         coverage = None
     count = len(selected)
 
-    def invalid(reason):
+    def invalid(reason: str) -> NoReturn:
         raise _Invalid(reason, count, coverage)
 
     if count < criterion.minimum_samples:
@@ -106,18 +108,18 @@ def _result(evidence, criterion):
             for s in selected
         ):
             invalid("invalid rate numerator/denominator")
-        denominator = sum(s.denominator for s in selected)
+        denominator = sum(s.denominator for s in selected if s.denominator is not None)
         if denominator <= 0:
             invalid("empty rate denominator")
-        value = sum(s.numerator for s in selected) / denominator
+        value = sum(s.numerator for s in selected if s.numerator is not None) / denominator
     else:
         if any(not _finite(s.value) for s in selected):
             invalid("missing or nonfinite required value")
-        values = sorted(s.value for s in selected)
+        values = sorted(s.value for s in selected if s.value is not None)
         stat = criterion.statistic
         if stat == "mean":
             value = (
-                sum((b - a) * v for a, b, v in pieces) / sum(b - a for a, b, v in pieces)
+                sum((b - a) * v for a, b, v in pieces if v is not None) / sum(b - a for a, b, v in pieces)
                 if temporal
                 else sum(values) / count
             )
@@ -148,7 +150,7 @@ def _result(evidence, criterion):
     )
 
 
-def evaluate(evidence: TrialEvidence, criteria: tuple) -> Evaluation:
+def evaluate(evidence: TrialEvidence, criteria: Sequence[Criterion]) -> Evaluation:
     results = []
     warnings = []
     for criterion in criteria:
@@ -159,8 +161,8 @@ def evaluate(evidence: TrialEvidence, criteria: tuple) -> Evaluation:
                 criterion=criterion,
                 valid=False,
                 reason=str(exc),
-                sample_count=getattr(exc, "count", 0),
-                coverage=getattr(exc, "coverage", None),
+                sample_count=exc.count if isinstance(exc, _Invalid) else 0,
+                coverage=exc.coverage if isinstance(exc, _Invalid) else None,
             )
         results.append(result)
         if (
@@ -173,7 +175,7 @@ def evaluate(evidence: TrialEvidence, criteria: tuple) -> Evaluation:
                 f"{criterion.metric}: high quantile from {result.sample_count} samples is descriptive"
             )
     reasons = tuple(evidence.invalid_reasons) + tuple(r.reason for r in results if r.reason)
-    verdict = (
+    verdict: Literal["pass", "fail", "invalid"] = (
         "invalid"
         if not evidence.valid or any(not r.valid for r in results)
         else "pass"

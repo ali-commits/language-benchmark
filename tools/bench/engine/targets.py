@@ -11,10 +11,17 @@ import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING, Protocol
 from uuid import uuid4
 
+from ..records import Ulimit, checked_record
+from .records import BuildManifest, CommandResponse, ContainerInfo, DockerImage
+
+if TYPE_CHECKING:
+    from .workloads import PreparedWorkload
+
 from .resources import wrapper_path
-from .types import Build, Environment, Host, Target
+from .types import Build, Environment, Host, ResolvedJob, Target
 
 
 @dataclass(frozen=True)
@@ -36,7 +43,7 @@ class ResolvedTarget:
     build_snapshot: BuildSnapshot | None = None
 
     @property
-    def deployment_image(self):
+    def deployment_image(self) -> str:
         return self.image_id
 
 
@@ -57,7 +64,7 @@ except subprocess.TimeoutExpired:
 """
 
 
-def execute_host(host: Host, argv: list[str], *, env=None, timeout=1800, input_data=None):
+def execute_host(host: Host, argv: list[str], *, env: dict[str, str] | None = None, timeout: float = 1800, input_data: str | None = None) -> subprocess.CompletedProcess[str]:
     if not argv or any(not isinstance(v, str) for v in argv):
         raise ValueError("command must be a nonempty argv list")
     supplied = {str(k): str(v) for k, v in (env or {}).items()}
@@ -67,6 +74,7 @@ def execute_host(host: Host, argv: list[str], *, env=None, timeout=1800, input_d
             command = ["ssh", "-o", "BatchMode=yes", "-p", str(host.port)]
             if host.identity_file:
                 command += ["-i", str(host.identity_file)]
+            assert host.host is not None
             address = f"{host.user}@{host.host}" if host.user else host.host
             command += ["--", address, "python3 -c " + shlex.quote(_REMOTE)]
             outer = subprocess.run(
@@ -87,7 +95,7 @@ def execute_host(host: Host, argv: list[str], *, env=None, timeout=1800, input_d
             if outer.returncode:
                 raise RuntimeError("SSH command transport failed")
             try:
-                payload = json.loads(outer.stdout)
+                payload = checked_record(json.loads(outer.stdout), CommandResponse)
             except (ValueError, TypeError):
                 raise RuntimeError("SSH command response incomplete") from None
             if payload.get("timeout"):
@@ -113,7 +121,7 @@ def execute_host(host: Host, argv: list[str], *, env=None, timeout=1800, input_d
     return result
 
 
-def tree_checksums(root: Path):
+def tree_checksums(root: Path) -> dict[str, str]:
     """Bind Docker-relevant input type, POSIX mode, content and symlink target."""
     result = {}
     for path in sorted(root.rglob("*")):
@@ -249,6 +257,7 @@ def resolve_target(
         for key, value in target.build.args.items():
             argv += ["--build-arg", f"{key}={value}"]
         execute_host(host, [*argv, context])
+    assert image is not None
     try:
         result = execute_host(host, ["docker", "image", "inspect", image])
     except RuntimeError:
@@ -256,7 +265,7 @@ def resolve_target(
             raise
         execute_host(host, ["docker", "pull", image])
         result = execute_host(host, ["docker", "image", "inspect", image])
-    info = json.loads(result.stdout)[0]
+    info = checked_record(json.loads(result.stdout), list[DockerImage])[0]
     image_id = info.get("Id", "")
     if not image_id.startswith("sha256:"):
         raise ValueError("Docker did not return immutable image ID")
@@ -300,7 +309,7 @@ def resolve_target(
 
 def resolve_endpoints(
     target: Target, environment: Environment, *, host_port: int, generator_host: str | None = None
-):
+) -> Endpoints:
     generator = environment.network.backend_url
     if generator is None:
         host = generator_host
@@ -315,7 +324,7 @@ def resolve_endpoints(
     return Endpoints(f"http://127.0.0.1:{host_port}{target.readiness.path}", generator.rstrip("/"))
 
 
-def verify_resources(target: Target, inspection: dict):
+def verify_resources(target: Target, inspection: ContainerInfo) -> None:
     actual = inspection["HostConfig"]
     wanted = target.resources
     if actual.get("NanoCpus") != round(wanted.cpus * 1_000_000_000):
@@ -324,16 +333,16 @@ def verify_resources(target: Target, inspection: dict):
         raise ValueError("container memory limit mismatch")
     if actual.get("MemorySwap") != int(wanted.memory + wanted.swap):
         raise ValueError("container swap limit mismatch")
-    nofile = next((v for v in actual.get("Ulimits", []) if v["Name"] == "nofile"), {})
+    nofile: Ulimit = next((v for v in (actual.get("Ulimits") or []) if v["Name"] == "nofile"), Ulimit())
     if nofile.get("Soft") != wanted.nofile or nofile.get("Hard") != wanted.nofile:
         raise ValueError("container nofile limit mismatch")
 
 
-def owner_labels(queue_id: str, job_id: str, trial_id: str):
+def owner_labels(queue_id: str, job_id: str, trial_id: str) -> dict[str, str]:
     return {"bench.queue": queue_id, "bench.job": job_id, "bench.trial": trial_id}
 
 
-def wait_ready(target: Target, host: Host, url: str):
+def wait_ready(target: Target, host: Host, url: str) -> subprocess.CompletedProcess[str]:
     deadline = time.monotonic() + target.readiness.timeout
     while time.monotonic() < deadline:
         remaining = deadline - time.monotonic()
@@ -359,7 +368,7 @@ def wait_ready(target: Target, host: Host, url: str):
 def load_build_snapshot(directory: Path) -> BuildSnapshot:
     """Read retained preparation evidence and fail closed on mutation at resume."""
     directory = directory.resolve()
-    manifest = json.loads((directory / "manifest.json").read_text())
+    manifest = checked_record(json.loads((directory / "manifest.json").read_text()), BuildManifest)
     checksums = tree_checksums(directory / "context")
     dockerfile = directory / "Dockerfile.original"
     dockerfile_hash = hashlib.sha256(dockerfile.read_bytes()).hexdigest()
@@ -380,8 +389,8 @@ def load_build_snapshot(directory: Path) -> BuildSnapshot:
 
 
 def prepared_execution_identity(
-    job, users, resolved_target: ResolvedTarget, prepared_workload, *, generator_image_id=None
-):
+    job: ResolvedJob, users: int | None, resolved_target: ResolvedTarget, prepared_workload: "PreparedWorkload", *, generator_image_id: str | None = None
+) -> str:
     """Canonical identity from preparation receipts, independent of mutable source."""
     from .evidence import execution_identity
 
@@ -411,3 +420,7 @@ def prepared_execution_identity(
             "workload_identity": prepared_workload.identity,
         },
     )
+
+
+class HostExecutor(Protocol):
+    def __call__(self, host: Host, argv: list[str], *, env: dict[str, str] | None = None, timeout: float = 1800, input_data: str | None = None) -> subprocess.CompletedProcess[str]: ...

@@ -3,569 +3,57 @@
 import fcntl
 import hashlib
 import json
-import math
-import os
-import shutil
 import time
 from contextlib import contextmanager
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Iterator, Literal
 
-from .collectors import HOST_PROBE, Collection, collectors_for, health_reasons
-from .docker_env import CREATE_WITH_ENV, validate_container_environment
+from ..records import checked_record
+from .collectors import HOST_PROBE, Collection, Collector, collectors_for, health_reasons
 from .evidence import Journal, immutable_json
-from .resources import wrapper_path
-from .stages import resolve_stages
+from .owned_docker import OwnedDocker as _OwnedDocker
+from .records import BaselinePoint, ContainerInfo, RunningContainer
 from .targets import (
+    HostExecutor,
     execute_host,
-    owner_labels,
-    prepared_execution_identity,
     resolve_endpoints,
-    resolve_target,
     verify_resources,
     wait_ready,
 )
-from .types import ResolvedJob, Sample, TrialEvidence
-from .workloads import prepare_workload, run_hook, transfer_tree
-
-ROOT = Path(__file__).resolve().parents[3]
-
-
-@dataclass(frozen=True)
-class TrialContext:
-    job: ResolvedJob
-    users: int | None
-    directory: Path
-    queue_id: str
-    trial_id: str
-    prepared_target: object | None = None
-    prepared_workload: object | None = None
-    generator_image_id: str | None = None
-
-    @property
-    def environment(self):
-        return self.job.environment
-
-    @property
-    def job_id(self):
-        return self.job.id
-
-    @classmethod
-    def from_manifest(cls, path):
-        path = Path(path)
-        data = json.loads(path.read_text())
-        # Reconciliation never resolves images, builds or re-reads mutable sources.
-        return cls(
-            ResolvedJob.model_validate_json(json.dumps(data["job"])),
-            data["users"],
-            path.parent,
-            data["queue_id"],
-            data["trial_id"],
-        )
+from .trial_context import CleanupReceipt as CleanupReceipt
+from .trial_context import TrialContext as TrialContext
+from .trial_events import Events as Events
+from .trial_events import parse_events as parse_events
+from .trial_events import verify_occupancy as verify_occupancy
+from .trial_preparation import prepare_trial
+from .trial_recovery import FixtureAction, cleanup, fixture
+from .types import Host, Sample, TrialEvidence
+from .workloads import transfer_tree
 
 
-@dataclass(frozen=True)
-class CleanupReceipt:
-    verified: bool
-    removed: tuple[str, ...] = ()
-    reasons: tuple[str, ...] = ()
-
-
-@dataclass
-class Events:
-    samples: list
-    metadata: dict
-    counts: dict
-    reasons: list
-
-
-def parse_events(raw):
-    samples, metadata, reasons = [], {}, []
-    native_vus = []
-    starts = {"operation": set(), "journey": set()}
-    ends = {"operation": set(), "journey": set()}
-    for line in raw.splitlines():
-        if not line.startswith("BENCH_EVENT "):
-            if line.startswith("{"):
-                try:
-                    point = json.loads(line)
-                    if point.get("type") == "Point" and point.get("metric") == "vus":
-                        native_vus.append(point["data"])
-                except (ValueError, KeyError, TypeError):
-                    reasons.append("malformed native k6 metric")
-            continue
-        try:
-            event = json.loads(line[len("BENCH_EVENT ") :])
-            kind = event["type"]
-            if kind == "metadata":
-                if metadata:
-                    raise ValueError("duplicate metadata")
-                metadata = event
-            elif kind == "sample":
-                sample = Sample.model_validate(event["sample"])
-                if any(
-                    value is not None and not math.isfinite(value)
-                    for value in (
-                        sample.timestamp,
-                        sample.value,
-                        sample.numerator,
-                        sample.denominator,
-                        sample.end_seconds,
-                        sample.max_gap_seconds,
-                    )
-                ):
-                    raise ValueError("nonfinite workload sample")
-                if sample.kind == "rate" and (
-                    sample.numerator is None
-                    or sample.denominator is None
-                    or sample.denominator <= 0
-                    or not 0 <= sample.numerator <= sample.denominator
-                ):
-                    raise ValueError("invalid workload rate")
-                samples.append(sample)
-            elif kind == "journey_error":
-                reasons.append("workload journey error")
-            elif kind in ("operation_start", "operation_end", "journey_start", "journey_end"):
-                category, state = kind.split("_")
-                destination = starts if state == "start" else ends
-                identity = event[category + "_id"]
-                if identity in destination[category]:
-                    raise ValueError("duplicate event identity")
-                destination[category].add(identity)
-        except (ValueError, KeyError, TypeError):
-            reasons.append("malformed workload event")
-    if metadata.get("load_start_epoch_ms") is not None:
-        from datetime import datetime
-
-        for point in native_vus:
-            try:
-                timestamp = (
-                    datetime.fromisoformat(point["time"].replace("Z", "+00:00")).timestamp()
-                    - metadata["load_start_epoch_ms"] / 1000
-                )
-                value = float(point["value"])
-                if not math.isfinite(value) or value < 0:
-                    raise ValueError("invalid native VUs")
-                samples.append(
-                    Sample(
-                        metric="active_users",
-                        scope="generator",
-                        kind="gauge",
-                        timestamp=timestamp,
-                        value=value,
-                        unit="count",
-                        max_gap_seconds=1.5,
-                        collection_interval=1.0,
-                        provider_fields={"provider": "k6_native_vus"},
-                    )
-                )
-            except (ValueError, KeyError, TypeError):
-                reasons.append("malformed native occupancy gauge")
-    counts = {}
-    for category in starts:
-        counts["started_" + category + "s"] = len(starts[category])
-        counts["completed_" + category + "s"] = len(ends[category])
-        counts["interrupted_" + category + "s"] = len(starts[category] - ends[category])
-        if ends[category] - starts[category]:
-            reasons.append("completion without matching start")
-    if not metadata or not isinstance(metadata.get("load_start_epoch_ms"), (int, float)):
-        reasons.append("missing load origin metadata")
-    if not starts["operation"] or not ends["operation"]:
-        reasons.append("no completed workload operations")
-    return Events(samples, metadata, counts, list(dict.fromkeys(reasons)))
-
-
-def verify_occupancy(samples, stages, tolerance):
-    """Require actual hold gauges with coverage and bounds; never pass an empty hold."""
-    observations = sorted(
-        (s for s in samples if s.scope == "generator" and s.metric == "active_users"),
-        key=lambda s: s.timestamp,
-    )
-    reasons = []
-    for stage in stages:
-        if stage.from_users != stage.to_users:
-            continue
-        begin, end = stage.start_seconds + tolerance.grace, stage.end_seconds
-        if begin >= end:
-            reasons.append(f"occupancy grace consumes hold {stage.id}")
-            continue
-        covered = 0.0
-        for i, sample in enumerate(observations):
-            gap = sample.max_gap_seconds
-            if (
-                sample.kind != "gauge"
-                or gap is None
-                or gap <= 0
-                or sample.value is None
-                or not math.isfinite(sample.value)
-            ):
-                reasons.append("invalid occupancy gauge")
-                continue
-            stop = min(
-                sample.timestamp + gap,
-                observations[i + 1].timestamp if i + 1 < len(observations) else end,
-            )
-            overlap = max(0.0, min(end, stop) - max(begin, sample.timestamp))
-            if overlap:
-                covered += overlap
-                if abs(sample.value - stage.to_users) > max(
-                    1e-9, stage.to_users * tolerance.fraction
-                ):
-                    reasons.append(f"hold occupancy outside tolerance: {stage.id}")
-        if covered / (end - begin) < 0.95:
-            reasons.append(f"insufficient occupancy coverage: {stage.id}")
-    return list(dict.fromkeys(reasons))
-
-
-class OwnedDocker:
-    def __init__(self, host, labels, execute=None):
-        self.host, self.labels = host, labels
-        self.execute = execute or execute_host
-
-    def command(self, *argv, **kw):
-        return self.execute(self.host, ["docker", *argv], **kw)
-
-    def inspect(self, identity):
-        info = json.loads(self.command("inspect", identity).stdout)[0]
-        if any(
-            info.get("Config", {}).get("Labels", {}).get(k) != v for k, v in self.labels.items()
-        ):
-            raise ValueError("resource ownership mismatch")
-        return info
-
-    def by_name(self, name):
-        ids = self.command("ps", "-aq", "--no-trunc", "--filter", f"name=^/{name}$").stdout.split()
-        return self.inspect(ids[0]) if ids else None
-
-    def create(self, name, arguments, *, env=None):
-        validate_container_environment(env or {})
-        if self.by_name(name):
-            raise ValueError("existing resource requires explicit reconciliation")
-        flags = [flag for k, v in self.labels.items() for flag in ("--label", k + "=" + v)]
-        try:
-            if env:
-                result = self.execute(
-                    self.host,
-                    ["python3", "-c", CREATE_WITH_ENV, "--name", name, *flags, *arguments],
-                    input_data=json.dumps({"environment": env, "timeout": 1800}),
-                )
-            else:
-                result = self.command("create", "--name", name, *flags, *arguments)
-            identity = result.stdout.strip()
-        except Exception:
-            # A successful remote create may lose its SSH response. Never issue
-            # a duplicate create until actual owner-labelled state is known.
-            found = self.by_name(name)
-            if found:
-                return found
-            raise
-        return self.inspect(identity)
-
-    def start(self, identity):
-        self.inspect(identity)
-        try:
-            self.command("start", identity)
-        except Exception:
-            info = self.inspect(identity)
-            if info.get("State", {}).get("Running") or info.get("State", {}).get(
-                "StartedAt", ""
-            ).startswith(("20",)):
-                return info
-            raise
-        return self.inspect(identity)
-
-    def remove(self, identity):
-        self.inspect(identity)
-        self.command("rm", "-f", identity)
-
-    def exists(self, identity):
-        # Query immutable ID without owner filters: a label change is not absence.
-        return (
-            identity
-            in self.command("ps", "-aq", "--no-trunc", "--filter", "id=" + identity).stdout.split()
-        )
-
-    def owned(self):
-        args = [
-            v for k, value in self.labels.items() for v in ("--filter", "label=" + k + "=" + value)
-        ]
-        return self.command("ps", "-aq", "--no-trunc", *args).stdout.split()
-
-    def inspect_network(self, identity):
-        info = json.loads(self.command("network", "inspect", identity).stdout)[0]
-        if any(info.get("Labels", {}).get(key) != value for key, value in self.labels.items()):
-            raise ValueError("network ownership mismatch")
-        return info
-
-    def create_network(self, name):
-        flags = [
-            flag for key, value in self.labels.items() for flag in ("--label", key + "=" + value)
-        ]
-        try:
-            identity = self.command("network", "create", *flags, name).stdout.strip()
-        except Exception:
-            return self.inspect_network(name)
-        return self.inspect_network(identity)
-
-    def remove_network(self, identity):
-        self.inspect_network(identity)
-        self.command("network", "rm", identity)
-
-    def owned_networks(self):
-        flags = [
-            flag
-            for key, value in self.labels.items()
-            for flag in ("--filter", "label=" + key + "=" + value)
-        ]
-        return self.command("network", "ls", "-q", *flags).stdout.split()
+class OwnedDocker(_OwnedDocker):
+    """Compatibility facade captures the current trial transport at construction."""
+    def __init__(self, host: Host, labels: dict[str, str], execute: HostExecutor | None = None) -> None:
+        super().__init__(host, labels, execute or execute_host)
 
 
 @contextmanager
-def trial_lock(directory):
+def trial_lock(directory: Path) -> Iterator[None]:
     directory.mkdir(parents=True, exist_ok=True)
     with (directory / ".lock").open("a") as stream:
         fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
         yield
 
 
-def _fixture(context, action):
-    fixture = context.job.workload.fixture
-    if fixture and fixture.manifest:
-        manifest = json.loads((context.directory / "manifest.json").read_text())
-        actual = hashlib.sha256(fixture.manifest.read_bytes()).hexdigest()
-        if actual != manifest.get("fixture_manifest_sha256"):
-            raise ValueError("fixture identity changed since trial preparation")
-    if context.job.workload.adapter == "social":
-        from .social import social_adapter
-
-        return getattr(social_adapter(context.job.workload), action)(context)
-    if fixture:
-        if fixture.adapter != "hooks":
-            raise ValueError("unknown fixture adapter")
-        hook = getattr(fixture, action, None)
-        if hook:
-            return run_hook(hook, context)
+def _fixture(context: TrialContext, action: FixtureAction) -> object:
+    return fixture(context, action)
 
 
-def _fixture_receipt_identity(context):
-    fixture = context.job.workload.fixture
-    return hashlib.sha256(
-        json.dumps(fixture.model_dump(mode="json") if fixture else None, sort_keys=True).encode()
-    ).hexdigest()
+def _cleanup(context: TrialContext, journal: Journal) -> CleanupReceipt:
+    return cleanup(context, journal, docker_factory=OwnedDocker, fixture_action=_fixture, execute=execute_host)
 
 
-def _finish_release(context, journal, checkpoint):
-    """Resume only a durable, verified restore checkpoint; never reopen fixtures."""
-    labels = owner_labels(context.queue_id, context.job_id, context.trial_id)
-    hosts = [context.environment.generator]
-    if context.environment.backend != context.environment.generator:
-        hosts.append(context.environment.backend)
-    entries = journal.entries()
-    details = checkpoint["details"]
-    removed, reasons = [], []
-    try:
-        if details["owner"] != labels or details["fixture_identity"] != _fixture_receipt_identity(
-            context
-        ):
-            raise ValueError("release identity mismatch")
-        assignments = []
-        for lease in details["leases"]:
-            host = next(host for host in hosts if host.model_dump(mode="json") == lease["host"])
-            assignments.append((host, lease["id"]))
-        if len(
-            {
-                (json.dumps(host.model_dump(mode="json"), sort_keys=True), identity)
-                for host, identity in assignments
-            }
-        ) != len(assignments):
-            raise ValueError("duplicate release identity")
-        fixture_started = any(
-            entry["action"] == "fixture" for entry in entries[: checkpoint["sequence"]]
-        )
-        if fixture_started:
-            restore = entries[details["restore_sequence"]]
-            if (
-                restore["sequence"] >= checkpoint["sequence"]
-                or restore["action"] != "restore"
-                or restore["state"] != "done"
-                or restore["details"]["owner"] != labels
-                or restore["details"]["fixture_identity"] != details["fixture_identity"]
-                or (context.environment.backend, restore["details"]["backend_lease_id"])
-                not in assignments
-            ):
-                raise ValueError("release lacks verified restore receipt")
-        if any(
-            entry["action"] in {"fixture", "deploy", "load", "network", "stage_workload", "restore"}
-            for entry in entries[checkpoint["sequence"] + 1 :]
-        ):
-            raise ValueError("mutation after release checkpoint")
-        # Before any release, verify that no workload resources remain or appeared
-        # after the checkpoint. Unknown resource IDs cannot inherit its receipt.
-        for host in hosts:
-            docker = OwnedDocker(host, labels)
-            expected = {identity for owner_host, identity in assignments if owner_host == host}
-            if set(docker.owned()) - expected or docker.owned_networks():
-                raise ValueError("unexpected resource after restore checkpoint")
-            for identity in expected:
-                if docker.exists(identity):
-                    info = docker.inspect(identity)
-                    if info.get("Name") != "/bench-engine-lease":
-                        raise ValueError("release resource is not ownership lease")
-        for host, identity in assignments:
-            docker = OwnedDocker(host, labels)
-            if not docker.exists(identity):
-                continue
-            journal.record(
-                "lease_release", "intent", {"host": host.model_dump(mode="json"), "id": identity}
-            )
-            try:
-                docker.remove(identity)
-            except Exception:
-                # Successful SSH removal can lose its response. Actual immutable-ID
-                # absence is sufficient here because restoration is durable already.
-                if docker.exists(identity):
-                    raise
-            if docker.exists(identity):
-                raise ValueError("released lease still exists")
-            removed.append(identity)
-            journal.record(
-                "lease_release", "done", {"host": host.model_dump(mode="json"), "id": identity}
-            )
-        for host in hosts:
-            docker = OwnedDocker(host, labels)
-            if docker.owned() or docker.owned_networks():
-                raise ValueError("owned resources remain after release")
-    except Exception as exc:
-        reasons.append("lease release reconciliation failed: " + type(exc).__name__)
-    receipt = CleanupReceipt(not reasons, tuple(removed), tuple(reasons))
-    journal.record(
-        "cleanup",
-        "done" if receipt.verified else "failed",
-        {"removed": removed, "reasons": reasons},
-    )
-    return receipt
-
-
-def _cleanup(context, journal):
-    labels = owner_labels(context.queue_id, context.job_id, context.trial_id)
-    removed, reasons, leases = [], [], []
-    entries = journal.entries()
-    if entries and entries[-1]["action"] == "cleanup" and entries[-1]["state"] == "done":
-        return CleanupReceipt(True)
-    journal.record("cleanup", "intent")
-    checkpoint = next(
-        (
-            entry
-            for entry in reversed(entries)
-            if entry["action"] == "release" and entry["state"] == "intent"
-        ),
-        None,
-    )
-    if checkpoint is not None:
-        return _finish_release(context, journal, checkpoint)
-    hosts = [context.environment.generator]
-    if context.environment.backend != context.environment.generator:
-        hosts.append(context.environment.backend)
-    for host in hosts:
-        docker = OwnedDocker(host, labels)
-        try:
-            for identity in docker.owned():
-                info = docker.inspect(identity)
-                if info.get("Name") == "/bench-engine-lease":
-                    leases.append((docker, identity))
-                else:
-                    if (
-                        info.get("Name", "").startswith("/bench-load-")
-                        and not (context.directory / "load-log.json").exists()
-                    ):
-                        docker.command("stop", "--time", "1", identity)
-                        result = docker.command("logs", identity)
-                        immutable_json(
-                            context.directory / "load-log.json",
-                            {"log": result.stdout + result.stderr},
-                        )
-                    docker.remove(identity)
-                    removed.append(identity)
-        except Exception as exc:
-            reasons.append("owned container cleanup failed: " + type(exc).__name__)
-    for host in hosts:
-        docker = OwnedDocker(host, labels)
-        try:
-            for identity in docker.owned_networks():
-                docker.remove_network(identity)
-                removed.append(identity)
-        except Exception as exc:
-            reasons.append("owned network cleanup failed: " + type(exc).__name__)
-    fixture_started = any(entry["action"] == "fixture" for entry in entries)
-    backend_lease = next(
-        (identity for docker, identity in leases if docker.host == context.environment.backend),
-        None,
-    )
-    restore_sequence = None
-    if not reasons and fixture_started and backend_lease is None:
-        reasons.append("fixture reconciliation requires retained ownership lease")
-    if not reasons and fixture_started:
-        try:
-            journal.record("restore", "intent")
-            _fixture(context, "reset")
-            _fixture(context, "verify")
-            restore = journal.record(
-                "restore",
-                "done",
-                {
-                    "owner": labels,
-                    "backend_lease_id": backend_lease,
-                    "fixture_identity": _fixture_receipt_identity(context),
-                },
-            )
-            restore_sequence = restore["sequence"]
-        except Exception as exc:
-            reasons.append("fixture restore failed: " + type(exc).__name__)
-    if not reasons:
-        for entry in entries:
-            if entry["action"] != "stage_workload" or entry["state"] != "intent":
-                continue
-            path = entry["details"]["path"]
-            code = "import pathlib,json,sys,shutil; p=pathlib.Path(sys.argv[1]); expected=json.loads(sys.argv[2]);\nif p.exists():\n if p.is_symlink() or json.loads((p/'.owner.json').read_text())!=expected: raise RuntimeError('staged ownership mismatch')\n shutil.rmtree(p)"
-            try:
-                execute_host(
-                    context.environment.generator, ["python3", "-c", code, path, json.dumps(labels)]
-                )
-            except Exception:
-                reasons.append("staged workload cleanup failed")
-    if not reasons:
-        checkpoint = journal.record(
-            "release",
-            "intent",
-            {
-                "owner": labels,
-                "fixture_identity": _fixture_receipt_identity(context),
-                "restore_sequence": restore_sequence,
-                "leases": [
-                    {"host": docker.host.model_dump(mode="json"), "id": identity}
-                    for docker, identity in leases
-                ],
-            },
-        )
-        receipt = _finish_release(context, journal, checkpoint)
-        return CleanupReceipt(receipt.verified, tuple(removed) + receipt.removed, receipt.reasons)
-    for host in hosts:
-        try:
-            if OwnedDocker(host, labels).owned() or OwnedDocker(host, labels).owned_networks():
-                reasons.append("owned resources remain")
-        except Exception:
-            reasons.append("cleanup verification unavailable")
-    receipt = CleanupReceipt(not reasons, tuple(removed), tuple(reasons))
-    journal.record(
-        "cleanup",
-        "done" if receipt.verified else "failed",
-        {"removed": removed, "reasons": reasons},
-    )
-    return receipt
-
-
-def reconcile_trial(context):
+def reconcile_trial(context: TrialContext) -> CleanupReceipt:
     with trial_lock(context.directory):
         if (context.directory / "result.json").exists():
             evidence = TrialEvidence.model_validate_json(
@@ -578,27 +66,28 @@ def reconcile_trial(context):
         return _cleanup(context, journal)
 
 
-def _baseline(context, phase, allowed, journal, stop_requested):
+def _baseline(context: TrialContext, phase: Literal["stopped", "ready"], allowed: tuple[str, ...], journal: Journal, stop_requested: Callable[[], bool]) -> None:
     policy = context.environment.baseline
     if not policy.enabled:
         journal.record("baseline_" + phase, "disabled")
         return
     docker = OwnedDocker(context.environment.backend, {})
-    previous, good = None, 0
+    previous: BaselinePoint | None = None
+    good = 0
     deadline = time.monotonic() + policy.timeout
     journal.record("baseline_" + phase, "intent")
     while time.monotonic() < deadline:
         if stop_requested():
             raise InterruptedError("stop requested")
-        point = json.loads(
+        point = checked_record(json.loads(
             execute_host(
                 context.environment.backend, ["python3", "-c", HOST_PROBE], timeout=15
             ).stdout
-        )
+        ), BaselinePoint)
         running = docker.command("ps", "--no-trunc", "--format", "{{json .}}").stdout
         foreign = [
             p
-            for p in (json.loads(row) for row in running.splitlines())
+            for p in (checked_record(json.loads(row), RunningContainer) for row in running.splitlines())
             if p["ID"] not in allowed and p["Names"] not in policy.allowed_containers
         ]
         cpu = None
@@ -608,8 +97,8 @@ def _baseline(context, phase, allowed, journal, stop_requested):
         previous = point
         okay = (
             cpu is not None
-            and cpu <= getattr(policy, phase + "_cpu_max")
-            and point["memory_available"] >= getattr(policy, phase + "_memory_available")
+            and cpu <= (policy.stopped_cpu_max if phase == "stopped" else policy.ready_cpu_max)
+            and point["memory_available"] >= (policy.stopped_memory_available if phase == "stopped" else policy.ready_memory_available)
             and not foreign
         )
         good = good + 1 if okay else 0
@@ -630,19 +119,6 @@ def _baseline(context, phase, allowed, journal, stop_requested):
     raise TimeoutError("clean baseline gate timed out")
 
 
-def _bundle(context, prepared):
-    bundle = context.directory / "execution"
-    bundle.mkdir()
-    shutil.copytree(prepared.directory, bundle / "workload")
-    for name in ("runner.js", "metrics.js"):
-        shutil.copy(wrapper_path(name), bundle / name)
-    runner = bundle / "runner.js"
-    entry = "./workload/" + prepared.script.relative_to(prepared.directory).as_posix()
-    runner.write_text(runner.read_text().replace("'./workload.js'", json.dumps(entry)))
-    immutable_json(
-        bundle / ".owner.json", owner_labels(context.queue_id, context.job_id, context.trial_id)
-    )
-    return bundle
 
 
 def run_trial(
@@ -652,73 +128,22 @@ def run_trial(
         return _run_trial(context, stop_requested)
 
 
-def _run_trial(context, stop_requested):
-    directory = context.directory.resolve()
-    if (directory / "manifest.json").exists():
-        raise ValueError("trial already exists: reconcile and use a new trial identity")
-    job = context.job
-    target_env = {key: os.environ[ref.env] for key, ref in job.target.env.items()}
-    validate_container_environment(target_env)
-    stages = resolve_stages(job, context.users)
-    for value in [*(s.duration for s in stages), job.drain, job.graceful_ramp_down]:
-        if abs(value * 1000 - round(value * 1000)) > 1e-7:
-            raise ValueError("k6 durations require exact millisecond precision")
-    prepared_target = context.prepared_target or resolve_target(
-        job.target, job.environment, snapshot_directory=directory / "build"
-    )
-    prepared_workload = context.prepared_workload or prepare_workload(
-        job.workload, directory / "workload"
-    )
-    from .targets import tree_checksums
-
-    if tree_checksums(prepared_workload.directory) != prepared_workload.checksums:
-        raise ValueError("prepared workload checksum mismatch")
-    bundle = _bundle(context, prepared_workload)
-    generator_image_id = (
-        context.generator_image_id
-        or json.loads(
-            execute_host(
-                job.environment.generator, ["docker", "image", "inspect", "grafana/k6:1.4.2"]
-            ).stdout
-        )[0]["Id"]
-    )
-    execution_id = prepared_execution_identity(
-        job,
-        context.users,
-        prepared_target,
-        prepared_workload,
-        generator_image_id=generator_image_id,
-    )
-    labels = owner_labels(context.queue_id, context.job_id, context.trial_id)
-    if any(key.startswith("bench.") for key in job.target.labels):
-        raise ValueError("target cannot override reserved owner labels")
-    manifest = {
-        "version": 1,
-        "queue_id": context.queue_id,
-        "trial_id": context.trial_id,
-        "users": context.users,
-        "job": job.model_dump(mode="json"),
-        "execution_id": execution_id,
-        "image_id": prepared_target.image_id,
-        "generator_image_id": generator_image_id,
-        "workload_identity": prepared_workload.identity,
-        "fixture_manifest_sha256": hashlib.sha256(
-            job.workload.fixture.manifest.read_bytes()
-        ).hexdigest()
-        if job.workload.fixture and job.workload.fixture.manifest
-        else None,
-        "wrapper_sha256": {
-            p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in bundle.glob("*.js")
-        },
-        "colocated_generator": job.environment.backend == job.environment.generator,
-    }
-    immutable_json(directory / "manifest.json", manifest)
+def _run_trial(context: TrialContext, stop_requested: Callable[[], bool]) -> TrialEvidence:
+    prepared = prepare_trial(context, execute=execute_host)
+    directory, job = prepared.directory, context.job
+    prepared_target, bundle, stages = prepared.target, prepared.bundle, prepared.stages
+    generator_image_id, execution_id = prepared.generator_image_id, prepared.execution_id
+    labels, target_env = prepared.labels, prepared.target_environment
     journal = Journal(directory)
     backend = OwnedDocker(job.environment.backend, labels)
     generator = OwnedDocker(job.environment.generator, labels)
     unique = hashlib.sha256(json.dumps(labels, sort_keys=True).encode()).hexdigest()[:20]
-    collectors, collection, reasons, samples, parsed = (), None, [], [], None
-    load = None
+    collectors: tuple[Collector, ...] = ()
+    collection: Collection | None = None
+    reasons: list[str] = []
+    samples: list[Sample] = []
+    parsed: Events | None = None
+    load: ContainerInfo | None = None
     leased = False
     try:
         if stop_requested():
@@ -787,11 +212,12 @@ def _run_trial(context, stop_requested):
         verify_resources(job.target, info)
         if info["Image"] != prepared_target.image_id:
             raise ValueError("deployed image identity mismatch")
-        port = (
-            job.target.port
-            if job.environment.network.mode == "host"
-            else int(info["NetworkSettings"]["Ports"][f"{job.target.port}/tcp"][0]["HostPort"])
-        )
+        port = job.target.port
+        if job.environment.network.mode != "host":
+            bindings = info["NetworkSettings"]["Ports"][f"{job.target.port}/tcp"]
+            if not bindings:
+                raise ValueError("deployed container has no TCP host port")
+            port = int(bindings[0]["HostPort"])
         endpoints = resolve_endpoints(job.target, job.environment, host_port=port)
         journal.record("deploy", "done", {"id": identity, "port": port})
         wait_ready(job.target, job.environment.backend, endpoints.readiness_url)

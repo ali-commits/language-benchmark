@@ -1,22 +1,26 @@
 """Separate identities for immutable execution and objective classification."""
 import hashlib
 import json
+from collections.abc import Mapping
 from pathlib import Path
 
+from ..records import checked_record
+from .records import JournalEntry
 from .stages import resolve_stages
+from .types import ResolvedJob
 
 
-def _digest(value):
+def _digest(value: object) -> str:
     return hashlib.sha256(json.dumps(value,sort_keys=True,separators=(',',':'),allow_nan=False).encode()).hexdigest()
 
 
-def _file_identity(path):
+def _file_identity(path: Path) -> str:
     if not path.is_file():
         raise ValueError(f'identity input is not a file: {path}')
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def execution_identity(job, users, *, provenance=None):
+def execution_identity(job: ResolvedJob, users: int | None, *, provenance: Mapping[str, object] | None = None) -> str:
     payload=job.model_dump(mode='json',by_alias=True)
     for field in ('criteria','objectives','test','id'):
         payload.pop(field,None)
@@ -40,13 +44,13 @@ def execution_identity(job, users, *, provenance=None):
     return _digest(payload)
 
 
-def decision_identity(job, objective):
+def decision_identity(job: ResolvedJob, objective: str) -> str:
     if objective != 'default' and objective not in job.objectives:
         raise ValueError(f'unknown objective: {objective}')
     return _digest({'objective':objective,'criteria':[c.model_dump(mode='json') for c in [*job.criteria,*job.objectives.get(objective,[])]], 'evaluation_stages':[s.id for s in job.stages if s.evaluate], 'confirmation':job.test.confirmation})
 
 
-def immutable_json(path: Path, value):
+def immutable_json(path: Path, value: object) -> None:
     """Publish a complete artifact without replacing an existing artifact."""
     import os
     import tempfile
@@ -70,17 +74,17 @@ def immutable_json(path: Path, value):
 
 class Journal:
     """One immutable intent/completion file per transition; protected by trial lock."""
-    def __init__(self, directory: Path):
+    def __init__(self, directory: Path) -> None:
         self.directory = directory / 'journal'
         self.directory.mkdir(parents=True, exist_ok=True)
 
-    def entries(self):
-        return [json.loads(p.read_text()) for p in sorted(self.directory.glob('*.json'))]
+    def entries(self) -> list[JournalEntry]:
+        return [checked_record(json.loads(p.read_text()), JournalEntry) for p in sorted(self.directory.glob('*.json'))]
 
-    def record(self, action, state, details=None):
+    def record(self, action: str, state: str, details: Mapping[str, object] | None = None) -> JournalEntry:
         import time
         entries = self.entries()
-        value = {'sequence': len(entries), 'action': action, 'state': state,
-                 'epoch': time.time(), 'details': details or {}}
+        value: JournalEntry = {'sequence': len(entries), 'action': action, 'state': state,
+                 'epoch': time.time(), 'details': dict(details or {})}
         immutable_json(self.directory / f'{len(entries):06d}.json', value)
         return value

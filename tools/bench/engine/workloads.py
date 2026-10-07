@@ -12,6 +12,9 @@ import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Protocol
+
+from tree_sitter import Node
 
 from .targets import execute_host, tree_checksums
 from .types import Environment, Hook, Host, Workload
@@ -48,7 +51,7 @@ class HookReceipt:
     elapsed_seconds: float
 
 
-def _source_references(text: str, suffix: str = ".js"):
+def _source_references(text: str, suffix: str = ".js") -> list[tuple[str, str]]:
     """Inspect maintained syntax trees; only declared static imports/data are allowed."""
     import tree_sitter_javascript
     import tree_sitter_typescript
@@ -66,7 +69,7 @@ def _source_references(text: str, suffix: str = ".js"):
         raise ValueError("invalid workload JavaScript/TypeScript syntax")
     references = []
 
-    def literal(node):
+    def literal(node: Node | None) -> str:
         if node is None or node.type != "string":
             raise ValueError("workload reference must be a static string")
         value = source[node.start_byte + 1 : node.end_byte - 1].decode("utf-8")
@@ -95,11 +98,12 @@ def _source_references(text: str, suffix: str = ".js"):
             if name == "open" and node.type == "identifier":
                 parent = node.parent
                 if (
-                    parent.type != "call_expression"
+                    parent is None or parent.type != "call_expression"
                     or parent.child_by_field_name("function") != node
                 ):
                     raise ValueError("workload data loader aliases are not reproducible")
                 args = parent.child_by_field_name("arguments")
+                assert args is not None
                 values = [child for child in args.named_children if child.type != "comment"]
                 if not values:
                     raise ValueError("workload data path must be a static string")
@@ -197,10 +201,11 @@ with tempfile.TemporaryDirectory(prefix='.bench-transfer-',dir=dest.parent) as t
 """
 
 
-def _ssh(host: Host, code: str, payload: dict, data: bytes, timeout=600):
+def _ssh(host: Host, code: str, payload: dict[str, object], data: bytes, timeout: float = 600) -> bytes:
     argv = ["ssh", "-o", "BatchMode=yes", "-p", str(host.port)]
     if host.identity_file:
         argv += ["-i", str(host.identity_file)]
+    assert host.host is not None
     argv += [
         "--",
         f"{host.user}@{host.host}" if host.user else host.host,
@@ -215,7 +220,7 @@ def _ssh(host: Host, code: str, payload: dict, data: bytes, timeout=600):
     return result.stdout
 
 
-def transfer_tree(source: Path, host: Host, destination: str, *, expected_checksums=None):
+def transfer_tree(source: Path, host: Host, destination: str, *, expected_checksums: dict[str, str] | None = None) -> dict[str, str]:
     checksums = tree_checksums(source)
     if expected_checksums is not None and checksums != expected_checksums:
         raise ValueError("source checksum mismatch before transfer")
@@ -244,7 +249,7 @@ def transfer_tree(source: Path, host: Host, destination: str, *, expected_checks
     return checksums
 
 
-def transfer_file(source: Path, host: Host, destination: str):
+def transfer_file(source: Path, host: Host, destination: str) -> str:
     data = source.read_bytes()
     checksum = hashlib.sha256(data).hexdigest()
     code = """import hashlib,json,os,pathlib,sys,tempfile
@@ -280,7 +285,7 @@ finally:
     return checksum
 
 
-def stage_workload(prepared: PreparedWorkload, host: Host, destination: Path | str):
+def stage_workload(prepared: PreparedWorkload, host: Host, destination: Path | str) -> StagedWorkload:
     if tree_checksums(prepared.directory) != prepared.checksums:
         raise ValueError("prepared workload checksum mismatch")
     transfer_tree(prepared.directory, host, str(destination), expected_checksums=prepared.checksums)
@@ -292,11 +297,16 @@ def stage_workload(prepared: PreparedWorkload, host: Host, destination: Path | s
     )
 
 
-def run_hook(hook: Hook, context: TrialContext) -> HookReceipt:
+class HookContext(Protocol):
+    @property
+    def environment(self) -> Environment: ...
+
+
+def run_hook(hook: Hook, context: HookContext) -> HookReceipt:
     host = (
         Host(transport="local")
         if hook.host == "controller"
-        else getattr(context.environment, hook.host)
+        else context.environment.backend if hook.host == "backend" else context.environment.generator
     )
     env = {}
     for key, reference in hook.env.items():
@@ -313,7 +323,7 @@ def run_hook(hook: Hook, context: TrialContext) -> HookReceipt:
     return HookReceipt(hook.host, 0, time.monotonic() - start)
 
 
-def fetch_file(host: Host, source: str, destination: Path):
+def fetch_file(host: Host, source: str, destination: Path) -> str:
     """Fetch a remote artifact with an authenticated checksum and atomic local publish."""
     if destination.exists():
         raise ValueError("fetch destination already exists")

@@ -1,17 +1,19 @@
 """Validated public configuration objects. Quantities are normalized at loading."""
 
 from pathlib import Path
-from typing import Any, Literal
+from typing import Literal
 
 from pydantic import (
     AliasChoices,
     BaseModel,
     ConfigDict,
     Field,
+    JsonValue,
     StrictBool,
     StrictInt,
     model_validator,
 )
+from typing_extensions import Self
 
 
 class Model(BaseModel):
@@ -33,7 +35,7 @@ class Host(Model):
     workdir: Path | None = None
 
     @model_validator(mode="after")
-    def ssh_host(self):
+    def ssh_host(self) -> Self:
         if self.transport == "ssh" and not self.host:
             raise ValueError("SSH transport requires host")
         return self
@@ -71,7 +73,7 @@ class Environment(Model):
     build: Host | None = None
     network: Network = Field(default_factory=Network)
     telemetry: Telemetry = Field(default_factory=Telemetry)
-    database: dict[str, Any] | None = None
+    database: dict[str, JsonValue] | None = None
     baseline: Baseline = Field(default_factory=Baseline)
 
 
@@ -106,7 +108,7 @@ class Target(Model):
     command: list[str] | None = None
 
     @model_validator(mode="after")
-    def source(self):
+    def source(self) -> Self:
         if (self.image is None) == (self.build is None):
             raise ValueError("target requires exactly one of image or build")
         if not 1 <= self.port <= 65535:
@@ -143,7 +145,7 @@ class Workload(Model):
     adapter: Literal["k6", "social"] = "k6"
     script: Path
     metrics: dict[str, Metric]
-    parameters: dict[str, Any] = Field(default_factory=dict)
+    parameters: dict[str, JsonValue] = Field(default_factory=dict)
     fixture: Fixture | None = None
     dependencies: list[Path] = Field(default_factory=list)
 
@@ -163,7 +165,7 @@ class Stage(Model):
     evaluate: StrictBool = False
 
     @model_validator(mode="after")
-    def endpoints(self):
+    def endpoints(self) -> Self:
         if any(isinstance(v, int) and v < 0 for v in (self.from_users, self.to_users)):
             raise ValueError("negative stage endpoint")
         return self
@@ -218,7 +220,7 @@ class TestPolicy(Model):
     invalid_retries: StrictInt = Field(default=1, ge=0)
 
     @model_validator(mode="after")
-    def combinations(self):
+    def combinations(self) -> Self:
         if self.strategy is not None and self.type != "stress":
             raise ValueError("strategy is accepted only by stress alias")
         if self.type == "stress":
@@ -247,15 +249,15 @@ class TestPolicy(Model):
                 values.append(self.users.end)
             object.__setattr__(self, "users", values)
         elif self.users is not None:
-            values = [self.users] if isinstance(self.users, int) else self.users
+            fixed_values = [self.users] if isinstance(self.users, int) else self.users
             if (
-                not isinstance(values, list)
-                or not values
-                or any(v < 1 for v in values)
-                or len(values) != len(set(values))
+                not isinstance(fixed_values, list)
+                or not fixed_values
+                or any(v < 1 for v in fixed_values)
+                or len(fixed_values) != len(set(fixed_values))
             ):
                 raise ValueError("fixed users must be unique positive integers")
-            object.__setattr__(self, "users", values)
+            object.__setattr__(self, "users", fixed_values)
         return self
 
 
@@ -309,7 +311,7 @@ class BenchmarkConfig(Model):
     jobs: list[Job]
     source: Path | None = Field(default=None, exclude=True)
 
-    def public_snapshot(self):
+    def public_snapshot(self) -> dict[str, object]:
         return self.model_dump(mode="json", by_alias=True)
 
 
@@ -330,6 +332,9 @@ class ResolvedJob(Model):
     hold_tolerance: OccupancyTolerance = Field(default_factory=OccupancyTolerance)
 
 
+SampleScope = Literal["workload", "backend_host", "container", "database", "generator"]
+
+
 class Sample(Model):
     """Raw measurement. Times are seconds relative to load start, never epochs.
 
@@ -340,7 +345,7 @@ class Sample(Model):
 
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True, allow_inf_nan=True)
     metric: str
-    scope: Literal["workload", "backend_host", "container", "database", "generator"] = "workload"
+    scope: SampleScope = "workload"
     kind: Literal["event", "rate", "gauge", "interval"] = "event"
     timestamp: float
     value: float | None = None
@@ -351,7 +356,7 @@ class Sample(Model):
     unit: str | None = None
     includes_failures: bool = True
     normalization: str | None = None
-    provider_fields: dict[str, Any] = Field(default_factory=dict)
+    provider_fields: dict[str, JsonValue] = Field(default_factory=dict)
     collection_interval: float | None = None
     formula: str | None = None
 
@@ -373,11 +378,11 @@ class Evaluation(Model):
     warnings: tuple[str, ...] = ()
 
     @property
-    def valid(self):
+    def valid(self) -> bool:
         return self.verdict != "invalid"
 
     @property
-    def passed(self):
+    def passed(self) -> bool:
         return self.verdict == "pass"
 
 

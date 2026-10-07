@@ -7,8 +7,9 @@ all actual launches, including invalid trials and confirmations, cost one attemp
 from typing import Literal
 
 from pydantic import Field, model_validator
+from typing_extensions import Self
 
-from .types import Evaluation, Model, TestPolicy, TrialEvidence
+from .types import Criterion, Evaluation, Model, SearchUsers, TestPolicy, TrialEvidence
 
 
 class SearchPolicy(Model):
@@ -25,7 +26,7 @@ class SearchPolicy(Model):
     limiting_reason: str = "user_ceiling"
 
     @model_validator(mode="after")
-    def bounds(self):
+    def bounds(self) -> Self:
         if self.start < self.min_users or (
             self.max_users is not None and self.start > self.max_users
         ):
@@ -33,8 +34,8 @@ class SearchPolicy(Model):
         return self
 
     @classmethod
-    def from_test(cls, test: TestPolicy, *, feasible_ceilings: dict[str, int] | None = None):
-        if test.type != "search":
+    def from_test(cls, test: TestPolicy, *, feasible_ceilings: dict[str, int] | None = None) -> "SearchPolicy":
+        if test.type != "search" or not isinstance(test.users, SearchUsers) or test.limits is None:
             raise ValueError("fixed tests do not use search confirmation")
         ceilings = dict(feasible_ceilings or {})
         if isinstance(test.users.max, int):
@@ -67,12 +68,12 @@ class JobBudget(Model):
     now: float = Field(default=0.0, ge=0)
 
     @model_validator(mode="after")
-    def ordered_time(self):
+    def ordered_time(self) -> Self:
         if self.now < self.started_at:
             raise ValueError("clock precedes job start")
         return self
 
-    def advance(self, now: float | None):
+    def advance(self, now: float | None) -> "JobBudget":
         if now is None:
             return self
         updated = JobBudget(attempts=self.attempts, started_at=self.started_at, now=now)
@@ -109,8 +110,8 @@ class SearchResult(Model):
     confirmation: str
 
 
-def _decisions(state):
-    votes = {}
+def _decisions(state: SearchState) -> tuple[dict[int, str], list[int]]:
+    votes: dict[int, list[str]] = {}
     for o in state.observations:
         if o.evaluation.valid:
             votes.setdefault(o.users, []).append(o.evaluation.verdict)
@@ -137,7 +138,7 @@ def search_result(state: SearchState) -> SearchResult:
     passing = max(passes, default=None)
     failing = min(fails, default=None)
     contradictions = tuple((f, p) for f in sorted(fails) for p in sorted(passes) if f < p)
-    status = "searching"
+    status: Literal["searching", "complete", "lower_bound", "below_minimum", "incomplete", "unstable"] = "searching"
     reason = None
     if contradictions:
         status = "unstable"
@@ -193,6 +194,7 @@ def next_probe(
         return state.policy.start
     numerator, denominator = state.policy.expansion_factor.as_integer_ratio()
     if lo is None:
+        assert hi is not None
         return max(state.policy.min_users, min(hi - 1, hi * denominator // numerator))
     if hi is not None:
         return (lo + hi) // 2
@@ -267,7 +269,7 @@ def record_probe(
 
 
 def reuse_evidence(
-    state: SearchState, evidence: TrialEvidence, *, execution_id: str, criteria: tuple
+    state: SearchState, evidence: TrialEvidence, *, execution_id: str, criteria: tuple[Criterion, ...]
 ) -> SearchState:
     """Reevaluate immutable samples for this objective; never inherit stored labels."""
     from .metrics import evaluate

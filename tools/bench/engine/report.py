@@ -3,21 +3,92 @@
 import html
 import json
 import math
+from collections.abc import Mapping, Sequence
 from pathlib import Path
+from typing import Protocol
 
+from typing_extensions import TypedDict
+
+from ..records import checked_record
 from .metrics import evaluate
-from .types import Criterion, TrialEvidence
+from .records import RawCriterion, RawWorkload
+from .types import Criterion, SampleScope, TrialEvidence
+
+Catalog = dict[tuple[SampleScope, str, str | None], set[str]]
+
+class Expansion(TypedDict, total=False):
+    workload: RawWorkload
+    criteria: list[RawCriterion]
+    objectives: dict[str, list[RawCriterion]]
+
+class ReportJob(TypedDict, total=False):
+    id: str
+    state: str
+    resolved: str | list[Expansion]
+
+class QueueRow(TypedDict):
+    state: str
+    revision: int
+
+class TrialReference(TypedDict):
+    id: str
+    job: str
+    state: str
+    path: str
+
+class ReportSnapshot(TypedDict):
+    queues: list[QueueRow]
+    jobs: list[ReportJob]
+    trials: list[TrialReference]
+
+class JobState(TypedDict, total=False):
+    results: list[dict[str, object]]
+    decisions: list[dict[str, object]]
+
+class ReportState(TypedDict, total=False):
+    jobs: dict[str, JobState]
+
+class ReportStore(Protocol):
+    def snapshot(self, queue: str) -> object: ...
+    def controller_state(self, queue: str) -> object: ...
+
+class Window(TypedDict):
+    name: str
+    metrics: list[dict[str, object]]
+
+class TrialReport(TypedDict, total=False):
+    id: str
+    job: str
+    state: str
+    status: str
+    windows: list[Window]
+    evidence: str
+    source_sha256: str
+    users: int | None
+    cleanup_verified: bool
+    invalid_reasons: list[str]
+    stages: list[dict[str, object]]
+
+class QueueReport(TypedDict):
+    version: int
+    queue: str
+    state: str
+    revision: int
+    jobs: list[dict[str, object]]
+    objectives: list[dict[str, object]]
+    decisions: list[dict[str, object]]
+    trials: list[TrialReport]
 
 
-def _metric_catalog(job):
+def _metric_catalog(job: ReportJob) -> Catalog:
     """Extract only public metric definitions from frozen resolved expansions."""
     resolved = job.get("resolved", [])
     if isinstance(resolved, str):
-        resolved = json.loads(resolved)
-    catalog = {}
+        resolved = checked_record(json.loads(resolved), list[Expansion])
+    catalog: Catalog = {}
     for expansion in resolved:
         for name, declaration in expansion.get("workload", {}).get("metrics", {}).items():
-            key = ("workload", declaration.get("name", name), declaration.get("unit"))
+            key: tuple[SampleScope, str, str | None] = ("workload", declaration.get("name", name), declaration.get("unit"))
             catalog.setdefault(key, set()).add(
                 "rate" if declaration.get("type") == "rate" else "mean"
             )
@@ -25,7 +96,7 @@ def _metric_catalog(job):
         for objective in expansion.get("objectives", {}).values():
             criteria.extend(objective)
         for criterion in criteria:
-            scope = criterion.get("scope", "workload")
+            scope = checked_record(criterion.get("scope", "workload"), SampleScope)
             metric = criterion["metric"]
             unit = criterion.get("unit")
             if unit is None:
@@ -36,9 +107,9 @@ def _metric_catalog(job):
     return catalog
 
 
-def _metrics(evidence, stages, catalog=None):
+def _metrics(evidence: TrialEvidence, stages: list[str], catalog: Catalog | None = None) -> list[dict[str, object]]:
     catalog = catalog or {}
-    pairs = {(s.scope, s.metric, s.unit) for s in evidence.samples}
+    pairs: set[tuple[SampleScope, str, str | None]] = {(s.scope, s.metric, s.unit) for s in evidence.samples}
     pairs.update(catalog)
     pairs.update(
         {
@@ -57,7 +128,7 @@ def _metrics(evidence, stages, catalog=None):
         rate = any(s.kind == "rate" for s in samples) or "rate" in catalog.get(
             (scope, metric, unit), set()
         )
-        row = {
+        row: dict[str, object] = {
             "scope": scope,
             "metric": metric,
             "unit": unit,
@@ -74,6 +145,7 @@ def _metrics(evidence, stages, catalog=None):
         statistics = list(
             dict.fromkeys([*statistics, *sorted(catalog.get((scope, metric, unit), set()))])
         )
+        unavailable_reasons: dict[str, str | None] = {}
         for stat in statistics:
             result = evaluate(
                 evidence,
@@ -95,22 +167,23 @@ def _metrics(evidence, stages, catalog=None):
             if result.valid:
                 row["status"] = "available"
             else:
-                row.setdefault("unavailable_reasons", {})[stat] = result.reason
+                unavailable_reasons[stat] = result.reason
+                row["unavailable_reasons"] = unavailable_reasons
         if scope == "workload" and metric == "success":
             windows = [(s.start_seconds, s.end_seconds) for s in evidence.stages if s.id in stages]
             selected = [s for s in samples if any(a <= s.timestamp < b for a, b in windows)]
             seconds = sum(b - a for a, b in windows)
             if row["status"] == "available" and seconds:
-                row["attempted_rps"] = sum(s.denominator for s in selected) / seconds
-                row["successful_rps"] = sum(s.numerator for s in selected) / seconds
+                row["attempted_rps"] = sum(s.denominator for s in selected if s.denominator is not None) / seconds
+                row["successful_rps"] = sum(s.numerator for s in selected if s.numerator is not None) / seconds
             else:
                 row["attempted_rps"] = row["successful_rps"] = None
         rows.append(row)
     return rows
 
 
-def _curve(points, title):
-    points = sorted(
+def _curve(points: Sequence[tuple[float | None, float | None]], title: str) -> str:
+    finite_points = sorted(
         (x, y)
         for x, y in points
         if isinstance(x, (float, int))
@@ -118,22 +191,22 @@ def _curve(points, title):
         and math.isfinite(x)
         and math.isfinite(y)
     )
-    if not points:
+    if not finite_points:
         return f"<p>{html.escape(title)}: unavailable</p>"
-    xmax = max(x for x, _ in points) or 1
-    ymax = max(y for _, y in points) or 1
+    xmax = max(x for x, _ in finite_points) or 1
+    ymax = max(y for _, y in finite_points) or 1
     coordinates = " ".join(
-        f"{20 + x / xmax * 560:.2f},{180 - y / ymax * 150:.2f}" for x, y in points
+        f"{20 + x / xmax * 560:.2f},{180 - y / ymax * 150:.2f}" for x, y in finite_points
     )
     return f'<figure><figcaption>{html.escape(title)} (time in seconds; vertical maximum {ymax:g})</figcaption><svg viewBox="0 0 600 200" role="img" aria-label="{html.escape(title, quote=True)}"><path d="M20 20V180H580" fill="none" stroke="gray"/><polyline points="{coordinates}" fill="none" stroke="#2563eb" stroke-width="2"/></svg></figure>'
 
 
-def _table(rows):
+def _table(rows: Sequence[Mapping[str, object]]) -> str:
     if not rows:
         return "<p>unavailable</p>"
     keys = list(dict.fromkeys(k for row in rows for k in row))
 
-    def cell(v):
+    def cell(v: object) -> str:
         return html.escape(
             json.dumps(v, ensure_ascii=False)
             if isinstance(v, (dict, list))
@@ -153,19 +226,19 @@ def _table(rows):
     )
 
 
-def write_queue_report(store, queue: str, output: Path) -> Path:
+def write_queue_report(store: ReportStore, queue: str, output: Path) -> Path:
     """Write report.html and report.json; never export config, paths or logs."""
     output = Path(output)
     destination = output if output.suffix == ".html" else output / "report.html"
     destination.parent.mkdir(parents=True, exist_ok=True)
-    snapshot = store.snapshot(queue)
-    state = store.controller_state(queue) or {}
-    report = {
+    snapshot = checked_record(store.snapshot(queue), ReportSnapshot)
+    state = checked_record(store.controller_state(queue) or {}, ReportState)
+    report: QueueReport = {
         "version": 1,
         "queue": queue,
         "state": snapshot["queues"][0]["state"],
         "revision": snapshot["queues"][0]["revision"],
-        "jobs": [{k: j[k] for k in ("id", "state") if k in j} for j in snapshot["jobs"]],
+        "jobs": [{"id": j["id"], "state": j["state"]} for j in snapshot["jobs"]],
         "objectives": [],
         "decisions": [],
         "trials": [],
@@ -219,7 +292,7 @@ def write_queue_report(store, queue: str, output: Path) -> Path:
     catalogs = {job["id"]: _metric_catalog(job) for job in snapshot["jobs"]}
     figures = []
     for ref in snapshot["trials"]:
-        trial = {
+        trial: TrialReport = {
             "id": ref["id"],
             "job": ref["job"],
             "state": ref["state"],
@@ -251,14 +324,14 @@ def write_queue_report(store, queue: str, output: Path) -> Path:
                 artifact.write_text(json.dumps(public_evidence, indent=2, allow_nan=False) + "\n")
                 trial["evidence"] = "evidence/" + artifact_name
                 trial["source_sha256"] = hashlib.sha256(source.read_bytes()).hexdigest()
-                trial.update(
-                    status="valid" if evidence.valid else "invalid",
-                    users=evidence.users,
-                    cleanup_verified=evidence.cleanup_verified,
-                    invalid_reasons=list(evidence.invalid_reasons),
-                    stages=[s.model_dump(mode="json") for s in evidence.stages],
-                    windows=[],
-                )
+                trial.update({
+                    "status": "valid" if evidence.valid else "invalid",
+                    "users": evidence.users,
+                    "cleanup_verified": evidence.cleanup_verified,
+                    "invalid_reasons": list(evidence.invalid_reasons),
+                    "stages": [s.model_dump(mode="json") for s in evidence.stages],
+                    "windows": [],
+                })
                 selected = [s.id for s in evidence.stages if s.evaluate]
                 for name, ids in [
                     ("selected", selected),
@@ -285,7 +358,7 @@ def write_queue_report(store, queue: str, output: Path) -> Path:
                                 (
                                     s.timestamp,
                                     s.numerator / s.denominator
-                                    if s.kind == "rate" and s.denominator
+                                    if s.kind == "rate" and s.denominator and s.numerator is not None
                                     else s.value,
                                 )
                                 for s in evidence.samples
@@ -307,8 +380,8 @@ def write_queue_report(store, queue: str, output: Path) -> Path:
         + html.escape(report["state"])
         + "</p><p>Unavailable evidence is never zero. Bounds belong to their objective; observed_only means reused observations, not an independent search. CPU temporal means are time weighted. Shared generator/backend hosts can interfere. Raw private configuration and logs are excluded.</p>"
     )
-    for key in ("jobs", "objectives", "decisions"):
-        body += "<h2>" + key + "</h2>" + _table(report[key])
+    for key, rows in (("jobs", report["jobs"]), ("objectives", report["objectives"]), ("decisions", report["decisions"])):
+        body += "<h2>" + key + "</h2>" + _table(rows)
     for trial in report["trials"]:
         body += (
             "<h2>Trial "
