@@ -1,9 +1,8 @@
 """Pure, durable integer search. Caller checkpoints reservations before execution.
 
-Times are injected monotonic seconds. Reclassification costs no new execution;
+Times are injected Unix epoch seconds, durable across process and host reboots. Reclassification costs no new execution;
 all actual launches, including invalid trials and confirmations, cost one attempt.
 """
-import math
 from typing import Literal
 from pydantic import Field, model_validator
 from .types import Model, Evaluation, TestPolicy, TrialEvidence
@@ -39,8 +38,24 @@ class SearchPolicy(Model):
 
 class JobBudget(Model):
     attempts: int = Field(default=0,ge=0)
-    started_at: float = 0.
-    now: float = 0.
+    # Controller supplies time.time() values; zero is useful for injected tests.
+    clock: Literal['unix_epoch'] = 'unix_epoch'
+    started_at: float = Field(default=0., ge=0)
+    now: float = Field(default=0., ge=0)
+
+    @model_validator(mode='after')
+    def ordered_time(self):
+        if self.now < self.started_at:
+            raise ValueError('clock precedes job start')
+        return self
+
+    def advance(self, now: float | None):
+        if now is None:
+            return self
+        updated = JobBudget(attempts=self.attempts, started_at=self.started_at, now=now)
+        if updated.now < self.now:
+            raise ValueError('clock moved backwards; refuse a new execution')
+        return updated
 
 
 class Observation(Model):
@@ -101,25 +116,27 @@ def search_result(state: SearchState) -> SearchResult:
 
 def next_probe(state: SearchState, policy: SearchPolicy | None=None, *, now: float | None=None) -> int | None:
     if policy is not None and policy!=state.policy: raise ValueError('policy differs from checkpoint')
-    if now is not None: state=state.model_copy(update={'budget':state.budget.model_copy(update={'now':now})})
+    if now is not None: state=state.model_copy(update={'budget':state.budget.advance(now)})
     if state.pending_trial_id is not None or search_result(state).status!='searching': return None
     decisions,pending=_decisions(state)
     if pending: return pending[0]
     result=search_result(state); lo=result.passing_users; hi=result.failing_users
     if lo is None and hi is None: return state.policy.start
-    if lo is None: return max(state.policy.min_users,min(hi-1,math.floor(hi/state.policy.expansion_factor)))
+    numerator, denominator = state.policy.expansion_factor.as_integer_ratio()
+    if lo is None: return max(state.policy.min_users,min(hi-1,hi*denominator//numerator))
     if hi is not None: return (lo+hi)//2
-    candidate=max(lo+1,math.ceil(lo*state.policy.expansion_factor))
+    candidate=max(lo+1,(lo*numerator+denominator-1)//denominator)
     return min(candidate,state.policy.max_users) if state.policy.max_users is not None else candidate
 
 
 def reserve_attempt(state: SearchState, users: int, trial_id: str, *, now: float) -> SearchState:
     if not trial_id or any(o.trial_id==trial_id for o in state.observations): raise ValueError('trial ID must be new')
     if next_probe(state,now=now)!=users: raise ValueError('probe not allowed')
-    return state.model_copy(update={'pending_trial_id':trial_id,'pending_users':users,'budget':state.budget.model_copy(update={'attempts':state.budget.attempts+1,'now':now})})
+    return state.model_copy(update={'pending_trial_id':trial_id,'pending_users':users,'budget':state.budget.advance(now).model_copy(update={'attempts':state.budget.attempts+1})})
 
 
 def record_probe(state: SearchState, users: int, trial_id: str, evaluation: Evaluation, *, reused: bool=False, now: float | None=None) -> SearchState:
+    clock_budget = state.budget.advance(now)
     if not trial_id or any(o.trial_id==trial_id for o in state.observations): raise ValueError('trial ID must be unique')
     if users<state.policy.min_users or (state.policy.max_users is not None and users>state.policy.max_users): raise ValueError('users outside feasible bounds')
     valid_votes=[o for o in state.observations if o.users==users and o.evaluation.valid]
@@ -128,8 +145,8 @@ def record_probe(state: SearchState, users: int, trial_id: str, evaluation: Eval
         if state.policy.confirmation=='single_observation' or len(values)>=3 or values.count('pass')>=2 or values.count('fail')>=2: raise ValueError('candidate already decided; no fourth vote')
     if state.pending_trial_id is not None and (state.pending_trial_id!=trial_id or state.pending_users!=users or reused): raise ValueError('result differs from reservation')
     cost=0 if reused or state.pending_trial_id is not None else 1
-    if cost and (state.budget.attempts>=state.policy.max_trials or (state.budget.now if now is None else now)-state.budget.started_at>=state.policy.max_elapsed): raise ValueError('job budget exhausted')
-    budget=state.budget.model_copy(update={'attempts':state.budget.attempts+cost,'now':state.budget.now if now is None else now})
+    if cost and (state.budget.attempts>=state.policy.max_trials or clock_budget.now-clock_budget.started_at>=state.policy.max_elapsed): raise ValueError('job budget exhausted')
+    budget=clock_budget.model_copy(update={'attempts':state.budget.attempts+cost})
     return state.model_copy(update={'observations':state.observations+(Observation(users=users,trial_id=trial_id,evaluation=evaluation,reused=reused),),'budget':budget,'pending_trial_id':None,'pending_users':None})
 
 

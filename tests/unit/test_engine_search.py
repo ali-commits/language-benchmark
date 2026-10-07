@@ -108,3 +108,22 @@ def test_feasible_limits_and_fixed_policy():
     policy=SearchPolicy.from_test(TestPolicy(type='search',users=SearchUsers(start=1000,max='auto'),limits=Limits(max_trials=4,max_elapsed=20.)),feasible_ceilings={'accounts':500,'generator':800})
     assert policy.start==policy.max_users==500 and policy.limiting_reason=='accounts'
     with pytest.raises(ValueError): SearchPolicy.from_test(TestPolicy(type='fixed',users=1000))
+
+
+def test_large_finite_expansion_clamps_without_float_overflow():
+    s=vote(state(max_users=2000,expansion_factor=1e308),1000,'pass')
+    assert next_probe(s)==2000
+    auto=vote(state(expansion_factor=1e308),1000,'pass')
+    assert isinstance(next_probe(auto),int) and next_probe(auto)>1000
+
+
+def test_epoch_deadline_survives_reboot_and_rejects_bad_clock():
+    from tools.bench.engine.search import JobBudget, reserve_attempt
+    s=SearchState(policy=SearchPolicy(start=1000,max_elapsed=10.),budget=JobBudget(started_at=1700000000.,now=1700000001.))
+    restored=SearchState.model_validate_json(s.model_dump_json())
+    assert next_probe(restored,now=1700000010.) is None
+    for bad in [float('nan'),float('inf'),1699999999.]:
+        with pytest.raises(ValueError): next_probe(restored,now=bad)
+        with pytest.raises(ValueError): reserve_attempt(restored,1000,'bad',now=bad)
+        with pytest.raises(ValueError): record_probe(restored,1000,'bad',Evaluation(verdict='pass'),now=bad)
+    with pytest.raises(ValueError): JobBudget(started_at=5.,now=4.)
