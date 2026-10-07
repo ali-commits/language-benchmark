@@ -234,3 +234,167 @@ subagent implementation with main-chat coordination; use existing explicit
 execution authorization only after the written-plan review. Independent docs or
 adapter tasks can be delegated once their input interfaces are stable; do not
 parallelize edits to shared core contracts.
+
+## Authorized extension: simplify and strictly type non-backend tooling
+
+Ali explicitly extended the active implementation on 2026-10-07: refactor and
+simplify the engine and supporting code, exclude all backend implementations,
+and add strict type checking, formatting, linting and pre-commit enforcement.
+Continue the existing subagent execution after Task12's acceptance checkpoint.
+This is a behavior-preserving maintenance extension, not another benchmark run.
+
+### Additional constraints and completion criteria
+
+- Do not edit any file under `backends/`, including its lockfiles. Record/check
+  the backend tree hash before and after this extension.
+- Strict Mypy checks cover all production Python in `tools/`, `runtimes/`,
+  `database/` and Python examples. Tests receive Ruff formatting/linting and run
+  as behavior regressions; do not pretend tests are included in strict Mypy scope.
+- Ruff owns Python formatting/linting; Biome owns supported non-backend JS/JSON.
+  TypeScript `checkJs`/strict/noEmit plus JSDoc checks k6 JavaScript: Biome alone
+  does not supply full static type checking. Use Bun for JS development tools.
+- Use one Python checker (Mypy), pinned in uv development dependencies. Do not add
+  a second checker doing the same work. Baseline with Mypy2.4.0:1076errors across
+  53 tooling files; most are untyped definitions/calls. Existing Ruff0.16.10 is
+  available. Resolve and pin the other developer tool versions during setup.
+- No global ignore_errors, first-party import skipping, broad type-ignore comments,
+  untyped decorators, or blanket Any annotations to manufacture a green check.
+  Dynamic JSON boundaries use validated JSON values and precise records; any
+  necessary third-party stub exception is narrow, explained and reviewed.
+- Preserve CLI forms, YAML version1, database/manifest formats, resource ownership,
+  cleanup sequencing, search/confirmation rules and historical compatibility.
+- Keep original measurements, runtime locks/source proofs, PDFs and generated
+  historical tables byte-for-byte unchanged. Exclude generated/immutable data
+  from automatic formatters, separately from executable source coverage.
+- Refactors get separate reviewable commits from formatting changes. Large mechanical
+  annotation/formatting changes should use reliable tooling rather than manual churn.
+- The final gate must pass from a fresh uv/Bun install: strict Python types,
+  strict JS types, Ruff lint+format, Biome check, pre-commit all-files and unit tests.
+  Keep real Docker/SSH/queue acceptance as regression gates after structural changes.
+
+### Task 13: Pin developer tools and define checked boundaries
+
+**Files:** modify `pyproject.toml`, `uv.lock`, `.gitignore`; create root
+`package.json`, `bun.lock`, `biome.json`, `tsconfig.json`, `.pre-commit-config.yaml`,
+`tools/bench/typing.py` as needed, and `docs/development.md`.
+
+**Interfaces:** `uv run mypy`, `uv run ruff check`, `uv run ruff format --check`,
+`bun run typecheck`, `bun run check`, `uv run pre-commit run --all-files` are the
+canonical eventual gates. Hooks reuse these same pinned tools and scopes.
+
+- [ ] Capture backend/measurement hashes and baseline type errors. Define Mypy
+  strict settings with package identities consistent with installed `tools.bench`
+  and legacy `bench` entry points; install precise third-party stubs as required.
+- [ ] Add pinned Ruff/Mypy/pre-commit dev dependencies and Bun-managed Biome,
+  TypeScript and k6 typings. Do not install active commit hooks until the final
+  checks pass; intermediate typing work must remain committable without bypasses.
+- [ ] Define formatter/type scopes excluding backends and generated evidence;
+  document source versus tests coverage. Configure JSDoc/checkJs rather than
+  converting user-facing k6 scripts to an incompatible runtime.
+- [ ] Introduce minimal shared JSON boundary types/validators only when consumed
+  by subsequent typing tasks; no generic dependency-injection framework.
+- [ ] Verify dependency locks and tool invocation reproducibility. Report existing
+  type failures explicitly as the remaining Tasks14–17 work, not a passing gate.
+  Commit configuration independently from semantic refactoring.
+
+### Task 14: Type and simplify legacy runner support
+
+**Files:** production `tools/bench/*.py` except `commands.py` and the new
+`engine/`/`queue/`; supporting `runtimes/python/build.py`, `database/*.py`,
+Python examples/templates, and focused regression tests as necessary.
+
+**Interfaces:** preserve old module/CLI entry points and their serialized formats;
+annotate public functions and callbacks with concrete records and protocols.
+
+- [ ] Inventory real shared payload shapes in old profiles, fixtures, outcomes,
+  telemetry and runtime metadata. Define TypedDict/dataclass records where fields
+  are known; reserve JSON-value maps for actual arbitrary JSON data boundaries.
+- [ ] Add complete function/return annotations, narrow optional fields explicitly,
+  and validate external library/JSON results at boundaries. Reuse existing runtime
+  validation rather than adding conflicting schemas or unchecked broad casts.
+- [ ] Remove demonstrated duplication/dead code and simplify control flow while
+  retaining runtime guards. Keep compatibility facades if extracting modules.
+- [ ] Run strict Mypy across the configured scope; all errors originating in owned
+  modules must be resolved without hiding first-party imports. Later-module errors
+  remain an explicit baseline until their task is complete.
+- [ ] Run existing legacy runner/fixture/runtime/search tests; commit typed behavior
+  separately from mechanical formatting and document exact public types for Tasks15–16.
+
+### Task 15: Type and simplify the generic execution engine
+
+**Files:** `tools/bench/engine/` and engine-focused tests, preserving public facade APIs.
+
+**Interfaces:** keep resolved configuration, samples, evaluations, trial context,
+preparation receipts and cleanup receipts consistent with existing consumers.
+
+- [ ] Replace untyped metric/provenance/collector/lifecycle dictionaries with precise
+  models and protocols. Arbitrary workload parameters remain validated JSON values.
+- [ ] Extract coherent preparation, collection and recovery responsibilities from
+  the oversized trial module; retain `run_trial`/`reconcile_trial` facades and
+  ownership-sensitive ordering. Simplify repeated conversions/error paths only
+  with existing evidence and tests supporting equivalent behavior.
+- [ ] Type search/stage/math helpers and external process/parser boundaries. Do not
+  weaken finite values, identity checks, coverage rules or majority evidence to
+  satisfy the checker. Preserve sampled data and metric definitions.
+- [ ] Verify owned modules have no strict type errors, Ruff passes, and focused
+  metric/search/stage/ownership tests plus real stateless/social lifecycle pass.
+- [ ] Commit in independently reviewable structural/type changes; record why each
+  extraction makes dependencies clearer and preserve executable compatibility.
+
+### Task 16: Type queue state and simplify CLI/controller boundaries
+
+**Files:** `tools/bench/queue/`, `tools/bench/commands.py` and queue/CLI tests.
+
+**Interfaces:** preserve transactional state versions, mutation receipts, user CLI,
+job revisions, stored JSON and search checkpoints.
+
+- [ ] Define typed database rows, controller checkpoints, reservations, decisions
+  and public snapshots. Validate persisted JSON once at its boundary; eliminate
+  repeated ad-hoc dict parsing and unchecked accesses in internal control flow.
+- [ ] Separate preparation/recovery from fixed/search dispatch where that reduces
+  the large controller's responsibilities; keep durability and resource leases
+  explicit. Preserve exactly-once decision recording and bounded retry semantics.
+- [ ] Give command handlers concrete argument/result contracts without replacing
+  the CLI or adding a generic command framework. Keep secret handling at narrow
+  validated boundaries, including service EnvironmentFile behavior.
+- [ ] Run configured strict Mypy for the entire production Python scope and resolve
+  remaining cross-module mismatches. Run queue races, stop/resume, crash recovery,
+  installed CLI and actual unit-parser tests.
+- [ ] Commit scoped structural changes and record migration-free format compatibility.
+
+### Task 17: Enforce JavaScript types, formatting and local/CI gates
+
+**Files:** non-backend k6 scripts and example/template JS, root tool configurations,
+`.github/workflows/quality.yml`, development guide; Python formatting only within
+approved non-backend scopes. Do not format frozen runtime/evidence JSON.
+
+- [ ] Add reusable JSDoc workload/stage/metric contracts and k6 environment typings;
+  fix actual type errors under strict checkJs/noEmit without changing runtime
+  output or scheduling. Test intentionally invalid type fixtures fail the checker.
+- [ ] Apply Ruff and Biome formatting/linting through their configured allowlists.
+  Keep this mechanical commit distinct; confirm backend and evidence hashes match.
+- [ ] Add pre-commit hooks for Python lint/format, full production Mypy, JS types,
+  Biome and basic eligible configuration checks. Whole-project type hooks use
+  pass_filenames:false; file predicates trigger appropriately. Avoid recursive hooks.
+- [ ] Add a cloud-credential-free CI workflow invoking the same locked uv/Bun checks
+  plus unit tests. Pin actions/tool versions; do not start AWS or expensive load tests
+  from ordinary commits. Document opt-in Docker acceptance separately.
+- [ ] Run every gate, then inspect/preserve any existing git hook before installing
+  the project's pre-commit hook. Test `pre-commit run --all-files` without bypasses.
+
+### Task 18: Verify the refactor and review the complete delivery
+
+**Files:** update `docs/development.md`, `docs/verification/reusable-engine.md`,
+README tooling guidance and targeted regressions only.
+
+- [ ] Run locked installation, strict Python/JS checks, both format/lint checkers,
+  pre-commit all-files and full unit suite. Verify checker-negative probes fail
+  (temporary files, then remove them) so the enforcement is not merely configured.
+- [ ] Run real fixed/search/staged, queue mutation/stop/crash, SSH and fresh-wheel
+  acceptance after structural refactoring. Validate actual user-systemd behavior
+  only with disposable owned units; never claim a real host reboot was tested.
+- [ ] Compare backend tree and historical artifact hashes against Task13 baseline.
+  Verify public YAML/CLI examples and old commands retain their documented forms.
+- [ ] Update the execution ledger with exact results, exclusions and limitations;
+  perform one broad independent review of the full feature plus refactor range.
+  Resolve findings with tests before final delivery; no merge/push/cloud deployment.
