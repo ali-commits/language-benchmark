@@ -9,8 +9,37 @@ from .metrics import evaluate
 from .types import Criterion, TrialEvidence
 
 
-def _metrics(evidence, stages):
+def _metric_catalog(job):
+    """Extract only public metric definitions from frozen resolved expansions."""
+    resolved = job.get("resolved", [])
+    if isinstance(resolved, str):
+        resolved = json.loads(resolved)
+    catalog = {}
+    for expansion in resolved:
+        for name, declaration in expansion.get("workload", {}).get("metrics", {}).items():
+            key = ("workload", declaration.get("name", name), declaration.get("unit"))
+            catalog.setdefault(key, set()).add(
+                "rate" if declaration.get("type") == "rate" else "mean"
+            )
+        criteria = [*expansion.get("criteria", [])]
+        for objective in expansion.get("objectives", {}).values():
+            criteria.extend(objective)
+        for criterion in criteria:
+            scope = criterion.get("scope", "workload")
+            metric = criterion["metric"]
+            unit = criterion.get("unit")
+            if unit is None:
+                declared = [key for key in catalog if key[:2] == (scope, metric)]
+                if declared:
+                    unit = declared[0][2]
+            catalog.setdefault((scope, metric, unit), set()).add(criterion["statistic"])
+    return catalog
+
+
+def _metrics(evidence, stages, catalog=None):
+    catalog = catalog or {}
     pairs = {(s.scope, s.metric, s.unit) for s in evidence.samples}
+    pairs.update(catalog)
     pairs.update(
         {
             ("backend_host", "cpu_used", "fraction"),
@@ -25,7 +54,9 @@ def _metrics(evidence, stages):
     for scope, metric, unit in sorted(pairs, key=str):
         samples = [s for s in evidence.samples if s.scope == scope and s.metric == metric]
         temporal = any(s.kind in {"gauge", "interval"} for s in samples)
-        rate = any(s.kind == "rate" for s in samples)
+        rate = any(s.kind == "rate" for s in samples) or "rate" in catalog.get(
+            (scope, metric, unit), set()
+        )
         row = {
             "scope": scope,
             "metric": metric,
@@ -35,11 +66,15 @@ def _metrics(evidence, stages):
             "normalizations": sorted({s.normalization for s in samples if s.normalization}),
             "includes_failures": sorted({s.includes_failures for s in samples}),
         }
-        for stat in (
+        statistics = (
             ["rate"]
             if rate
             else ["mean", "max"] + ([] if temporal else ["p50", "p95", "p99", "p99.9"])
-        ):
+        )
+        statistics = list(
+            dict.fromkeys([*statistics, *sorted(catalog.get((scope, metric, unit), set()))])
+        )
+        for stat in statistics:
             result = evaluate(
                 evidence,
                 (
@@ -181,9 +216,21 @@ def write_queue_report(store, queue: str, output: Path) -> Path:
                     },
                 }
             )
+    catalogs = {job["id"]: _metric_catalog(job) for job in snapshot["jobs"]}
     figures = []
     for ref in snapshot["trials"]:
-        trial = {"id": ref["id"], "job": ref["job"], "state": ref["state"], "status": "unavailable"}
+        trial = {
+            "id": ref["id"],
+            "job": ref["job"],
+            "state": ref["state"],
+            "status": "unavailable",
+            "windows": [
+                {
+                    "name": "unavailable",
+                    "metrics": _metrics(TrialEvidence(), [], catalogs.get(ref["job"])),
+                }
+            ],
+        }
         path = Path(ref["path"])
         source = next(
             (p for p in (path / "result.json", path / "interrupted.json") if p.is_file()), None
@@ -217,8 +264,13 @@ def write_queue_report(store, queue: str, output: Path) -> Path:
                     ("selected", selected),
                     *[(s.id, [s.id]) for s in evidence.stages],
                 ]:
-                    if ids:
-                        trial["windows"].append({"name": name, "metrics": _metrics(evidence, ids)})
+                    if ids or name == "selected":
+                        trial["windows"].append(
+                            {
+                                "name": name,
+                                "metrics": _metrics(evidence, ids, catalogs.get(ref["job"])),
+                            }
+                        )
                 figures.append(
                     _curve(
                         [(s.start_seconds, s.from_users) for s in evidence.stages]

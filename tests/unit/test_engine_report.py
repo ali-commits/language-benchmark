@@ -234,3 +234,117 @@ def test_unstable_objective_and_observed_only_are_preserved(tmp_path):
     assert data["objectives"][0]["contradictions"] == [[2, 3]]
     assert data["decisions"][0]["source_objective"] == "cpu"
     assert data["decisions"][0]["evaluation"]["verdict"] == "fail"
+
+
+@pytest.mark.parametrize("observed", [False, True])
+def test_missing_declared_and_required_workload_metrics_visible(tmp_path, observed):
+    store = Store(tmp_path)
+    original = store.snapshot
+
+    def snapshot(queue):
+        value = original(queue)
+        value["jobs"][0]["resolved"] = json.dumps(
+            [
+                {
+                    "workload": {
+                        "metrics": {
+                            "latency": {"name": "latency", "type": "trend", "unit": "ms"},
+                            "success": {"name": "success", "type": "rate", "unit": "fraction"},
+                            "authentication": {
+                                "name": "authentication",
+                                "type": "rate",
+                                "unit": "fraction",
+                            },
+                        }
+                    },
+                    "criteria": [
+                        {
+                            "metric": "required_custom",
+                            "scope": "workload",
+                            "statistic": "p99",
+                            "unit": "ms",
+                        }
+                    ],
+                    "objectives": {
+                        "quality": [
+                            {
+                                "metric": "objective_custom",
+                                "scope": "workload",
+                                "statistic": "rate",
+                                "unit": "fraction",
+                            }
+                        ]
+                    },
+                }
+            ]
+        )
+        return value
+
+    store.snapshot = snapshot
+    (tmp_path / "result.json").write_text(
+        json.dumps(
+            {
+                "stages": [
+                    {
+                        "id": "hold",
+                        "from_users": 2,
+                        "to_users": 2,
+                        "duration": 2.0,
+                        "evaluate": True,
+                        "start_seconds": 0.0,
+                        "end_seconds": 2.0,
+                    }
+                ],
+                "samples": [{"metric": "latency", "timestamp": 1.0, "value": 5.0, "unit": "ms"}]
+                if observed
+                else [],
+            }
+        )
+    )
+    output = write_queue_report(store, "q", tmp_path / "report")
+    data = json.loads(output.with_suffix(".json").read_text())
+    rows = {
+        r["metric"]: r
+        for r in data["trials"][0]["windows"][0]["metrics"]
+        if r["scope"] == "workload"
+    }
+    assert rows["latency"]["status"] == ("available" if observed else "unavailable")
+    for metric in ["success", "authentication", "required_custom", "objective_custom"]:
+        assert rows[metric]["status"] == "unavailable"
+        assert metric in output.read_text()
+    assert rows["success"]["rate"] is None
+    assert rows["success"]["attempted_rps"] is None
+    assert rows["success"]["successful_rps"] is None
+    assert rows["authentication"]["rate"] is None
+    assert rows["required_custom"]["p99"] is None
+    assert rows["objective_custom"]["rate"] is None
+
+
+def test_missing_artifact_still_shows_declared_metric_unavailable(tmp_path):
+    store = Store(tmp_path / "missing")
+    original = store.snapshot
+
+    def snapshot(queue):
+        value = original(queue)
+        value["jobs"][0]["resolved"] = json.dumps(
+            [
+                {
+                    "workload": {
+                        "metrics": {
+                            "success": {"name": "success", "type": "rate", "unit": "fraction"}
+                        }
+                    }
+                }
+            ]
+        )
+        return value
+
+    store.snapshot = snapshot
+    output = write_queue_report(store, "q", tmp_path / "report")
+    trial = json.loads(output.with_suffix(".json").read_text())["trials"][0]
+    assert trial["status"] == "unavailable"
+    row = next(row for row in trial["windows"][0]["metrics"] if row["metric"] == "success")
+    assert row["status"] == "unavailable"
+    assert row["rate"] is None
+    assert row["attempted_rps"] is None
+    assert "success" in output.read_text()
