@@ -98,3 +98,30 @@ def test_identity_requires_script(tmp_path):
 def test_invalid_result_retains_observed_count():
     result=evaluate(evidence(Sample(metric='latency',timestamp=1.,value=float('nan'))),(criterion(),))
     assert result.results[0].sample_count==1
+
+
+def test_mixed_declared_units_without_criterion_unit_invalid():
+    ev=evidence(Sample(metric='latency',timestamp=1.,value=1.,unit='ms'),Sample(metric='latency',timestamp=2.,value=1.,unit='s'))
+    assert evaluate(ev,(criterion(statistic='mean'),)).verdict=='invalid'
+
+
+def test_explicit_unit_requires_sample_unit():
+    ev=evidence(Sample(metric='latency',timestamp=1.,value=1.))
+    assert evaluate(ev,(criterion(unit='ms'),)).verdict=='invalid'
+
+
+@pytest.mark.parametrize('is_file',[False,True])
+def test_missing_or_file_build_context_invalid(tmp_path,is_file):
+    from tools.bench.engine.types import Build, Target
+    j=job(tmp_path)
+    context=tmp_path/'context'
+    if is_file:
+        context.write_text('not a directory')
+    j=j.model_copy(update={'target':Target(build=Build(context=context))})
+    with pytest.raises(ValueError,match='build context.*directory'):
+        execution_identity(j,100)
+
+
+def test_mixed_temporal_kinds_invalid():
+    ev=evidence(Sample(metric='memory_used',scope='container',kind='gauge',timestamp=0.,value=1.,max_gap_seconds=2.),Sample(metric='memory_used',scope='container',kind='interval',timestamp=2.,end_seconds=4.,value=1.))
+    assert evaluate(ev,(criterion('memory_used','mean','container'),)).verdict=='invalid'

@@ -25,8 +25,8 @@ def _result(evidence, criterion):
     pieces=[]
     selected=[]
     if temporal:
-        if any(s.kind not in {'gauge','interval'} for s in samples):
-            raise ValueError('mixed temporal and event samples')
+        if len({s.kind for s in samples})>1:
+            raise ValueError('mixed temporal sample kinds')
         for i,s in enumerate(samples):
             if not _finite(s.timestamp):
                 raise ValueError('nonfinite timestamp')
@@ -56,8 +56,11 @@ def _result(evidence, criterion):
         raise _Invalid(reason,count,coverage)
     if count<criterion.minimum_samples:
         invalid('insufficient samples')
-    if any(s.unit is not None and criterion.unit is not None and s.unit!=criterion.unit for s in selected):
+    declared_units={s.unit for s in selected if s.unit is not None}
+    if len(declared_units)>1:
         invalid('contradictory metric units')
+    if criterion.unit is not None and any(s.unit!=criterion.unit for s in selected):
+        invalid('missing or contradictory metric units')
     if len({s.includes_failures for s in selected})>1:
         invalid('contradictory latency populations')
     if criterion.metric=='cpu_used':

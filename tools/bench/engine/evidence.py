@@ -24,6 +24,8 @@ def execution_identity(job, users):
     payload['files']={str(p):_file_identity(p) for p in [job.workload.script,*job.workload.dependencies]}
     if job.target.build:
         context=job.target.build.context
+        if not context.is_dir():
+            raise ValueError(f'build context is not a directory: {context}')
         payload['build_files']={str(p.relative_to(context)):_file_identity(p) for p in sorted(context.rglob('*')) if p.is_file() and '.git' not in p.parts}
         if job.target.build.dockerfile:
             payload['dockerfile_hash']=_file_identity(job.target.build.dockerfile)
