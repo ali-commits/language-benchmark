@@ -1,0 +1,404 @@
+"""Local SQLite control state. Do not place this database on NFS/SMB."""
+
+import hashlib
+import json
+import sqlite3
+from contextlib import contextmanager
+from dataclasses import dataclass
+from pathlib import Path
+from uuid import uuid4
+
+from tools.bench.engine.config import resolve_jobs
+from tools.bench.engine.types import BenchmarkConfig, Job, ResolvedJob
+from tools.bench.engine.workloads import tree_checksums
+
+
+class QueueConflict(ValueError):
+    pass
+
+
+@dataclass(frozen=True)
+class QueueReceipt:
+    queue_id: str
+    revision: int
+
+
+@dataclass(frozen=True)
+class JobReceipt:
+    queue_id: str
+    job_id: str
+    revision: int
+    state: str
+
+
+@dataclass(frozen=True)
+class ClaimedJob(JobReceipt):
+    owner: str
+    definition: Job
+    resolved_jobs: tuple[ResolvedJob, ...]
+
+
+def _json(value):
+    return json.dumps(value, sort_keys=True, separators=(",", ":"))
+
+
+def _inputs(jobs):
+    paths = set()
+    for job in jobs:
+        paths.update([job.workload.script, *job.workload.dependencies])
+        if job.workload.fixture and job.workload.fixture.manifest:
+            paths.add(job.workload.fixture.manifest)
+        if job.target.build:
+            paths.add(job.target.build.context)
+            if job.target.build.dockerfile:
+                paths.add(job.target.build.dockerfile)
+    result = {}
+    for path in sorted(paths):
+        path = path.resolve()
+        if path.is_dir():
+            result[str(path)] = tree_checksums(path)
+        else:
+            result[str(path)] = hashlib.sha256(
+                str(path.stat().st_mode).encode() + b"\0" + path.read_bytes()
+            ).hexdigest()
+    return result
+
+
+def require_local_storage(path: Path):
+    """Linux control state requires local filesystem locking/durability semantics."""
+    mountinfo = Path("/proc/self/mountinfo")
+    if not mountinfo.exists():
+        raise QueueConflict("queue control storage requires Linux mount inspection")
+    matches = []
+    for line in mountinfo.read_text().splitlines():
+        fields = line.split()
+        mount = Path(fields[4].replace("\\040", " ").replace("\\011", "\t").replace("\\134", "\\"))
+        if path == mount or mount in path.parents:
+            matches.append((len(mount.parts), fields[fields.index("-") + 1]))
+    if not matches or max(matches)[1] in {
+        "nfs",
+        "nfs4",
+        "cifs",
+        "smb3",
+        "9p",
+        "ceph",
+        "glusterfs",
+        "fuse.sshfs",
+    }:
+        raise QueueConflict(
+            "queue control storage must be local; network filesystems are unsupported"
+        )
+
+
+class QueueStore:
+    def __init__(self, path: Path):
+        self.path = Path(path).resolve()
+        require_local_storage(self.path)
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with self._connection() as conn:
+            version = conn.execute("PRAGMA user_version").fetchone()[0]
+            if version not in (0, 1):
+                raise QueueConflict("unsupported queue schema")
+            conn.executescript("""
+                CREATE TABLE IF NOT EXISTS queues(id TEXT PRIMARY KEY, revision INTEGER NOT NULL, config TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'pending');
+                CREATE TABLE IF NOT EXISTS jobs(queue TEXT REFERENCES queues(id), id TEXT, position INTEGER, revision INTEGER NOT NULL, state TEXT NOT NULL, definition TEXT NOT NULL, resolved TEXT NOT NULL, inputs TEXT NOT NULL, owner TEXT, PRIMARY KEY(queue,id));
+                CREATE TABLE IF NOT EXISTS events(sequence INTEGER PRIMARY KEY, queue TEXT REFERENCES queues(id), job TEXT, kind TEXT NOT NULL, revision INTEGER NOT NULL, payload TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS trials(queue TEXT, job TEXT, id TEXT, path TEXT NOT NULL, state TEXT NOT NULL, PRIMARY KEY(queue,job,id), FOREIGN KEY(queue,job) REFERENCES jobs(queue,id));
+                CREATE TABLE IF NOT EXISTS requests(sequence INTEGER PRIMARY KEY, queue TEXT REFERENCES queues(id), after_current INTEGER NOT NULL);
+                CREATE TRIGGER IF NOT EXISTS events_no_update BEFORE UPDATE ON events BEGIN SELECT RAISE(ABORT, 'events are append-only'); END;
+                CREATE TRIGGER IF NOT EXISTS events_no_delete BEFORE DELETE ON events BEGIN SELECT RAISE(ABORT, 'events are append-only'); END;
+                PRAGMA user_version=1;
+            """)
+
+    @contextmanager
+    def _connection(self):
+        conn = sqlite3.connect(self.path, timeout=5, isolation_level=None)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys=ON")
+        conn.execute("PRAGMA busy_timeout=5000")
+        conn.execute("PRAGMA synchronous=FULL")
+        try:
+            yield conn
+        finally:
+            conn.close()
+
+    @contextmanager
+    def _transaction(self):
+        with self._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                yield conn
+                conn.commit()
+            except BaseException:
+                conn.rollback()
+                raise
+
+    def _event(self, conn, queue, job, kind, payload=None):
+        conn.execute("UPDATE queues SET revision=revision+1 WHERE id=?", (queue,))
+        revision = conn.execute("SELECT revision FROM queues WHERE id=?", (queue,)).fetchone()[0]
+        conn.execute(
+            "INSERT INTO events(queue,job,kind,revision,payload) VALUES(?,?,?,?,?)",
+            (queue, job, kind, revision, _json(payload or {})),
+        )
+        return revision
+
+    def _insert(self, conn, queue, config, job):
+        resolved = resolve_jobs(config.model_copy(update={"jobs": [job]}))
+        position = conn.execute(
+            "SELECT COALESCE(MAX(position),0)+1 FROM jobs WHERE queue=?", (queue,)
+        ).fetchone()[0]
+        try:
+            conn.execute(
+                "INSERT INTO jobs VALUES(?,?,?,?,?,?,?,?,NULL)",
+                (
+                    queue,
+                    job.id,
+                    position,
+                    1,
+                    "pending",
+                    job.model_dump_json(by_alias=True),
+                    _json([j.model_dump(mode="json", by_alias=True) for j in resolved]),
+                    _json(_inputs(resolved)),
+                ),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise QueueConflict("duplicate job ID") from exc
+        conn.execute("UPDATE queues SET state='pending' WHERE id=?", (queue,))
+        self._event(conn, queue, job.id, "append", dict(self._job(conn, queue, job.id)))
+        return JobReceipt(queue, job.id, 1, "pending")
+
+    def register(self, config: BenchmarkConfig) -> QueueReceipt:
+        queue = config.name or str(uuid4())
+        with self._transaction() as conn:
+            try:
+                conn.execute(
+                    "INSERT INTO queues(id,revision,config) VALUES(?,?,?)",
+                    (queue, 0, _json(config.public_snapshot())),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise QueueConflict("queue already registered") from exc
+            for job in config.jobs:
+                self._insert(conn, queue, config, job)
+            return QueueReceipt(
+                queue,
+                conn.execute("SELECT revision FROM queues WHERE id=?", (queue,)).fetchone()[0],
+            )
+
+    def _config(self, conn, queue):
+        row = conn.execute("SELECT config FROM queues WHERE id=?", (queue,)).fetchone()
+        if not row:
+            raise QueueConflict("unknown queue")
+        return BenchmarkConfig.model_validate_json(row[0])
+
+    def append(self, queue: str, job: Job) -> JobReceipt:
+        with self._transaction() as conn:
+            return self._insert(conn, queue, self._config(conn, queue), job)
+
+    def _job(self, conn, queue, job_id):
+        row = conn.execute("SELECT * FROM jobs WHERE queue=? AND id=?", (queue, job_id)).fetchone()
+        if not row:
+            raise QueueConflict("unknown job")
+        return row
+
+    def update(self, queue, job_id, replacement: Job, expected_revision: int) -> JobReceipt:
+        if replacement.id != job_id:
+            raise QueueConflict("replacement ID differs")
+        with self._transaction() as conn:
+            row = self._job(conn, queue, job_id)
+            if row["state"] != "pending" or row["revision"] != expected_revision:
+                raise QueueConflict("job is active or revision changed")
+            resolved = resolve_jobs(
+                self._config(conn, queue).model_copy(update={"jobs": [replacement]})
+            )
+            revision = expected_revision + 1
+            conn.execute(
+                "UPDATE jobs SET definition=?,resolved=?,inputs=?,revision=? WHERE queue=? AND id=?",
+                (
+                    replacement.model_dump_json(by_alias=True),
+                    _json([j.model_dump(mode="json", by_alias=True) for j in resolved]),
+                    _json(_inputs(resolved)),
+                    revision,
+                    queue,
+                    job_id,
+                ),
+            )
+            self._event(
+                conn,
+                queue,
+                job_id,
+                "update",
+                {"previous": dict(row), "replacement": dict(self._job(conn, queue, job_id))},
+            )
+            return JobReceipt(queue, job_id, revision, "pending")
+
+    def cancel(self, queue, job_id) -> JobReceipt:
+        with self._transaction() as conn:
+            row = self._job(conn, queue, job_id)
+            if row["state"] != "pending":
+                raise QueueConflict("only pending jobs can be cancelled")
+            revision = row["revision"] + 1
+            conn.execute(
+                "UPDATE jobs SET state='cancelled',revision=? WHERE queue=? AND id=?",
+                (revision, queue, job_id),
+            )
+            self._event(conn, queue, job_id, "cancel")
+            return JobReceipt(queue, job_id, revision, "cancelled")
+
+    def claim_next(self, queue, owner) -> ClaimedJob | None:
+        if not owner:
+            raise QueueConflict("owner required")
+        with self._transaction() as conn:
+            self._config(conn, queue)
+            if conn.execute("SELECT 1 FROM requests WHERE queue=?", (queue,)).fetchone():
+                return None
+            if conn.execute(
+                "SELECT 1 FROM jobs WHERE queue=? AND state='active'", (queue,)
+            ).fetchone():
+                return None
+            row = conn.execute(
+                "SELECT * FROM jobs WHERE queue=? AND state='pending' ORDER BY position LIMIT 1",
+                (queue,),
+            ).fetchone()
+            if not row:
+                conn.execute("UPDATE queues SET state='completed' WHERE id=?", (queue,))
+                return None
+            resolved = tuple(
+                ResolvedJob.model_validate_json(_json(j)) for j in json.loads(row["resolved"])
+            )
+            try:
+                actual = _inputs(resolved)
+            except OSError as exc:
+                raise QueueConflict("frozen input missing") from exc
+            if actual != json.loads(row["inputs"]):
+                raise QueueConflict("frozen input changed; explicitly update pending job")
+            revision = row["revision"] + 1
+            conn.execute(
+                "UPDATE jobs SET state='active',owner=?,revision=? WHERE queue=? AND id=?",
+                (owner, revision, queue, row["id"]),
+            )
+            self._event(conn, queue, row["id"], "claim", {"owner": owner})
+            return ClaimedJob(
+                queue,
+                row["id"],
+                revision,
+                "active",
+                owner,
+                Job.model_validate_json(row["definition"]),
+                resolved,
+            )
+
+    def finish(
+        self, queue, job_id, owner, *, state="completed", expected_revision=None
+    ) -> JobReceipt:
+        if state not in ("completed", "failed", "interrupted"):
+            raise QueueConflict("invalid terminal state")
+        with self._transaction() as conn:
+            row = self._job(conn, queue, job_id)
+            if (
+                row["state"] != "active"
+                or row["owner"] != owner
+                or (expected_revision is not None and row["revision"] != expected_revision)
+            ):
+                raise QueueConflict("ownership or revision changed")
+            revision = row["revision"] + 1
+            conn.execute(
+                "UPDATE jobs SET state=?,revision=? WHERE queue=? AND id=?",
+                (state, revision, queue, job_id),
+            )
+            self._event(conn, queue, job_id, state)
+            return JobReceipt(queue, job_id, revision, state)
+
+    def request_stop(self, queue, after_current=False) -> QueueReceipt:
+        with self._transaction() as conn:
+            self._config(conn, queue)
+            conn.execute(
+                "INSERT INTO requests(queue,after_current) VALUES(?,?)", (queue, int(after_current))
+            )
+            return QueueReceipt(
+                queue, self._event(conn, queue, None, "stop", {"after_current": after_current})
+            )
+
+    def clear_stop(self, queue) -> QueueReceipt:
+        with self._transaction() as conn:
+            self._config(conn, queue)
+            conn.execute("DELETE FROM requests WHERE queue=?", (queue,))
+            return QueueReceipt(queue, self._event(conn, queue, None, "resume"))
+
+    def stop_request(self, queue) -> bool | None:
+        with self._connection() as conn:
+            rows = conn.execute(
+                "SELECT after_current FROM requests WHERE queue=?", (queue,)
+            ).fetchall()
+            return all(bool(r[0]) for r in rows) if rows else None
+
+    def record_trial(self, queue, job_id, owner, trial_id, path: Path, state="started"):
+        with self._transaction() as conn:
+            row = self._job(conn, queue, job_id)
+            if row["state"] != "active" or row["owner"] != owner:
+                raise QueueConflict("trial requires active owner")
+            existing = conn.execute(
+                "SELECT path FROM trials WHERE queue=? AND job=? AND id=?",
+                (queue, job_id, trial_id),
+            ).fetchone()
+            if existing and existing[0] != str(path.resolve()):
+                raise QueueConflict("trial path is immutable")
+            conn.execute(
+                "INSERT INTO trials VALUES(?,?,?,?,?) ON CONFLICT(queue,job,id) DO UPDATE SET state=excluded.state",
+                (queue, job_id, trial_id, str(path.resolve()), state),
+            )
+            return QueueReceipt(
+                queue,
+                self._event(
+                    conn,
+                    queue,
+                    job_id,
+                    "trial",
+                    {"id": trial_id, "path": str(path.resolve()), "state": state},
+                ),
+            )
+
+    def jobs(self, queue) -> tuple[JobReceipt, ...]:
+        with self._connection() as conn:
+            return tuple(
+                JobReceipt(queue, r["id"], r["revision"], r["state"])
+                for r in conn.execute(
+                    "SELECT * FROM jobs WHERE queue=? ORDER BY position", (queue,)
+                )
+            )
+
+    def snapshot(self, queue):
+        with self._connection() as conn:
+            conn.execute("BEGIN")
+            self._config(conn, queue)
+            return {
+                table: [
+                    dict(r)
+                    for r in conn.execute(
+                        f"SELECT * FROM {table} WHERE {'id' if table == 'queues' else 'queue'}=?",
+                        (queue,),
+                    )
+                ]
+                for table in ("queues", "jobs", "events", "trials", "requests")
+            }
+
+    def active_job(self, queue, owner) -> ClaimedJob | None:
+        """Read retained ownership on restart; no reassignment or stale takeover."""
+        with self._connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM jobs WHERE queue=? AND state='active'", (queue,)
+            ).fetchone()
+            if not row:
+                return None
+            if row["owner"] != owner:
+                raise QueueConflict("active job belongs to another owner")
+            return ClaimedJob(
+                queue,
+                row["id"],
+                row["revision"],
+                row["state"],
+                owner,
+                Job.model_validate_json(row["definition"]),
+                tuple(
+                    ResolvedJob.model_validate_json(_json(j)) for j in json.loads(row["resolved"])
+                ),
+            )
