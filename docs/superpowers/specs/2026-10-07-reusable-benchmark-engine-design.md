@@ -1,6 +1,11 @@
 # Reusable benchmark engine and configurable queues
 
-Status: proposed specification for user review; implementation has not started.
+Status: approved by Ali on 2026-10-07; implementation plan pending review.
+
+The public mental model is two modes: fixed-load measurements and metric-driven
+searches. Both share arbitrary stage strategies. Sweeps are fixed-load population
+generators; standalone absolute stage sequences are fixed-load jobs without a
+separate target binding. Earlier `stress`/`staged` examples describe aliases.
 
 ## Purpose and agreed scope
 
