@@ -48,6 +48,7 @@ class ClaimedJob(JobReceipt):
     owner: str
     definition: Job
     resolved_jobs: tuple[ResolvedJob, ...]
+    inputs: FrozenInputs
 
 
 def _json(value: object) -> str:
@@ -324,6 +325,7 @@ class QueueStore:
                 owner,
                 Job.model_validate_json(row["definition"]),
                 resolved,
+                checked_record(json.loads(row["inputs"]), FrozenInputs),
             )
 
     def finish(
@@ -441,6 +443,7 @@ class QueueStore:
                 tuple(
                     ResolvedJob.model_validate_json(_json(j)) for j in checked_record(json.loads(row["resolved"]), list[dict[str, JsonValue]])
                 ),
+                checked_record(json.loads(row["inputs"]), FrozenInputs),
             )
 
     def controller_state(self, queue: str) -> ControllerState | None:

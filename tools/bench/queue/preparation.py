@@ -6,23 +6,37 @@ from typing import Protocol
 
 from tools.bench.engine.docker_env import validate_container_environment
 from tools.bench.engine.stages import fixed_populations
-from tools.bench.engine.targets import ResolvedTarget, load_build_snapshot, tree_checksums
-from tools.bench.engine.types import Environment, Host, ResolvedJob, SearchUsers, Target
+from tools.bench.engine.targets import (
+    BuildSnapshot,
+    ResolvedTarget,
+    load_build_snapshot,
+    tree_checksums,
+)
+from tools.bench.engine.types import Build, Environment, Host, ResolvedJob, SearchUsers, Target
 from tools.bench.engine.workloads import PreparedWorkload, prepare_workload
 from tools.bench.records import checked_record
 
-from .records import JobCheckpoint, PreparedPin, TargetPin
+from .inputs import (
+    check_build,
+    check_build_policies,
+    check_retained_build,
+    check_file,
+    check_workload,
+    freeze_fixture,
+    prepared_fixture,
+)
+from .records import FrozenInputs, JobCheckpoint, PreparedPin, TargetPin
 from .store import QueueConflict
 
 MAX_RECOVERY_ATTEMPTS = 3
 
 class TargetResolver(Protocol):
-    def __call__(self, target: Target, environment: Environment, *, snapshot_directory: Path | None = None) -> ResolvedTarget: ...
+    def __call__(self, target: Target, environment: Environment, *, snapshot_directory: Path | None = None, validate_snapshot: Callable[[BuildSnapshot], None] | None = None) -> ResolvedTarget: ...
 
 class ExecutionIdentity(Protocol):
-    def __call__(self, job: ResolvedJob, users: int | None, target: ResolvedTarget, workload: PreparedWorkload, /, *, generator_image_id: str) -> str: ...
+    def __call__(self, job: ResolvedJob, users: int | None, target: ResolvedTarget, workload: PreparedWorkload, /, *, generator_image_id: str, fixture_manifest: Path | None = None) -> str: ...
 
-def prepare(data: JobCheckpoint, index: int, job: ResolvedJob, *, root: Path, save: Callable[[str | None], None], check_stop: Callable[[], None], resolve: TargetResolver, inspect_image: Callable[[Host, str], str], execution_identity: ExecutionIdentity) -> tuple[ResolvedTarget, PreparedWorkload, str]:
+def prepare(data: JobCheckpoint, index: int, job: ResolvedJob, *, expected_inputs: FrozenInputs, root: Path, save: Callable[[str | None], None], check_stop: Callable[[], None], resolve: TargetResolver, inspect_image: Callable[[Host, str], str], execution_identity: ExecutionIdentity) -> tuple[ResolvedTarget, PreparedWorkload, str]:
     # Resolve refs without persisting values; validate before Docker preparation.
     try:
         env = {key: os.environ[ref.env] for key, ref in job.target.env.items()}
@@ -47,9 +61,15 @@ def prepare(data: JobCheckpoint, index: int, job: ResolvedJob, *, root: Path, sa
         directory /= str(data["preparation_attempts"][key])
         retained_target = data.setdefault("target_pins", {}).get(key)
         if retained_target is None:
-            target = resolve(
-                job.target, job.environment, snapshot_directory=directory / "build"
-            )
+            build_spec: Build | None = job.target.build
+            if build_spec is not None:
+                check_build_policies(build_spec, expected_inputs)
+                target = resolve(
+                    job.target, job.environment, snapshot_directory=directory / "build",
+                    validate_snapshot=lambda snapshot: check_build(build_spec, snapshot, expected_inputs),
+                )
+            else:
+                target = resolve(job.target, job.environment, snapshot_directory=directory / "build")
             retained_target = checked_record({
                 "image": target.image_id,
                 "requested_image": target.requested_image,
@@ -73,12 +93,16 @@ def prepare(data: JobCheckpoint, index: int, job: ResolvedJob, *, root: Path, sa
         cached = data["workloads"].get(job.workload_name)
         if cached is None:
             workload = prepare_workload(job.workload, directory / "workload")
+            check_workload(job.workload, workload, expected_inputs)
             cached = {
                 "directory": str(workload.directory),
                 "script": str(workload.script),
                 "checksums": workload.checksums,
                 "identity": workload.identity,
             }
+            fixture_pin = freeze_fixture(job.workload, directory / "fixture", expected_inputs)
+            if fixture_pin is not None:
+                cached["fixture"] = fixture_pin
             data["workloads"][job.workload_name] = cached
         generator = inspect_image(job.environment.generator, "grafana/k6:1.4.2")
         prep = checked_record({
@@ -92,6 +116,8 @@ def prepare(data: JobCheckpoint, index: int, job: ResolvedJob, *, root: Path, sa
         data["prepared"][key] = prep
         save(None)
     build = load_build_snapshot(Path(prep["build"])) if prep["build"] else None
+    if build is not None and job.target.build is not None:
+        check_retained_build(job.target.build, build, expected_inputs)
     target = ResolvedTarget(
         job.target, prep["requested_image"], prep["image"], tuple(prep["repo_digests"]), build
     )
@@ -99,6 +125,18 @@ def prepare(data: JobCheckpoint, index: int, job: ResolvedJob, *, root: Path, sa
     workload = PreparedWorkload(
         Path(work["directory"]), Path(work["script"]), work["checksums"], work["identity"]
     )
+    check_workload(job.workload, workload, expected_inputs)
+    fixture = prepared_fixture(work)
+    if job.workload.fixture and job.workload.fixture.manifest:
+        if fixture is None:
+            # Upgrade an older pin only from the original frozen manifest. The
+            # logical path/hash in execution identity remains unchanged.
+            fixture_pin = freeze_fixture(job.workload, Path(work["directory"]).parent / "fixture", expected_inputs)
+            if fixture_pin is not None:
+                work["fixture"] = fixture_pin
+            fixture = prepared_fixture(work)
+        assert fixture is not None
+        check_file(job.workload.fixture.manifest, fixture.verify(), expected_inputs)
     if tree_checksums(workload.directory) != workload.checksums:
         raise QueueConflict("prepared workload changed")
     inspect_image(job.environment.backend, target.image_id)
@@ -109,7 +147,8 @@ def prepare(data: JobCheckpoint, index: int, job: ResolvedJob, *, root: Path, sa
     else:
         identity_users = fixed_populations(job)[0]
     identity = execution_identity(
-        job, identity_users, target, workload, generator_image_id=prep["generator"]
+        job, identity_users, target, workload, generator_image_id=prep["generator"],
+        fixture_manifest=fixture.verify() if fixture else None
     )
     if prep.get("execution_identity", identity) != identity:
         raise QueueConflict("execution identity changed; cannot resume")
@@ -117,4 +156,3 @@ def prepare(data: JobCheckpoint, index: int, job: ResolvedJob, *, root: Path, sa
     save(None)
     check_stop()
     return target, workload, prep["generator"]
-

@@ -786,3 +786,194 @@ def test_reuse_rejects_incompatible_raw_identity(harness, tmp_path):
     assert result.observations == ()
     assert result.budget.attempts == 0
     assert decisions == []
+
+
+@pytest.mark.parametrize("source", ["script", "dependency", "fixture"])
+def test_source_change_after_claim_never_launches(harness, monkeypatch, source):
+    from tools.bench.engine.types import Fixture
+
+    store, cfg, launches = harness
+    script = cfg.workloads["load"].script
+    dependency = script.parent / "actors.json"
+    dependency.write_text('{"actors": []}')
+    manifest = script.parent / "fixture.json"
+    manifest.write_text('{"identity": "original"}')
+    workload = cfg.workloads["load"].model_copy(
+        update={"dependencies": [dependency], "fixture": Fixture(manifest=manifest)}
+    )
+    other = QueueStore(store.path.parent / "frozen.db")
+    other.register(cfg.model_copy(update={"workloads": {"load": workload}}))
+    original = other.claim_next
+
+    def claim_then_change(queue, owner):
+        claimed = original(queue, owner)
+        path = {"script": script, "dependency": dependency, "fixture": manifest}[source]
+        path.write_text("export default function() { return 2; }" if source == "script" else '{}')
+        return claimed
+
+    monkeypatch.setattr(other, "claim_next", claim_then_change)
+    assert controller.run_queue(other, "test")["queues"][0]["state"] == "needs_attention"
+    assert launches == []
+    assert "frozen input" in other.controller_state("test")["last_error"]
+
+
+def test_restart_before_preparation_rejects_changed_source(harness):
+    store, cfg, launches = harness
+    state = controller._open_state(store, "test")
+    assert store.claim_next("test", state["owner"]) is not None
+    cfg.workloads["load"].script.write_text("export default function() { return 2; }")
+    assert controller.run_queue(QueueStore(store.path), "test")["queues"][0]["state"] == "needs_attention"
+    assert launches == []
+
+
+def test_workload_copy_checked_against_enqueued_bytes(harness, monkeypatch):
+    from tools.bench.queue import preparation
+
+    store, cfg, launches = harness
+    original = preparation.prepare_workload
+
+    def change_during_copy(workload, destination):
+        # A live check immediately before copying cannot close this window.
+        workload.script.write_text("export default function() { return 2; }")
+        return original(workload, destination)
+
+    monkeypatch.setattr(preparation, "prepare_workload", change_during_copy)
+    assert controller.run_queue(store, "test")["queues"][0]["state"] == "needs_attention"
+    assert launches == []
+
+
+@pytest.mark.skipif(__import__('os').environ.get('BENCH_INTEGRATION') != '1', reason='native BuildKit required')
+@pytest.mark.parametrize('changed', ['context', 'dockerfile', 'ignore'])
+def test_build_changed_after_claim_is_rejected_before_image_build(harness, monkeypatch, changed):
+    from tools.bench.engine import targets
+    from tools.bench.engine.types import Build, Target
+
+    store, cfg, launches = harness
+    source = store.path.parent.parent / 'build-source'
+    source.mkdir()
+    dockerfile = source / 'Dockerfile'
+    dockerfile.write_text('FROM scratch\nCOPY payload /payload\n')
+    payload = source / 'payload'
+    payload.write_text('original')
+    ignore = source / '.dockerignore'
+    ignore.write_text('ignored\n')
+    other = QueueStore(store.path.parent / 'build-frozen.db')
+    other.register(cfg.model_copy(update={'targets': {'app': Target(build=Build(context=source))}}))
+    claim = other.claim_next
+    builds = []
+    execute = targets.execute_host
+
+    def change(queue, owner):
+        claimed = claim(queue, owner)
+        if changed == 'context':
+            payload.write_text('changed')
+        elif changed == 'dockerfile':
+            dockerfile.write_text('FROM scratch\nCOPY payload /different\n')
+        else:
+            ignore.write_text('another-nonmatching-pattern\n')
+        return claimed
+
+    def observe(host, argv, **kwargs):
+        if argv[:2] == ['docker', 'build']:
+            builds.append(argv)
+            raise RuntimeError('image build must not be reached')
+        return execute(host, argv, **kwargs)
+
+    monkeypatch.setattr(other, 'claim_next', change)
+    monkeypatch.setattr(controller, 'resolve_target', targets.resolve_target)
+    monkeypatch.setattr(targets, 'execute_host', observe)
+    result = controller.run_queue(other, 'test')
+    assert result['queues'][0]['state'] == 'needs_attention'
+    assert builds == []
+    assert launches == []
+    assert 'frozen input' in other.controller_state('test')['last_error']
+
+
+def test_fixture_pin_survives_live_edit_and_manifest_recovery(harness, monkeypatch):
+    import hashlib
+    import json
+
+    from tools.bench.engine import trial_preparation, trial_recovery
+    from tools.bench.engine.types import Fixture
+    from tools.bench.engine.trial import TrialContext
+
+    store, cfg, launches = harness
+    manifest = cfg.workloads['load'].script.parent / 'fixture.json'
+    original_bytes = b'{"identity":"enqueued fixture"}'
+    manifest.write_bytes(original_bytes)
+    workload = cfg.workloads['load'].model_copy(update={'fixture': Fixture(manifest=manifest)})
+    other = QueueStore(store.path.parent / 'fixture-pinned.db')
+    other.register(cfg.model_copy(update={'workloads': {'load': workload}}))
+
+    def run(context, stop_requested):
+        # Preparation has completed. Neither execution nor recovery may consume this edit.
+        identity = controller._identity(context)
+        manifest.write_text('{"identity":"different fixture"}')
+        context.directory.mkdir(parents=True)
+        prepared = trial_preparation.prepare_trial(context, execute=lambda *a, **kw: pytest.fail('unexpected Docker call'))
+        assert prepared.execution_id == identity
+        saved = json.loads((context.directory / 'manifest.json').read_text())
+        assert saved['job']['workload']['fixture']['manifest'] == str(manifest)
+        assert saved['fixture_manifest_sha256'] == hashlib.sha256(original_bytes).hexdigest()
+        assert context.fixture_workload.fixture.manifest.read_bytes() == original_bytes
+        trial_recovery.fixture(context, 'reset')
+        recovered = TrialContext.from_manifest(context.directory / 'manifest.json')
+        assert recovered.fixture_workload.fixture.manifest.read_bytes() == original_bytes
+        trial_recovery.fixture(recovered, 'verify')
+        launches.append(context)
+        return TrialEvidence(trial_id=context.trial_id, users=context.users, execution_id=identity, cleanup_verified=True)
+
+    monkeypatch.setattr(controller, 'run_trial', run)
+    assert controller.run_queue(other, 'test')['queues'][0]['state'] == 'completed'
+    assert len(launches) == 1
+
+
+def test_frozen_fixture_archive_used_for_restore_and_old_identity(tmp_path, monkeypatch):
+    import hashlib
+    import json
+    from types import SimpleNamespace
+
+    from tools.bench.engine.config import resolve_jobs
+    from tools.bench.engine.evidence import immutable_json
+    from tools.bench.engine import social, trial_recovery
+    from tools.bench.engine.targets import prepared_execution_identity
+    from tools.bench.engine.trial import TrialContext
+    from tools.bench.engine.types import Fixture
+    from tools.bench.engine.workloads import prepare_workload
+    from tools.bench.queue.inputs import freeze_fixture, prepared_fixture
+    from tools.bench.queue.store import _file_identity
+
+    cfg = config(tmp_path)
+    archive = tmp_path / 'snapshot.dump'
+    archive.write_bytes(b'enqueued archive')
+    manifest = tmp_path / 'fixture.json'
+    manifest.write_text(json.dumps({'dump': archive.name, 'checksum': hashlib.sha256(archive.read_bytes()).hexdigest()}))
+    workload = cfg.workloads['load'].model_copy(update={'adapter': 'social', 'fixture': Fixture(adapter='social', manifest=manifest)})
+    job = resolve_jobs(cfg.model_copy(update={'workloads': {'load': workload}}))[0]
+    work = prepare_workload(workload, tmp_path / 'bundle')
+    target = ResolvedTarget(job.target, job.target.image, 'sha256:app', ())
+    old_identity = prepared_execution_identity(job, 1, target, work, generator_image_id='sha256:k6')
+    pin = freeze_fixture(workload, tmp_path / 'pinned', {str(manifest): _file_identity(manifest)})
+    fixture = prepared_fixture({'fixture': pin})
+    archive.write_bytes(b'different archive')
+    manifest.write_text('{}')
+    context = TrialContext(job, 1, tmp_path / 'trial', 'test', 'one', target, work, 'sha256:k6', fixture)
+    assert controller._identity(context) == old_identity
+    immutable_json(context.directory / 'manifest.json', {
+        'job': job.model_dump(mode='json'), 'queue_id': 'test', 'trial_id': 'one', 'users': 1,
+        'fixture_manifest_sha256': hashlib.sha256(fixture.manifest.read_bytes()).hexdigest(), 'prepared_fixture': pin})
+    restored = []
+
+    def adapter(spec):
+        def reset(context):
+            doc = json.loads(spec.fixture.manifest.read_text())
+            restored.append((spec.fixture.manifest.parent / doc['dump']).read_bytes())
+        return SimpleNamespace(reset=reset)
+
+    monkeypatch.setattr(social, 'social_adapter', adapter)
+    trial_recovery.fixture(TrialContext.from_manifest(context.directory / 'manifest.json'), 'reset')
+    assert restored == [b'enqueued archive']
+    (fixture.manifest.parent / 'snapshot.dump').write_bytes(b'tampered retained archive')
+    with pytest.raises(ValueError, match='prepared fixture checksum'):
+        trial_recovery.fixture(TrialContext.from_manifest(context.directory / 'manifest.json'), 'reset')
+    assert restored == [b'enqueued archive']

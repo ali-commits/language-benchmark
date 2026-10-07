@@ -92,10 +92,12 @@ def prepare_trial(context: TrialContext, *, execute: HostExecutor) -> Preparatio
         prepared_target,
         prepared_workload,
         generator_image_id=generator_image_id,
+        fixture_manifest=context.fixture_manifest,
     )
     labels = owner_labels(context.queue_id, context.job_id, context.trial_id)
     if any(key.startswith("bench.") for key in job.target.labels):
         raise ValueError("target cannot override reserved owner labels")
+    fixture_manifest = context.fixture_manifest
     manifest: TrialManifest = {
         "version": 1,
         "queue_id": context.queue_id,
@@ -107,15 +109,17 @@ def prepare_trial(context: TrialContext, *, execute: HostExecutor) -> Preparatio
         "generator_image_id": generator_image_id,
         "workload_identity": prepared_workload.identity,
         "fixture_manifest_sha256": hashlib.sha256(
-            job.workload.fixture.manifest.read_bytes()
+            fixture_manifest.read_bytes()
         ).hexdigest()
-        if job.workload.fixture and job.workload.fixture.manifest
+        if fixture_manifest is not None
         else None,
         "wrapper_sha256": {
             p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in bundle.glob("*.js")
         },
         "colocated_generator": job.environment.backend == job.environment.generator,
     }
+    if context.prepared_fixture is not None:
+        manifest["prepared_fixture"] = {"manifest": str(context.prepared_fixture.manifest), "checksums": context.prepared_fixture.checksums}
     immutable_json(directory / "manifest.json", manifest)
     return Preparation(
         directory,

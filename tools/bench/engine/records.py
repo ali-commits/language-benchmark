@@ -141,6 +141,11 @@ class StageDetails(TypedDict):
     path: str
 
 
+class FixturePin(TypedDict):
+    manifest: str
+    checksums: dict[str, str]
+
+
 class Manifest(TypedDict, total=False):
     version: int
     job: dict[str, object]
@@ -148,6 +153,7 @@ class Manifest(TypedDict, total=False):
     queue_id: str
     trial_id: str
     fixture_manifest_sha256: str | None
+    prepared_fixture: FixturePin
 
 
 class RawMetric(TypedDict, total=False):

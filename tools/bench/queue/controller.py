@@ -33,10 +33,12 @@ from tools.bench.engine.targets import (
     resolve_target,
 )
 from tools.bench.engine.trial import TrialContext, run_trial
+from tools.bench.engine.trial_context import PreparedFixture
 from tools.bench.engine.types import Host, ResolvedJob, TrialEvidence
 from tools.bench.engine.workloads import PreparedWorkload
 from tools.bench.records import checked_record
 
+from .inputs import prepared_fixture
 from .leases import ControllerLock, HostLease, LeaseReceipt
 from .preparation import MAX_RECOVERY_ATTEMPTS as MAX_RECOVERY_ATTEMPTS
 from .preparation import prepare
@@ -44,6 +46,7 @@ from .records import (
     Budget,
     ControllerState,
     Decision,
+    FrozenInputs,
     JobCheckpoint,
     JobResult,
     LeaseRecord,
@@ -97,12 +100,13 @@ def _identity(context: TrialContext) -> str:
         context.prepared_target,
         context.prepared_workload,
         generator_image_id=context.generator_image_id,
+        fixture_manifest=context.fixture_manifest,
     )
 
 
-def _prepare(store: QueueStore, queue: str, state: ControllerState, data: JobCheckpoint, index: int, job: ResolvedJob, interrupt_requested: StopRequested = lambda: False) -> tuple[ResolvedTarget, PreparedWorkload, str]:
+def _prepare(store: QueueStore, queue: str, state: ControllerState, data: JobCheckpoint, index: int, job: ResolvedJob, interrupt_requested: StopRequested = lambda: False, *, expected_inputs: FrozenInputs) -> tuple[ResolvedTarget, PreparedWorkload, str]:
     return prepare(
-        data, index, job,
+        data, index, job, expected_inputs=expected_inputs,
         root=_root(store, queue),
         save=lambda status: _save(store, queue, state, status),
         check_stop=lambda: _check_stop(store, queue, interrupt_requested),
@@ -241,7 +245,7 @@ def _fixed_users(job: ResolvedJob) -> list[int | None]:
     return [u for u in fixed_populations(job) for _ in range(job.test.repetitions)]
 
 
-def _reuse_probes(store: QueueStore, queue: str, data: JobCheckpoint, job: ResolvedJob, target: ResolvedTarget, workload: PreparedWorkload, generator: str, objective: str, search: SearchState) -> tuple[SearchState, list[Decision]]:
+def _reuse_probes(store: QueueStore, queue: str, data: JobCheckpoint, job: ResolvedJob, target: ResolvedTarget, workload: PreparedWorkload, generator: str, objective: str, search: SearchState, fixture: PreparedFixture | None = None) -> tuple[SearchState, list[Decision]]:
     """Reclassify immutable raw probes; previous objective labels are irrelevant."""
     retained = dict(data.get("raw_trials", {}))
     # Older controller checkpoints retained raw paths in the trial table only.
@@ -264,7 +268,8 @@ def _reuse_probes(store: QueueStore, queue: str, data: JobCheckpoint, job: Resol
         if not evidence.valid or not evidence.cleanup_verified:
             continue
         expected = prepared_execution_identity(
-            job, evidence.users, target, workload, generator_image_id=generator
+            job, evidence.users, target, workload, generator_image_id=generator,
+            fixture_manifest=fixture.verify() if fixture else None
         )
         if evidence.trial_id != trial_id or evidence.execution_id != expected:
             continue
@@ -315,13 +320,14 @@ def _execute_job(store: QueueStore, queue: str, state: ControllerState, claimed:
     while data["target"] < len(claimed.resolved_jobs):
         job = claimed.resolved_jobs[data["target"]]
         target, workload, generator = _prepare(
-            store, queue, state, data, data["target"], job, interrupt_requested
+            store, queue, state, data, data["target"], job, interrupt_requested, expected_inputs=claimed.inputs
         )
+        fixture = prepared_fixture(data["prepared"][str(data["target"])]["workload"])
         # Verify engine/fixture/prepared identity before consuming retained evidence.
         if data["pending"]:
             p = data["pending"]
             context = TrialContext(
-                job, p["users"], Path(p["path"]), queue, p["id"], target, workload, generator
+                job, p["users"], Path(p["path"]), queue, p["id"], target, workload, generator, fixture
             )
             if _identity(context) != p["identity"]:
                 raise QueueConflict("execution identity changed; cannot resume")
@@ -332,11 +338,11 @@ def _execute_job(store: QueueStore, queue: str, state: ControllerState, claimed:
             if job.test.type == "search":
                 if data["search"] is None:
                     search = SearchState(
-                        policy=_search_policy(job),
+                        policy=_search_policy(job, workload, fixture),
                         budget=JobBudget.model_validate(data["budget"]),
                     )
                     search, reused_decisions = _reuse_probes(
-                        store, queue, data, job, target, workload, generator, objective, search
+                        store, queue, data, job, target, workload, generator, objective, search, fixture
                     )
                     data["decisions"].extend(reused_decisions)
                 else:
@@ -376,7 +382,7 @@ def _execute_job(store: QueueStore, queue: str, state: ControllerState, claimed:
             trial_id = uuid4().hex
             directory = _root(store, queue) / data["directory"] / trial_id
             context = TrialContext(
-                job, users, directory, queue, trial_id, target, workload, generator
+                job, users, directory, queue, trial_id, target, workload, generator, fixture
             )
             identity = _identity(context)
             if job.test.type == "search":
@@ -516,10 +522,16 @@ def run_queue(store: QueueStore, queue: str, *, interrupt_requested: StopRequest
     return store.snapshot(queue)
 
 
-def _search_policy(job: ResolvedJob) -> SearchPolicy:
+def _search_policy(job: ResolvedJob, prepared: PreparedWorkload | None = None, fixture: PreparedFixture | None = None) -> SearchPolicy:
     ceilings = None
     if job.workload.adapter == 'social':
         from ..engine.social import preflight_social
-        capacity = preflight_social(job.workload)
+        spec = job.workload
+        if prepared is not None:
+            root = spec.script.resolve().parent
+            spec = spec.model_copy(update={"script": prepared.script, "dependencies": [prepared.directory / p.resolve().relative_to(root) for p in spec.dependencies]})
+        if fixture is not None and spec.fixture is not None:
+            spec = spec.model_copy(update={"fixture": spec.fixture.model_copy(update={"manifest": fixture.verify()})})
+        capacity = preflight_social(spec)
         ceilings = {'fixture_accounts': capacity['account_capacity']}
     return SearchPolicy.from_test(job.test, feasible_ceilings=ceilings)

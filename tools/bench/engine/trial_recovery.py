@@ -21,7 +21,8 @@ DockerFactory = Callable[[Host, dict[str, str]], OwnedDocker]
 
 
 def fixture(context: TrialContext, action: FixtureAction) -> FixtureReceipt:
-    fixture = context.job.workload.fixture
+    workload = context.fixture_workload
+    fixture = workload.fixture
     if fixture and fixture.manifest:
         manifest = checked_record(
             json.loads((context.directory / "manifest.json").read_text()), Manifest
@@ -32,7 +33,7 @@ def fixture(context: TrialContext, action: FixtureAction) -> FixtureReceipt:
     if context.job.workload.adapter == "social":
         from .social import social_adapter
 
-        adapter = social_adapter(context.job.workload)
+        adapter = social_adapter(workload)
         if action == "reset":
             return adapter.reset(context)
         if action == "prepare":

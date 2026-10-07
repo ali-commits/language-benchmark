@@ -9,6 +9,7 @@ import stat
 import subprocess
 import tempfile
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
@@ -240,7 +241,8 @@ def snapshot_build(build: Build, destination: Path) -> BuildSnapshot:
 
 
 def resolve_target(
-    target: Target, environment: Environment, *, snapshot_directory: Path | None = None
+    target: Target, environment: Environment, *, snapshot_directory: Path | None = None,
+    validate_snapshot: Callable[[BuildSnapshot], None] | None = None,
 ) -> ResolvedTarget:
     host = environment.build or environment.backend
     snapshot = None
@@ -249,6 +251,8 @@ def resolve_target(
         if snapshot_directory is None:
             snapshot_directory = Path(tempfile.mkdtemp(prefix="bench-input-parent-")) / "snapshot"
         snapshot = snapshot_build(target.build, snapshot_directory)
+        if validate_snapshot is not None:
+            validate_snapshot(snapshot)
         if host.transport != "local":
             from .workloads import transfer_tree
 
@@ -409,10 +413,13 @@ def prepared_execution_identity(
     prepared_workload: "PreparedWorkload",
     *,
     generator_image_id: str | None = None,
+    fixture_manifest: Path | None = None,
 ) -> str:
     """Canonical identity from preparation receipts, independent of mutable source."""
     from .evidence import execution_identity
 
+    if fixture_manifest is None and job.workload.fixture:
+        fixture_manifest = job.workload.fixture.manifest
     return execution_identity(
         job,
         users,
@@ -421,9 +428,9 @@ def prepared_execution_identity(
             "generator_image_id": generator_image_id,
             "generator_version": "grafana/k6:1.4.2",
             "fixture_manifest_sha256": hashlib.sha256(
-                job.workload.fixture.manifest.read_bytes()
+                fixture_manifest.read_bytes()
             ).hexdigest()
-            if job.workload.fixture and job.workload.fixture.manifest
+            if fixture_manifest is not None
             else None,
             "wrapper_sha256": {
                 name: hashlib.sha256((wrapper_path(name)).read_bytes()).hexdigest()

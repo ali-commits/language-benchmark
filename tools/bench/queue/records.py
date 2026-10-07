@@ -6,6 +6,8 @@ mutating a nested checkpoint remains visible to the controller's atomic save.
 from pydantic import JsonValue
 from typing_extensions import NotRequired, TypedDict
 
+from tools.bench.engine.records import FixturePin
+
 
 class QueueRow(TypedDict):
     id: str
@@ -64,6 +66,7 @@ class TargetPin(TypedDict):
     build: str | None
 
 class WorkloadPin(TypedDict):
+    fixture: NotRequired[FixturePin]
     directory: str
     script: str
     checksums: dict[str, str]
