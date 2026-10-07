@@ -270,3 +270,45 @@ def test_graceful_ramp_down_default_override_and_quantity(tmp_path):
     assert resolve_jobs(config)[0].graceful_ramp_down == 0
     with pytest.raises(Exception):
         Defaults(graceful_ramp_down=-1.0)
+
+
+@pytest.mark.parametrize(
+    "parameters",
+    [
+        {"context": "feed", "duration": "business-value", "nested": {"memory": "low"}},
+        {"env": "staging"},
+        {"items": [{"manifest": "opaque-record", "timeout": "never"}], "null": None},
+    ],
+)
+def test_workload_parameters_preserve_engine_named_keys(tmp_path, parameters):
+    path = document(tmp_path)
+    data = yaml.safe_load(path.read_text())
+    data["workloads"]["http"]["parameters"] = parameters
+    path.write_text(yaml.safe_dump(data))
+    config = load_config(path)
+    assert config.workloads["http"].parameters == parameters
+
+
+def test_labels_and_build_args_preserve_literal_strings(tmp_path):
+    path = document(tmp_path)
+    data = yaml.safe_load(path.read_text())
+    literals = {"memory": "low", "context": "feed", "timeout": "never", "env": "staging"}
+    data["targets"]["api"] = {
+        "build": {"context": ".", "args": literals},
+        "labels": literals,
+    }
+    path.write_text(yaml.safe_dump(data))
+    target = load_config(path).targets["api"]
+    assert target.labels == literals
+    assert target.build.context == tmp_path
+    assert target.build.args == literals
+
+
+@pytest.mark.parametrize("invalid", [float("inf"), float("nan")])
+def test_opaque_parameters_still_reject_nonfinite_json(tmp_path, invalid):
+    path = document(tmp_path)
+    data = yaml.safe_load(path.read_text())
+    data["workloads"]["http"]["parameters"] = {"nested": [invalid]}
+    path.write_text(yaml.safe_dump(data))
+    with pytest.raises(ConfigError):
+        load_config(path)

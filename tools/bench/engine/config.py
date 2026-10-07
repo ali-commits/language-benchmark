@@ -1,4 +1,5 @@
 """Safe YAML loading, quantity normalization and explicit default resolution."""
+import json
 import math
 import os
 import re
@@ -7,7 +8,7 @@ from pathlib import Path
 from typing import TypeVar
 
 import yaml
-from pydantic import ValidationError
+from pydantic import JsonValue, TypeAdapter, ValidationError
 
 from ..records import checked_record
 from .records import RawConfig, RawJob
@@ -63,16 +64,32 @@ def parse_quantity(value: object, unit: str) -> float:
     return value
 
 
-def _normalize(value: object, base: Path, key: str = '') -> object:
+_JSON_VALUE: TypeAdapter[JsonValue] = TypeAdapter(JsonValue)
+
+
+def _opaque_field(path: tuple[str, ...]) -> bool:
+    return (
+        len(path) == 3
+        and ((path[0] == "workloads" and path[2] == "parameters")
+             or (path[0] == "targets" and path[2] == "labels"))
+    ) or (len(path) == 4 and path[0] == "targets" and path[2:] == ("build", "args"))
+
+
+def _normalize(value: object, base: Path, key: str = '', *, field_path: tuple[str, ...] = ()) -> object:
+    if _opaque_field(field_path):
+        # These maps belong to the workload or Docker, so their keys are literal.
+        literal = _JSON_VALUE.validate_python(value, strict=True)
+        json.dumps(literal, allow_nan=False)  # Reject nonfinite numbers at every depth.
+        return literal
     if isinstance(value, dict):
         if key == 'hold_tolerance' and 'fraction' in value:
             value = {**value, 'fraction': parse_quantity(value['fraction'], 'fraction')}
         if set(value) == {'env'}:
             if not isinstance(value['env'], str) or value['env'] not in os.environ:
                 raise ConfigError(f'missing environment reference: {value["env"]!r}')
-        return {k: _normalize(v, base, k) for k, v in value.items()}
+        return {k: _normalize(v, base, k, field_path=(*field_path, k)) for k, v in value.items()}
     if isinstance(value, list):
-        return [_normalize(v, base, key) for v in value]
+        return [_normalize(v, base, key, field_path=field_path) for v in value]
     if isinstance(value, float) and not math.isfinite(value):
         raise ConfigError('nonfinite number')
     if key in {'script', 'context', 'dockerfile', 'identity_file', 'workdir', 'dependencies', 'manifest'} and isinstance(value, str):
