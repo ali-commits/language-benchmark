@@ -64,13 +64,15 @@ def test_thresholds_must_be_finite_and_bounded(tmp_path, key, value):
         validate_config(c)
 
 
+@pytest.mark.parametrize("initial_hint", [None, 20000])
 def test_fixed_load_invokes_guarded_trials_once_without_search_or_confirmation(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, initial_hint
 ):
     import bench.user_capacity as module
 
     c = config(tmp_path)
     c["cells"] = ["go-net-http", "rust-axum"]
+    c["initial_failing_hint"] = initial_hint
     path = tmp_path / "config.json"
     path.write_text(json.dumps(c))
     calls = []
@@ -239,14 +241,16 @@ def test_resume_partial_new_policy_manifest_is_rerun_but_old_marker_refused(tmp_
 
 
 @pytest.mark.parametrize("experiment", ["capacity", "fixed-load"])
+@pytest.mark.parametrize("initial_hint", [None, 20000])
 def test_resume_completed_cell_ignores_failed_preflight_without_actual_proof(
-    tmp_path, monkeypatch, experiment
+    tmp_path, monkeypatch, experiment, initial_hint
 ):
     import bench.user_capacity as module
 
     c = config(tmp_path)
     c["cells"] = ["go-net-http"]
     c["experiment_type"] = experiment
+    c["initial_failing_hint"] = initial_hint
     p = tmp_path / "config.json"
     p.write_text(json.dumps(c))
     root = tmp_path / "results"
@@ -286,3 +290,73 @@ def test_completed_summary_without_valid_trial_references_is_rejected(tmp_path):
     )
     with pytest.raises(ValueError, match="valid trial references"):
         _completed_trial_references(tmp_path)
+
+
+def test_null_global_hint_passes_semantic_and_historical_wire_boundaries(tmp_path):
+    from bench.records import Campaign, TrialManifest, checked_record
+
+    c = config(tmp_path)
+    c["initial_failing_hint"] = None
+    validate_config(c)
+    assert checked_record(c, Campaign) is c
+    manifest = {"campaign": c, "trial": {"id": "original-0000"}}
+    assert checked_record(manifest, TrialManifest) is manifest
+    c["cell_starting_hints"] = {"go-net-http": {"start_users": 100, "initial_failing_hint": None}}
+    with pytest.raises(ValueError, match="cell_starting_hints initial_failing_hint"):
+        validate_config(c)
+
+
+@pytest.mark.parametrize("endpoint_present", [True, False])
+def test_majority_resume_rejects_bracket_without_failing_endpoint(
+    tmp_path, monkeypatch, endpoint_present
+):
+    import bench.user_capacity as module
+
+    c = config(tmp_path)
+    c["experiment_type"] = "capacity"
+    c["boundary_decision_policy"] = "majority-on-disagreement"
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps(c))
+    root = tmp_path / "results"
+    directory = root / "nonce-0000"
+    directory.mkdir(parents=True)
+    trial = {"id": directory.name, "cell": "go-net-http", "campaign_id": "nonce", "users": 100}
+    (directory / "manifest.json").write_text(
+        json.dumps(
+            {
+                "campaign": c,
+                "trial": trial,
+                "nofile": {"soft": 250000, "hard": 250000, "process_samples": 2},
+            }
+        )
+    )
+    (directory / "result.json").write_text(
+        json.dumps(
+            {
+                "status": "measured",
+                "reset_verified": True,
+                "trial": trial,
+            }
+        )
+    )
+    outcome = {"outcome": "pass", "trial_id": directory.name, "users": 100}
+    (directory / "capacity-outcome.json").write_text(json.dumps(outcome))
+    saved_result = {"status": "bracket_found", "passing_users": 100, "observations": [outcome]}
+    if endpoint_present:
+        saved_result["failing_users"] = None
+    results_path = root / "capacity-results.json"
+    results_path.write_text(json.dumps({"go-net-http": saved_result}))
+    original_results = results_path.read_bytes()
+    status_path = root / "capacity-status.json"
+    status_path.write_text(json.dumps({"status": "needs_attention"}))
+    monkeypatch.setenv("DATABASE_URL", "unused")
+    monkeypatch.setattr(module, "campaign_lock", lambda *_: nullcontext())
+    monkeypatch.setattr(module, "database_campaign_lock", lambda *_: nullcontext())
+    monkeypatch.setattr(
+        module, "run_trial", lambda *_: pytest.fail("inconsistent checkpoint reused")
+    )
+
+    with pytest.raises(ValueError, match="bracket.*failing endpoint"):
+        run_user_capacity(config_path, root, resume=True)
+    assert results_path.read_bytes() == original_results
+    assert json.loads(status_path.read_text())["status"] == "needs_attention"

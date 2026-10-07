@@ -531,6 +531,12 @@ def run_user_capacity(
                 for p in output_dir.glob("*/manifest.json")
             )
         if majority:
+            for saved_result in results.values():
+                if (
+                    saved_result.get("status") == "bracket_found"
+                    and saved_result.get("failing_users") is None
+                ):
+                    raise ValueError("saved capacity bracket has no failing endpoint")
             results = {
                 cell: r
                 for cell, r in results.items()

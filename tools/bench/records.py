@@ -236,7 +236,7 @@ class Campaign(TypedDict, total=False):
     fixed_users: list[int]
     boundary_decision_policy: str
     growth_strategy: str
-    initial_failing_hint: int
+    initial_failing_hint: int | None
     cell_starting_hints: dict[str, StartingHint]
     fixture: str
     credentials: str
