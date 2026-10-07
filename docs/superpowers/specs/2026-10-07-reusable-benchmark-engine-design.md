@@ -8,6 +8,8 @@ Turn this repository into a tool that other people can use to compare languages,
 frameworks, versions, and unrelated HTTP applications. Keep the social API as a
 bundled, reproducible workload. Ali selected this approach and explicitly requested
 user-defined fixed-load and stress tests, including user counts and durations.
+The revised design also includes arbitrary ordered ramp-up, reduction, hold and
+cooldown stages, and adaptive searches against latency or resource constraints.
 
 Deliver a versioned YAML configuration, a small CLI, portable execution, resumable
 editable queues, and accurate usage/results documentation. Retain uv. Work in the
@@ -86,8 +88,12 @@ workloads:
 defaults:
   environment: local
   workload: api
-  timing: {ramp: 5m, settle: 0s, sustain: 2m}
-  criteria: {success_rate: 0.90}
+  stages:
+    - {id: ramp, from: 0, to: target, duration: 5m, evaluate: false}
+    - {id: hold, from: target, to: target, duration: 2m, evaluate: true}
+    - {id: cooldown, from: target, to: 0, duration: 1m, evaluate: false}
+  criteria:
+    - {metric: operation_success, statistic: rate, operator: ">=", value: 0.90}
 
 jobs:
   - id: fixed-comparison
@@ -102,7 +108,8 @@ jobs:
     test:
       type: stress
       strategy: search
-      users: {min: 1, start: 1000, end: 10000}
+      users: {min: 1, start: 1000, max: auto}
+      limits: {max_trials: 40, max_elapsed: 8h}
       expansion_factor: 2
       resolution: 50
       confirmation: majority_on_disagreement
@@ -120,7 +127,7 @@ jobs:
 Examples shipped with the implementation must actually run with provided sample
 targets and scripts, replacing illustrative image names. `bench init` generates
 a small local demo; a separate social template selects the bundled API/fixture.
-Job-level timing, criteria, and environment override the corresponding defaults
+Job-level stages, criteria, and environment override the corresponding defaults
 by documented field rules, and `validate --show-effective` prints the result.
 
 ## Test semantics
@@ -128,8 +135,8 @@ by documented field rules, and `validate --show-effective` prints the result.
 ### Fixed load
 
 `users` accepts a positive integer or a nonempty list of unique positive integers.
-Each target/population pair gets a fresh trial with ramp, optional settling, and
-sustained measurement. Preserve the declared order. Repetitions are explicit and
+Each target/population pair gets a fresh trial executing the declared stages.
+The population binds the symbolic `target` in those stages. Preserve the declared order. Repetitions are explicit and
 all outcomes remain visible. A valid below-threshold result is recorded and the
 next population proceeds. Infrastructure-invalid runs have separate bounded
 retries and never count as application failures.
@@ -140,17 +147,30 @@ Run independent, reset trials at `start`, successive `step` increments, and `end
 Include `end` once even if the interval is not evenly divisible by `step`.
 `stop_on_failure` chooses between covering all loads and stopping at the first
 valid failing population. This is a load curve, not a continuous ramp across
-trials. Every population uses the configured timing and repetitions.
+trials. Every population uses the configured stages and repetitions.
 
 ### Stress search
 
-Treat `end` as a hard maximum. Validate `1 <= min <= start <= end`, factor > 1,
+Search maximizes candidate users while satisfying the selected metric constraints.
+`users.max` accepts a positive integer or `auto`; `start` is the first candidate,
+not a measured bound. An integer max is a hard user ceiling. With `auto`, the
+search expands its range geometrically until finding a valid failing population
+or exhausting explicit limits. Require positive `limits.max_trials` and
+`limits.max_elapsed` for all searches; optional `limits.hard_users` caps an auto
+search. Account-fixture capacity, calibrated generator capacity and executor
+limits also constrain actual probes. Preflight reports these ceilings; it never
+silently provisions more generators/accounts or raises resource limits.
+
+Validate `min >= 1`, start within configured user ceilings, expansion factor > 1,
 and positive resolution. Probe the start, expand geometrically when passing,
-or search downward toward `min` when failing. Never assume an unmeasured count
+or search downward toward min when failing. Never assume an unmeasured count
 passes. Bisect a measured bracket until failing minus passing <= resolution.
-Round/clamp integer candidates to guarantee progress; do not silently exceed end.
-Passing at end means a lower bound; failing at min with no passing count means
-capacity below the tested minimum, not a fabricated zero-user passing result.
+Round/clamp integer candidates to guarantee progress. A resource/user ceiling
+with no failure yields a lower bound with its limiting reason. Exhausting a time
+or probe budget yields an incomplete search with its measured bounds; neither is
+reported as the discovered peak. Failing at min without a passing count means
+capacity below the tested minimum. Limits include confirmation and invalid retry
+attempts; no new trial starts after the elapsed deadline, and cleanup always runs.
 
 Default confirmation preserves the current behavior: no extra passing repeats;
 repeat the candidate failing endpoint once, and run a third trial only when
@@ -163,26 +183,140 @@ single-observation policy for exploratory runs, labeled accordingly.
 Prior results can supply starting hints only. Reuse measured bounds/votes only
 within a matching immutable experiment identity. Timing, binary, workload,
 fixture, criteria or resource changes create a new experiment.
+Store execution identity separately from decision identity: the former covers
+the executed stages, binary, fixture, workload, resources and collection policy;
+the latter also includes criteria/objective and confirmation rules. This permits
+explicit reclassification of compatible raw samples without changing their
+original verdict or claiming that a different search was actually executed.
 
-### Duration and criteria
+### Arbitrary load stages
 
-Duration fields apply per trial: timed duration = ramp + settle + sustain.
-Report deployment, reset, readiness, drain and recovery time separately. Ramp
-and settle may be zero; sustain must be positive. Show a trial count and timing
-estimate before execution, identifying uncertain search/retry time.
+Stages are ordered, named linear transitions with explicit `from`, `to`, and
+`duration`. Equal endpoints hold a load; ascending endpoints ramp up; descending
+endpoints reduce load. Cooldown is a descending transition or a zero-user hold,
+not forced application shutdown. Each stage declares whether it contributes to
+criterion evaluation. All stages collect telemetry when available.
 
-Success is a workload-declared operation rate with an explicit denominator;
-missing samples are invalid, never 100% success. Allow success fractions in
-(0, 1], and optional named latency criteria such as p95/p99 ceilings. For the
-social workload, record operation success within the deadline and the distinct
-authenticated-account fraction separately. Generic workloads do not require an
-authentication gate. Criteria apply to sustained samples; phase labels exclude
-ramp, settle and drain. Raw phase data remain available for analysis.
+```yaml
+stages:
+  - {id: ramp-up, from: 0, to: target, duration: 3m, evaluate: false}
+  - {id: peak-hold, from: target, to: target, duration: 2m, evaluate: true}
+  - id: reduce
+    from: target
+    to: {fraction_of_target: 0.5}
+    duration: 1m
+    evaluate: false
+  - id: recovery-hold
+    from: {fraction_of_target: 0.5}
+    to: {fraction_of_target: 0.5}
+    duration: 2m
+    evaluate: false
+  - id: cooldown
+    from: {fraction_of_target: 0.5}
+    to: 0
+    duration: 1m
+    evaluate: false
+  - {id: idle-observation, from: 0, to: 0, duration: 30s, evaluate: false}
+```
+
+An endpoint accepts a nonnegative integer, `target`, or the structured
+`fraction_of_target` reference. Fractions must be finite in [0, 1]; resolve them
+using floor(target * fraction). No arbitrary expression evaluation. Adjacent
+resolved endpoints must agree. A positive first `from` is an explicitly recorded
+immediate starting load. Require positive stage durations and unique stage IDs.
+Validation prints concrete stage endpoints for each fixed population or search
+candidate. All stages run in one load session; user sessions and application state
+continue through reductions and holds. There is no fixture reset between stages.
+
+Fixed and sweep jobs may use absolute-only stages. A standalone `type: staged`
+job runs one absolute stage sequence without requiring a redundant users field.
+Search templates must contain an evaluated positive-duration hold at exactly
+`target`; no endpoint may exceed target. This makes the candidate the actual peak
+population. Absolute endpoints must remain feasible for every candidate down to
+min; reject incompatible templates before search. Observe recovery stages
+separately unless explicitly selected by criteria. At least one evaluated stage
+must generate operations for response criteria. Zero-user stages can evaluate
+resource/recovery metrics, but no-request periods cannot pass a response gate.
+
+Scheduled duration is the sum of all stages, with setup, restore, readiness and
+drain recorded separately. Reducing VUs stops scheduling work for retiring users
+and allows a bounded configured drain. Record requested and actual active users,
+interrupted journeys and achieved hold population. Use an explicit tolerance for
+hold occupancy; failure to achieve the configured load invalidates the probe.
+Record completion-time stage tags for operations and a separate start-stage tag
+for cross-boundary requests; never silently include post-schedule drain in a hold.
+
+### Metric constraints and search objectives
+
+Criteria select a metric, scope, statistic, stage window, operator and value with
+units. Typical constraints:
+
+```yaml
+criteria:
+  - {metric: operation_success, statistic: rate, operator: ">=", value: 0.90}
+  - {metric: operation_duration, statistic: p99, operator: "<=", value: 500ms}
+  - {metric: operation_duration, statistic: p50, operator: "<=", value: 100ms}
+  - {metric: memory_used, scope: backend_host, statistic: max, operator: "<=", value: 1GiB}
+  - {metric: cpu_used, scope: backend_host, statistic: mean, operator: "<=", value: 50%}
+```
+
+All criteria must pass when used together: this finds the highest measured user
+count satisfying all constraints. To find a separate boundary for each metric,
+use named objectives on a search job:
+
+```yaml
+objectives:
+  p99-limit:
+    - {metric: operation_duration, statistic: p99, operator: "<=", value: 500ms}
+  memory-limit:
+    - {metric: memory_used, scope: backend_host, statistic: max, operator: "<=", value: 1GiB}
+  cpu-limit:
+    - {metric: cpu_used, scope: backend_host, statistic: mean, operator: "<=", value: 50%}
+```
+
+Common job criteria apply to every objective; define a success floor there so a
+fast error response cannot falsely improve latency capacity. Without objectives,
+search one boundary for the common criteria. With objectives, search each in YAML
+order, recording separate bounds, votes and the binding constraint. Reuse eligible
+raw probes across objectives only when execution identity matches; reevaluate
+criteria from samples, never reuse a previous pass/fail label. Share the job's
+finite trial/time budget and keep uncompleted objectives explicit. Reanalysis of
+existing samples alone reports observed bounds, not an independently searched peak.
+
+Default criterion window is all stages marked evaluate; a criterion may instead
+select named stage IDs. Combine raw latency samples before calculating quantiles,
+never average per-stage p99 values. Success is successes / attempts. CPU mean is
+time-weighted over covered intervals; memory mean is time-weighted over gauge
+samples. Document quantile interpolation, interval attribution, minimum sample
+counts and required coverage. Resource `max` is a sampled peak, not a guarantee
+that no unsampled peak occurred. `backend_host` CPU normalizes to all VM CPUs;
+container CPU normalizes to its declared quota. RAM explicitly distinguishes host
+used-memory estimate, container working set, and database freeable memory.
+`1GB` is decimal and `1GiB` binary; the parser preserves that distinction.
+
+Latency metrics declare whether failures/timeouts are included. The bundled social
+workload retains timeout attempts in operation latency and reports success latency
+separately. Authentication coverage remains a distinct social criterion. Support
+success fractions in (0, 1], quantiles p0 through p100, mean, and max where meaningful
+for the declared metric type. Require compatible units and operators. Missing,
+stale, insufficient or nonfinite telemetry is invalid evidence, never a passing
+zero. Selecting a host/RDS metric makes its collector required even if the
+environment originally marked it optional. Validate collectors before load.
+
+Adaptive bisection assumes an approximately monotonic feasible region. CPU, memory
+and latency can violate that through garbage collection, queueing or rejected
+requests. Preserve contradictions, apply the configured confirmation policy, and
+report an unstable boundary when evidence remains nonmonotonic. Describe the
+output as an empirical boundary under the configured stages and measurement
+window, not a mathematical global maximum. Users can choose a sweep to inspect
+such behavior. Resource limits used as search criteria are distinct from Docker
+hard limits and from optional immediate safety-abort controls; an aborted trial
+must not become an ordinary full-window pass/fail vote.
 
 ## Workload and fixture lifecycle
 
 Provide a documented k6 module contract and example wrapper. The engine controls
-VU scheduling, phases, output destinations and timeouts; the user implements the
+VU stage scheduling, output destinations and timeouts; the user implements the
 journey and emits declared metrics. Validate the workload with a small explicit
 smoke command before a substantial run. Record script and dependency checksums.
 
@@ -306,7 +440,12 @@ Exclude credentials, dumps, personal host paths and private infrastructure confi
   Docker, without AWS credentials or a social database.
 - Two arbitrary image versions can be compared without modifying a language enum.
 - Fixed lists and sweeps schedule exactly the declared populations; search respects
-  min/end/resolution and records majority evidence without a fourth valid vote.
+  min/max/budgets/resolution and records majority evidence without a fourth valid vote.
+- Arbitrary stage sequences validate continuity, integer/fraction endpoint binding,
+  zero-user observation, actual-load tolerance, and clean cancellation on reduction.
+- Metric evaluation tests cover quantile aggregation, time-weighted CPU/RAM, scope
+  normalization, unit conversion, missing coverage, objective-specific votes,
+  shared probe reuse, nonmonotonic evidence and automatic range expansion.
 - Parser tests cover typos, duplicate YAML keys, secret refs, relative paths,
   duration/resource units and invalid test combinations.
 - Queue tests cover concurrent append/update/remove versus dispatch, stop/resume,
