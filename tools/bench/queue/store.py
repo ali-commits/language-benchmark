@@ -3,12 +3,14 @@
 import hashlib
 import json
 import sqlite3
+import tempfile
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from uuid import uuid4
 
 from tools.bench.engine.config import resolve_jobs
+from tools.bench.engine.targets import snapshot_build
 from tools.bench.engine.types import BenchmarkConfig, Job, ResolvedJob
 from tools.bench.engine.workloads import tree_checksums
 
@@ -42,25 +44,50 @@ def _json(value):
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
 
-def _inputs(jobs):
+def _file_identity(path):
+    if not path.exists():
+        return None
+    return hashlib.sha256(str(path.stat().st_mode).encode() + b"\0" + path.read_bytes()).hexdigest()
+
+
+def _inputs(jobs, state_path):
     paths = set()
+    builds = {}
     for job in jobs:
         paths.update([job.workload.script, *job.workload.dependencies])
         if job.workload.fixture and job.workload.fixture.manifest:
             paths.add(job.workload.fixture.manifest)
         if job.target.build:
-            paths.add(job.target.build.context)
-            if job.target.build.dockerfile:
-                paths.add(job.target.build.dockerfile)
+            build = job.target.build
+            builds[build.model_dump_json()] = build
     result = {}
+    for key, build in sorted(builds.items()):
+        source = build.context.resolve()
+        dockerfile = (build.dockerfile or source / "Dockerfile").resolve()
+        specific = Path(str(dockerfile) + ".dockerignore")
+        # Bind both candidates' presence and content, even when rules currently
+        # select identical input sets. A newly created specific file changes precedence.
+        policies = {str(p): _file_identity(p) for p in (specific, source / ".dockerignore")}
+        with tempfile.TemporaryDirectory(prefix="bench-queue-inputs-") as directory:
+            snapshot = snapshot_build(build, Path(directory) / "snapshot")
+            if source == state_path or source in state_path.parents:
+                relative = state_path.relative_to(source).as_posix()
+                if any(
+                    name == relative or name.startswith(relative + "-")
+                    for name in snapshot.checksums
+                ):
+                    raise QueueConflict(
+                        "queue control state is included in Docker build inputs; exclude its state directory using the effective Docker ignore file or move queue state outside the build context"
+                    )
+            result["build:" + key] = {"identity": snapshot.identity, "ignore_policies": policies}
     for path in sorted(paths):
         path = path.resolve()
         if path.is_dir():
             result[str(path)] = tree_checksums(path)
         else:
-            result[str(path)] = hashlib.sha256(
-                str(path.stat().st_mode).encode() + b"\0" + path.read_bytes()
-            ).hexdigest()
+            if not path.exists():
+                raise QueueConflict("frozen input missing")
+            result[str(path)] = _file_identity(path)
     return result
 
 
@@ -158,7 +185,7 @@ class QueueStore:
                     "pending",
                     job.model_dump_json(by_alias=True),
                     _json([j.model_dump(mode="json", by_alias=True) for j in resolved]),
-                    _json(_inputs(resolved)),
+                    _json(_inputs(resolved, self.path)),
                 ),
             )
         except sqlite3.IntegrityError as exc:
@@ -216,7 +243,7 @@ class QueueStore:
                 (
                     replacement.model_dump_json(by_alias=True),
                     _json([j.model_dump(mode="json", by_alias=True) for j in resolved]),
-                    _json(_inputs(resolved)),
+                    _json(_inputs(resolved, self.path)),
                     revision,
                     queue,
                     job_id,
@@ -266,7 +293,7 @@ class QueueStore:
                 ResolvedJob.model_validate_json(_json(j)) for j in json.loads(row["resolved"])
             )
             try:
-                actual = _inputs(resolved)
+                actual = _inputs(resolved, self.path)
             except OSError as exc:
                 raise QueueConflict("frozen input missing") from exc
             if actual != json.loads(row["inputs"]):

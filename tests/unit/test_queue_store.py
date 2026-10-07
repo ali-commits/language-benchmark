@@ -169,3 +169,65 @@ def test_multi_target_logical_definition_and_source_independence(tmp_path):
     claimed = store.claim_next("test", "owner")
     assert claimed.definition.targets == ["app", "second"]
     assert [j.target_name for j in claimed.resolved_jobs] == ["app", "second"]
+
+
+@pytest.mark.skipif(
+    __import__("os").environ.get("BENCH_INTEGRATION") != "1", reason="native BuildKit required"
+)
+def test_native_ignored_queue_state_does_not_invalidate(tmp_path):
+    cfg = config(tmp_path)
+    (tmp_path / "Dockerfile").write_text("FROM scratch\nCOPY . /\n")
+    (tmp_path / ".dockerignore").write_text(".bench\nignored.log\n")
+    cfg.source.write_text(
+        cfg.source.read_text().replace("app: {image: example:1}", "app: {build: {context: .}}")
+    )
+    cfg = load_config(cfg.source)
+    store = QueueStore(tmp_path / ".bench" / "queue.db")
+    store.register(cfg)
+    (tmp_path / "ignored.log").write_text("runtime output")
+    assert store.claim_next("test", "owner").job_id == "one"
+
+
+@pytest.mark.skipif(
+    __import__("os").environ.get("BENCH_INTEGRATION") != "1", reason="native BuildKit required"
+)
+@pytest.mark.parametrize("initial", ["absent", "present", "deleted"])
+def test_external_dockerfile_ignore_policy_frozen(tmp_path, initial):
+    from tools.bench.engine.types import Build, Target
+
+    source = tmp_path / "source"
+    source.mkdir()
+    cfg = config(source)
+    dockerfile = tmp_path / "Customfile"
+    dockerfile.write_text("FROM scratch\nCOPY . /\n")
+    ignore = tmp_path / "Customfile.dockerignore"
+    if initial != "absent":
+        ignore.write_text("nothing-matches\n")
+    cfg = cfg.model_copy(
+        update={"targets": {"app": Target(build=Build(context=source, dockerfile=dockerfile))}}
+    )
+    store = QueueStore(tmp_path / "queue.db")
+    store.register(cfg)
+    if initial == "deleted":
+        ignore.unlink()
+    else:
+        ignore.write_text("another-pattern-that-does-not-match\n")
+    with pytest.raises(QueueConflict, match="input"):
+        store.claim_next("test", "owner")
+    assert store.jobs("test")[0].state == "pending"
+
+
+@pytest.mark.skipif(
+    __import__("os").environ.get("BENCH_INTEGRATION") != "1", reason="native BuildKit required"
+)
+def test_included_queue_state_rejected_before_registration(tmp_path):
+    from tools.bench.engine.types import Build, Target
+
+    cfg = config(tmp_path)
+    (tmp_path / "Dockerfile").write_text("FROM scratch\nCOPY . /\n")
+    cfg = cfg.model_copy(update={"targets": {"app": Target(build=Build(context=tmp_path))}})
+    store = QueueStore(tmp_path / ".bench" / "queue.db")
+    with pytest.raises(QueueConflict, match="control state"):
+        store.register(cfg)
+    with store._connection() as conn:
+        assert conn.execute("SELECT COUNT(*) FROM queues").fetchone()[0] == 0
