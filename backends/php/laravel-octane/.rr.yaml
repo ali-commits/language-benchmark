@@ -1,0 +1,15 @@
+version: '3'
+server:
+  relay: pipes
+http:
+  # Bound pending work rather than allowing unbounded engine queue growth.
+  max_request_size: 1
+  pool:
+    num_workers: 20
+    max_jobs: 10000
+    max_queue_size: 10000
+    allocate_timeout: 30s
+    destroy_timeout: 30s
+logs:
+  level: warn
+  mode: production

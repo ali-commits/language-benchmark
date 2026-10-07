@@ -1,0 +1,138 @@
+{
+  "verified_at_utc": "2026-10-07T03:03:32.622665+00:00",
+  "runtime": "PHP 8.5.11",
+  "framework": "Laravel 13.35.0 / Octane 2.21.0",
+  "engine": "RoadRunner 2025.1.15",
+  "composer": "2.10.3",
+  "dependencies": {
+    "laravel/framework": "13.35.0",
+    "laravel/octane": "2.21.0",
+    "spiral/roadrunner-http": "4.1.0",
+    "spiral/roadrunner-cli": "2.7.2"
+  },
+  "pinned_bases": {
+    "php": "php:8.5.11-cli-bookworm@sha256:819080ed413631f6ec564184dd9acd08d9425bd863b9f8b5876b5ea2147d55e7",
+    "roadrunner": "ghcr.io/roadrunner-server/roadrunner:2025.1.15@sha256:18378c1313a71ce1c3cfc493c99e75c189ef5fb2eaf85290b8a99080fcb0f64f",
+    "composer": "composer:2.10.3@sha256:af98f42dfff7c68ba8d53c2164fd9fde1087b7d449514baa38c418b1f6bc4bac"
+  },
+  "image": "lb-php-laravel-octane:8.5.11",
+  "local_verified_config_id": "sha256:03839e2220676faa9e1b1307d0d43c1c8b62afd64fbec0c99b5b634e8574a561",
+  "ordered_rootfs_diff_ids": [
+    "sha256:e58989146fcec76699871403b9897b5c014af1ccd85f5a9300a215e7975525d7",
+    "sha256:d3e816cf17cc6800f6826b461820681baed9fe77361286d5b2a1bcd1fcacdbde",
+    "sha256:664b223ae8ef5dca9abd03b2808598ca45d2a77193148fb33d9f0cb742c92159",
+    "sha256:06cfacc3f895fd3c69fff82c6950ca89275592e835e0d3d5a3fd4d6b2317b5d0",
+    "sha256:e7beaa099e5af5bf53b7905a5e33f65dfe52a2300881874e7e7e8e8934951fc7",
+    "sha256:a908e5b95b918d387fd27da7aabef718610ef94808b12770dc7b7cabfa4da362",
+    "sha256:1ca07bea4fb812325475dff76aaf0f6f5dd5d08e4fd26b4d6b8775b6b511293e",
+    "sha256:0c185ba72f906b4aac9b603b2a6805af87ad271dd9dbe07fd43ec10d86726aab",
+    "sha256:c4b1f34089520f16412f6e903782ef7b65917a6f340f0bdeb5c6f4094f277953",
+    "sha256:02c492e7f912207ba085a3c453336bc391b12b3116ec95f5fb0cd852f20eb379",
+    "sha256:68c0c198cf7069545b9b3d9641994c3224952f7e80610e5a6423c923bab1b500",
+    "sha256:da30e6aad2287fcfa39c1172377466cf5e6c29671d1f00c3efbdc57f2f851eb3",
+    "sha256:a354c62140f8e02f6f19647269627e5baae2cb98cc9128b26a1ad283e29d5e59",
+    "sha256:3dab8913e9375032700afb6d30d78624cc434cdb415d47203fd24ab8cba87f82",
+    "sha256:50d02bbc06529e1f7add71dd744ee7f4b99042136d4d2ac3b2cd267800e05043",
+    "sha256:dcf1ef3880856f4fffbe8e7b099cc42dc9d3c32f3a9336cf4f50529b38eea463",
+    "sha256:88d29086841825da804d67a2b13255a4e0db1a3e0331095fcf12aacc215f7db2",
+    "sha256:d5f97a91ace840f20d9294ff67d88036e202202c5df09abaaecf515aa7c03904",
+    "sha256:7bb91c1fc20d22e65eba75215d5250890bc2923701c0228eb3ac11363828a343",
+    "sha256:244a860d0586c477d17b1c99220150a7d2d7d94965ee8b75e8750baabbd9bb8d",
+    "sha256:cd204ab249a6bbb5b01944d1f7186028616c35ce25309bacef50cdfd1e6d6e8b",
+    "sha256:0ea740c7f66bdf8bdd88f589835bdecdb9055ade24a35019aa814cd05110a2cc",
+    "sha256:94bf466f73bf85de8b3157dc1f73ad120ff10fe9dbc8f0ef018cdd0fd343c1ce"
+  ],
+  "os": "linux",
+  "architecture": "amd64",
+  "content_fingerprint_sha256": "f63171bd479536e9c7425fb214e897e3d7afd20eb52a5f1bb71b0c9cd3619732",
+  "canonical_fingerprint_definition": "SHA256 of compact sort_keys JSON: {RootFS: full inspect RootFS object, Os, Architecture, Config: {Entrypoint,Cmd,Env,User,WorkingDir,Labels}}; UTF-8; Env intentionally omitted from displayed proof",
+  "safe_config": {
+    "Entrypoint": [
+      "/app/start.sh"
+    ],
+    "Cmd": null,
+    "User": "www-data",
+    "WorkingDir": "/app",
+    "Labels": {
+      "org.language-benchmark.connections-per-worker": "1",
+      "org.language-benchmark.framework": "laravel-octane",
+      "org.language-benchmark.framework-version": "2.21.0",
+      "org.language-benchmark.language": "php",
+      "org.language-benchmark.runtime-version": "8.5.11",
+      "org.language-benchmark.workers": "20"
+    }
+  },
+  "composer_lock_sha256": "9e4e5c766cce89d96f2d300b1276e45f3a68c9d5be47d28b46f03d9f0003fc38",
+  "http_contract_tests": {
+    "plain_passed": 62,
+    "verified_tls_passed": 62,
+    "wrong_tls_hostname_rejected": true
+  },
+  "native_tests": {
+    "cached_connection_reuse": true,
+    "transaction_rollback": true,
+    "abandoned_request_cleanup": true,
+    "safe_read_reconnect": true,
+    "media_mutation_guards": true,
+    "alternating_user_requests": 400,
+    "physical_connection_cap_observed": 20,
+    "workers_observed": 20,
+    "global_hash_slots": 2,
+    "argon2id": {
+      "memory_kib": 65536,
+      "iterations": 3,
+      "parallelism": 1,
+      "salt_bytes": 16,
+      "hash_bytes": 32
+    }
+  },
+  "resources": {
+    "workers": 20,
+    "cpu_max": "200000 100000",
+    "memory_max": "3221225472",
+    "swap_max": "0",
+    "opcache_cli": "1",
+    "jit": "0"
+  },
+  "comparison_notes": [
+    "Original FPM code and registry unchanged.",
+    "Laravel 13.35.0 is one patch newer than original FPM Laravel13.34.0; topology comparison includes that dependency difference.",
+    "Login releases logical checkout before hashing; physical connection stays idle and cached.",
+    "No production benchmark result is claimed by local verification."
+  ],
+  "artifacts": [
+    "artifacts/octane-verification/build-final.log",
+    "artifacts/octane-verification/plain-contract-final.log",
+    "artifacts/octane-contract-tls-release/verification.json",
+    "artifacts/octane-contract-tls-release/php-laravel-octane/pytest.log",
+    "artifacts/octane-verification/persistence-final.log",
+    "artifacts/octane-verification/http-persistence-final.log",
+    "artifacts/octane-verification/hash-slots-final.log",
+    "artifacts/octane-verification/resources-final.json"
+  ],
+  "upstream_sources": [
+    "https://www.php.net/releases/",
+    "https://repo.packagist.org/p2/laravel/framework.json",
+    "https://repo.packagist.org/p2/laravel/octane.json",
+    "https://repo.packagist.org/p2/spiral/roadrunner-http.json",
+    "https://repo.packagist.org/p2/spiral/roadrunner-cli.json",
+    "https://github.com/roadrunner-server/roadrunner/releases/tag/v2025.1.15",
+    "https://laravel.com/framework/docs/13.x/octane",
+    "https://docs.roadrunner.dev/docs/php-worker/worker"
+  ],
+  "export": {
+    "path": "/tmp/lb-php-octane.tar.gz",
+    "bytes": 251999861,
+    "sha256": "64b722be61f1572a66ebc51b155aa48004e42e584f40c08243d75fe4ac718b32"
+  },
+  "artifact_sha256": {
+    "artifacts/octane-verification/build-final.log": "3f848c99716db075225be3a1c7f421ffec468e8eb5ee9d417bb614e79ee3ab51",
+    "artifacts/octane-verification/plain-contract-final.log": "029e491fd770da3488593052209916fe0f4e7b8d1b25fa23da1a590d34f13355",
+    "artifacts/octane-contract-tls-release/verification.json": "6e133b4a6273bde9db2e4ad6a1b36b4da64265e3b120890dd3b9f1e98a1872a2",
+    "artifacts/octane-contract-tls-release/php-laravel-octane/pytest.log": "3603e7fa92a0e94929cd1a7b0ede3bb8d2c8af58f76adbf171dbf570271570b3",
+    "artifacts/octane-verification/persistence-final.log": "5d5e39dc829e85fa3b5c55c645543d9e1ad29d1f73be01700369801d24cd137f",
+    "artifacts/octane-verification/http-persistence-final.log": "d8858621499183bc8137da2e249c606b01845fdd90998d846a668bf84ce03d59",
+    "artifacts/octane-verification/hash-slots-final.log": "cb7e95d848336bd047f1653ce3137a358529f705c63f5581be0ef1534dadbc59",
+    "artifacts/octane-verification/resources-final.json": "a2440c1823415d519c8707089b619244fecd52df31919ebefa0d4a76e19e068c"
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "budget": {
+    "cpus": 2,
+    "memory_bytes": 3221225472,
+    "swap_bytes": 0,
+    "database_connections": 20
+  },
+  "verified_at": "2026-10-07",
+  "status": "local-verified",
+  "cells": [
+    {
+      "id": "php-laravel-octane",
+      "language": "php",
+      "runtime_version": "8.5.11",
+      "framework": "laravel-octane",
+      "framework_version": "2.21.0",
+      "image": "lb-php-laravel-octane:8.5.11",
+      "dockerfile": "backends/php/laravel-octane/Dockerfile",
+      "workers": 20,
+      "connections_per_worker": 1,
+      "topology": "Laravel13.35.0/Octane2.21.0/RoadRunner2025.1.15;20 persistent workers x1 cached PDO;OPcacheCLI;shared hash slots2",
+      "upstream": "https://www.php.net/releases/"
+    }
+  ]
+}
