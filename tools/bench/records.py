@@ -7,21 +7,23 @@ known fields; operational guards remain in their original callers.
 
 from __future__ import annotations
 
-from datetime import datetime
-from typing import TypeVar, cast
-from functools import lru_cache
 from collections.abc import Hashable
+from datetime import datetime
+from functools import lru_cache
+from typing import TypeVar, cast
 
 from pydantic import TypeAdapter
-from typing_extensions import TypeForm, TypedDict
+from typing_extensions import TypedDict, TypeForm
 
-JSONValue = str | int | float | bool | None | list['JSONValue'] | dict[str, 'JSONValue']
-T = TypeVar('T')
+JSONValue = str | int | float | bool | None | list["JSONValue"] | dict[str, "JSONValue"]
+T = TypeVar("T")
 
 
 def checked_record(value: object, schema: TypeForm[T]) -> T:
     """Validate known wire fields strictly, preserving original extra metadata."""
-    adapter: TypeAdapter[object] = _adapter(schema) if isinstance(schema, Hashable) else TypeAdapter(schema)
+    adapter: TypeAdapter[object] = (
+        _adapter(schema) if isinstance(schema, Hashable) else TypeAdapter(schema)
+    )
     adapter.validate_python(value, strict=True)
     # The schema checked above establishes the exact target record. Preserve the
     # original mapping because TypedDict adapters intentionally drop unknown keys.
@@ -174,8 +176,16 @@ class Handoff(TypedDict, total=False):
 
 
 # "from" is a Python keyword but remains the historical serialized key.
-DecisionHandoff = TypedDict('DecisionHandoff', {'from': str, 'to': str, 'reason': str, 'measurement_identity_sha256': str}, total=False)
-ResolutionHandoff = TypedDict('ResolutionHandoff', {'from': int, 'to': int, 'reason': str, 'measurement_identity_sha256': str}, total=False)
+DecisionHandoff = TypedDict(
+    "DecisionHandoff",
+    {"from": str, "to": str, "reason": str, "measurement_identity_sha256": str},
+    total=False,
+)
+ResolutionHandoff = TypedDict(
+    "ResolutionHandoff",
+    {"from": int, "to": int, "reason": str, "measurement_identity_sha256": str},
+    total=False,
+)
 
 
 class BaselinePolicy(TypedDict, total=False):

@@ -1,17 +1,14 @@
 """Run stateful concurrent-user probes with guarded resets and bracket confirmation."""
 
-from collections.abc import Callable
-from typing import Literal
-from pydantic import TypeAdapter
-from .records import (Campaign, Trial, TrialResult, TrialManifest, Outcome, CapacityResult, ConfirmationPolicy, Decision, checked_record)
-
 import json
 import math
 import os
 import time
 import uuid
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Literal
 
 from .capacity import search_capacity
 from .control import qualified_cache, recover_hosts, retry_probe
@@ -27,6 +24,17 @@ from .majority import (
 )
 from .manifest import atomic_json
 from .profiles import PROFILES, methodology, normalize_config
+from .records import (
+    Campaign,
+    CapacityResult,
+    ConfirmationPolicy,
+    Decision,
+    Outcome,
+    Trial,
+    TrialManifest,
+    TrialResult,
+    checked_record,
+)
 from .report import generator_flags
 from .runner import campaign_lock, database_campaign_lock, run_trial
 from .telemetry import rds_metrics, validate_rds_evidence
@@ -62,7 +70,18 @@ def validate_config(c: Campaign) -> None:
         raise ValueError("unknown benchmark profile")
     if c.get("mode") not in ("local", "aws") or not c.get("cells"):
         raise ValueError("mode and runtime cells required")
-    positive_keys: tuple[Literal["start_users", "step_users", "max_users", "resolution_users", "ramp_seconds", "hold_seconds", "timeout_seconds"], ...] = (
+    positive_keys: tuple[
+        Literal[
+            "start_users",
+            "step_users",
+            "max_users",
+            "resolution_users",
+            "ramp_seconds",
+            "hold_seconds",
+            "timeout_seconds",
+        ],
+        ...,
+    ] = (
         "start_users",
         "step_users",
         "max_users",
@@ -98,7 +117,10 @@ def validate_config(c: Campaign) -> None:
         raise ValueError("invalid response target/confirmations")
     if "confirmation_policy" in c:
         policy = c["confirmation_policy"]
-        confirmation_keys: tuple[Literal["passing_repeats", "failing_repeats"], ...] = ("passing_repeats", "failing_repeats")
+        confirmation_keys: tuple[Literal["passing_repeats", "failing_repeats"], ...] = (
+            "passing_repeats",
+            "failing_repeats",
+        )
         if (
             not isinstance(policy, dict)
             or set(policy) != {"passing_repeats", "failing_repeats", "stop_on_contradiction"}
@@ -261,7 +283,9 @@ def next_start_users(previous: CapacityResult | None, default: int) -> int:
     return default
 
 
-def cell_starting_points(c: Campaign, cell: str, previous: CapacityResult | None, previous_upper: int | None) -> tuple[int, int | None]:
+def cell_starting_points(
+    c: Campaign, cell: str, previous: CapacityResult | None, previous_upper: int | None
+) -> tuple[int, int | None]:
     hint = c.get("cell_starting_hints", {}).get(cell)
     if hint is not None:
         return hint["start_users"], hint.get("initial_failing_hint")
@@ -276,12 +300,17 @@ def invalid_boundary(result: CapacityResult) -> bool:
     )
 
 
-def confirm_boundary(probe: Callable[[int], Outcome], result: CapacityResult, policy: ConfirmationPolicy) -> None:
+def confirm_boundary(
+    probe: Callable[[int], Outcome], result: CapacityResult, policy: ConfirmationPolicy
+) -> None:
     result["confirmation_policy"] = policy.copy()
     confirmations: dict[str, list[Outcome]] = {}
     result["confirmations"] = confirmations
     contradictory = False
-    endpoints: tuple[tuple[Literal["passing_users", "failing_users"], str], ...] = (("passing_users", "pass"), ("failing_users", "fail"))
+    endpoints: tuple[tuple[Literal["passing_users", "failing_users"], str], ...] = (
+        ("passing_users", "pass"),
+        ("failing_users", "fail"),
+    )
     for bound, expected in endpoints:
         users = result[bound]
         repeats = policy["passing_repeats" if bound == "passing_users" else "failing_repeats"]
@@ -369,7 +398,13 @@ def run_user_capacity(
 ) -> dict[str, CapacityResult]:
     c = normalize_config(checked_record(json.loads(config_path.read_text()), Campaign))
     validate_config(c)
-    c.update({'operation': "user-journey", 'warmup_seconds': 0, 'measure_seconds': c["ramp_seconds"] + c["settle_seconds"] + c["hold_seconds"]})
+    c.update(
+        {
+            "operation": "user-journey",
+            "warmup_seconds": 0,
+            "measure_seconds": c["ramp_seconds"] + c["settle_seconds"] + c["hold_seconds"],
+        }
+    )
     c.setdefault(
         "confirmation_policy",
         {
@@ -392,7 +427,11 @@ def run_user_capacity(
         for manifest_path in manifests:
             stored = checked_record(json.loads(manifest_path.read_text()), TrialManifest)
             result_path = manifest_path.with_name("result.json")
-            measured: TrialResult = checked_record(json.loads(result_path.read_text()), TrialResult) if result_path.exists() else {}
+            measured: TrialResult = (
+                checked_record(json.loads(result_path.read_text()), TrialResult)
+                if result_path.exists()
+                else {}
+            )
             reusable = (
                 measured.get("status") == "measured" and measured.get("reset_verified") is True
             ) or stored.get("trial", {}).get("id") in references
@@ -469,7 +508,11 @@ def run_user_capacity(
     ):
         if resume:
             results_file = output_dir / results_filename
-            results = checked_record(json.loads(results_file.read_text()), dict[str, CapacityResult]) if results_file.exists() else {}
+            results = (
+                checked_record(json.loads(results_file.read_text()), dict[str, CapacityResult])
+                if results_file.exists()
+                else {}
+            )
             for path in output_dir.glob("*/result.json"):
                 if backend_validity_flags(path.parent):
                     bad_cell = json.loads(path.read_text()).get("trial", {}).get("cell")
@@ -494,7 +537,8 @@ def run_user_capacity(
                 if r.get("status") != "unstable_boundary"
                 and not (
                     r.get("status") == "bracket_found"
-                    and r["failing_users"] is not None and r["failing_users"] - r["passing_users"] > c["resolution_users"]
+                    and r["failing_users"] is not None
+                    and r["failing_users"] - r["passing_users"] > c["resolution_users"]
                 )
             }
         ledger_cells: dict[str, dict[str, Decision]] = {}
@@ -618,9 +662,14 @@ def run_user_capacity(
                 )
                 # Search is exploratory; repeated endpoints determine whether the bracket is stable.
                 if result["status"] == "bracket_found":
-                    boundary_keys: tuple[Literal["passing_users", "failing_users"], ...] = ("passing_users", "failing_users")
+                    boundary_keys: tuple[Literal["passing_users", "failing_users"], ...] = (
+                        "passing_users",
+                        "failing_users",
+                    )
                     result["prior_endpoint_trials"] = {
-                        bound: prior_trials.get((cell, bound_population), []) if (bound_population := result[bound]) is not None else []
+                        bound: prior_trials.get((cell, bound_population), [])
+                        if (bound_population := result[bound]) is not None
+                        else []
                         for bound in boundary_keys
                     }
                     confirm_boundary(probe, result, c["confirmation_policy"])

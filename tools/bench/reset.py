@@ -26,9 +26,7 @@ def mark_database(dsn: str, allowed_database: str) -> str:
             "INSERT INTO benchmark_identity(singleton,identity) VALUES (true,%s) ON CONFLICT DO NOTHING",
             (identity,),
         )
-        row = c.execute(
-            "SELECT identity::text FROM benchmark_identity WHERE singleton"
-        ).fetchone()
+        row = c.execute("SELECT identity::text FROM benchmark_identity WHERE singleton").fetchone()
         if row is None or not isinstance(row[0], str):
             raise ValueError("database identity is missing or invalid")
         return row[0]

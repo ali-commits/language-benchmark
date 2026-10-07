@@ -1,11 +1,11 @@
 """Build locked source images and applications. Smoke images cannot pass measured preflight."""
 
-from tools.bench.records import RuntimeLock, checked_record
-
 import argparse
 import json
 import subprocess
 from pathlib import Path
+
+from tools.bench.records import RuntimeLock, checked_record
 
 p = argparse.ArgumentParser()
 p.add_argument("--version", action="append")

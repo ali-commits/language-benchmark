@@ -1,18 +1,16 @@
 """Private k6 inputs: real tokens, known mutation pairs, and nonfirst-page cursors."""
 
-from typing import TypeVar
-from typing_extensions import TypedDict
-
-from pydantic import TypeAdapter
-from .records import Credential, Actor, LoadToken, LoadMetadata, checked_record
-
 import json
 import os
 import time
 from pathlib import Path
+from typing import TypeVar
 
 import httpx
 import psycopg
+from typing_extensions import TypedDict
+
+from .records import Actor, Credential, LoadMetadata, LoadToken, checked_record
 
 
 class FeedCursor(TypedDict):

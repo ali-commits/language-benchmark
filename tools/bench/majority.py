@@ -1,13 +1,12 @@
 """Audited decision-only majority votes; measurement evidence remains immutable."""
 
-from collections.abc import Callable, Mapping
-from .records import Campaign, Outcome, CapacityResult, Decision
-
 import hashlib
 import json
 from collections import Counter
+from collections.abc import Callable, Mapping
 
 from .profiles import normalize_config
+from .records import Campaign, CapacityResult, Decision, Outcome
 
 POLICY = "majority-on-disagreement"
 MEASUREMENT_KEYS = (
@@ -67,11 +66,14 @@ def projected_config(original: Campaign, new: Campaign) -> Campaign:
             or resolution_receipt.get("from") != 100
             or type(resolution_receipt.get("to")) is not int
             or resolution_receipt.get("to") != 50
-            or resolution_receipt.get("measurement_identity_sha256") != measurement_identity(previous)
+            or resolution_receipt.get("measurement_identity_sha256")
+            != measurement_identity(previous)
             or not isinstance(resolution_receipt.get("reason"), str)
             or not resolution_receipt["reason"].strip()
         ):
-            raise ValueError("resolution change requires audited 100-to-50 handoff resolution_receipt")
+            raise ValueError(
+                "resolution change requires audited 100-to-50 handoff resolution_receipt"
+            )
         # Older queue/decision receipts attest the complete pre-refinement config.
         current = previous
     if measurement_identity(old) == measurement_identity(current):
@@ -87,10 +89,14 @@ def projected_config(original: Campaign, new: Campaign) -> Campaign:
     added = set(after[len(before) :])
     projected = current.copy()
     projected["cells"] = before
-    projected["cell_starting_hints"] = {k: v for k, v in current.get("cell_starting_hints", {}).items() if k not in added}
+    projected["cell_starting_hints"] = {
+        k: v for k, v in current.get("cell_starting_hints", {}).items() if k not in added
+    }
     if "cell_starting_hints" not in old and not projected["cell_starting_hints"]:
         projected.pop("cell_starting_hints", None)
-    projected["expected_image_ids"] = {k: v for k, v in current.get("expected_image_ids", {}).items() if k not in added}
+    projected["expected_image_ids"] = {
+        k: v for k, v in current.get("expected_image_ids", {}).items() if k not in added
+    }
     if "expected_image_ids" not in old and not projected["expected_image_ids"]:
         projected.pop("expected_image_ids", None)
     if (
@@ -129,7 +135,12 @@ def validate_decision_handoff(original: Campaign, new: Campaign) -> Campaign:
 
 
 class Consensus:
-    def __init__(self, probe: Callable[[int], Outcome] | None, existing: Mapping[int, list[Outcome]], persist: Callable[[dict[str, Decision]], None] | None) -> None:
+    def __init__(
+        self,
+        probe: Callable[[int], Outcome] | None,
+        existing: Mapping[int, list[Outcome]],
+        persist: Callable[[dict[str, Decision]], None] | None,
+    ) -> None:
         self.probe = probe
         self.votes: dict[int, list[Outcome]] = {}
         self.invalid: list[Outcome] = []
@@ -215,7 +226,9 @@ class Consensus:
         fails = [n for n, value in decisions.items() if value == "fail"]
         lower = max(passes, default=0)
         upper = min((n for n in fails if n > lower), default=None)
-        observations: list[Outcome] = [{"users": n, **i} for n, items in self.votes.items() for i in items]
+        observations: list[Outcome] = [
+            {"users": n, **i} for n, items in self.votes.items() for i in items
+        ]
         return {
             "status": status,
             "passing_users": lower,

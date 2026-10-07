@@ -1,14 +1,22 @@
 """Threshold analysis of observed valid populations, never an exact capacity estimate."""
 
-from collections.abc import Iterable
-from .records import Campaign, Methodology, Outcome, TrialSummary, Observation, ObservedBound, AnalysisReport, checked_record
-
 import json
 import math
 from collections import defaultdict
+from collections.abc import Iterable
 from pathlib import Path
 
 from .journeys import classify_journey
+from .records import (
+    AnalysisReport,
+    Campaign,
+    Methodology,
+    Observation,
+    ObservedBound,
+    Outcome,
+    TrialSummary,
+    checked_record,
+)
 
 DEFAULT_THRESHOLDS = (0.90, 0.95, 0.99, 0.999)
 
@@ -81,7 +89,9 @@ def backend_log_flags(artifact: Path) -> list[str]:
     )
 
 
-def _compact_observation(item: Outcome, cell: str, source: Path, users: int | None = None) -> Observation:
+def _compact_observation(
+    item: Outcome, cell: str, source: Path, users: int | None = None
+) -> Observation:
     metrics = item.get("metrics", {})
     users = item.get("users", users)
     trial = item.get("trial_id", "")
@@ -99,7 +109,13 @@ def _compact_observation(item: Outcome, cell: str, source: Path, users: int | No
     seconds = method.get("hold_seconds")
     enriched = metrics.copy()
     if seconds:
-        enriched.update({'steady_seconds': seconds, 'attempted_operations_s': metrics.get("attempted", 0) / seconds, 'successful_operations_s': metrics.get("succeeded", 0) / seconds})
+        enriched.update(
+            {
+                "steady_seconds": seconds,
+                "attempted_operations_s": metrics.get("attempted", 0) / seconds,
+                "successful_operations_s": metrics.get("succeeded", 0) / seconds,
+            }
+        )
     return {
         "id": trial,
         "campaign": item.get(
@@ -170,7 +186,11 @@ def load_observations(path: Path) -> list[Observation]:
     return rows
 
 
-def analyze_observations(rows: list[Observation], thresholds: Iterable[float | str] | None = None, authentication_threshold: float | str | None = None) -> AnalysisReport:
+def analyze_observations(
+    rows: list[Observation],
+    thresholds: Iterable[float | str] | None = None,
+    authentication_threshold: float | str | None = None,
+) -> AnalysisReport:
     parsed_thresholds = [
         validate_threshold(value)
         for value in (DEFAULT_THRESHOLDS if thresholds is None else thresholds)

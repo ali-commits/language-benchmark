@@ -1,13 +1,12 @@
 """Bounded backend quiescence checks; never kill jobs or purge caches."""
 
-from collections.abc import Callable, Mapping, Sequence
-from pathlib import Path
-from .records import BaselinePolicy, BaselineSample, BaselineResult, checked_record
-
 import json
 import time
+from collections.abc import Callable, Mapping, Sequence
+from pathlib import Path
 
 from .manifest import atomic_json
+from .records import BaselinePolicy, BaselineResult, BaselineSample, checked_record
 from .transport import execute
 
 HOST_PROBE = r"""import json,os,pathlib,re,time
@@ -31,7 +30,9 @@ mem={r.split(':')[0]:int(r.split(':')[1].strip().split()[0]) for r in pathlib.Pa
 print(json.dumps({'epoch':time.time(),'cpu_counters':stat,'available_memory_mib':mem['MemAvailable']/1024,'unexpected_jobs':blocked}))"""
 
 
-def sample_backend(host: Mapping[str, str], allowed_ids: Sequence[str], allowed_names: Sequence[str] = ()) -> BaselineSample:
+def sample_backend(
+    host: Mapping[str, str], allowed_ids: Sequence[str], allowed_names: Sequence[str] = ()
+) -> BaselineSample:
     raw = execute(host, ["docker", "ps", "--no-trunc", "--format", "{{json .}}"], timeout=30).stdout
     containers = [json.loads(line) for line in raw.splitlines() if line.strip()]
     allowed_ids = list(allowed_ids) + [p["ID"] for p in containers if p["Names"] in allowed_names]
@@ -54,9 +55,14 @@ def cpu_percent(previous: Sequence[int], current: Sequence[int]) -> float | None
 
 
 def wait_backend_baseline(
-    host: Mapping[str, str], policy: BaselinePolicy, stage: str, output: Path,
-    api_ids: Sequence[str] = (), probe: Callable[[], BaselineSample] | None = None,
-    sleep: Callable[[float], None] = time.sleep, monotonic: Callable[[], float] = time.monotonic
+    host: Mapping[str, str],
+    policy: BaselinePolicy,
+    stage: str,
+    output: Path,
+    api_ids: Sequence[str] = (),
+    probe: Callable[[], BaselineSample] | None = None,
+    sleep: Callable[[float], None] = time.sleep,
+    monotonic: Callable[[], float] = time.monotonic,
 ) -> BaselineResult | None:
     if not policy or not policy.get("enabled"):
         return None
@@ -70,8 +76,16 @@ def wait_backend_baseline(
         not isinstance(n, str) or not n or "*" in n for n in allowed_names
     ):
         raise ValueError("exact telemetry container allowlist required")
-    cpu_max = policy.get("stopped_cpu_max_percent", 15) if stage == "stopped" else policy.get("ready_cpu_max_percent", 20)
-    mem_min = policy.get("stopped_mem_available_mib", 1024) if stage == "stopped" else policy.get("ready_mem_available_mib", 512)
+    cpu_max = (
+        policy.get("stopped_cpu_max_percent", 15)
+        if stage == "stopped"
+        else policy.get("ready_cpu_max_percent", 20)
+    )
+    mem_min = (
+        policy.get("stopped_mem_available_mib", 1024)
+        if stage == "stopped"
+        else policy.get("ready_mem_available_mib", 512)
+    )
     if cpu_max != (15 if stage == "stopped" else 20) or mem_min != (
         1024 if stage == "stopped" else 512
     ):

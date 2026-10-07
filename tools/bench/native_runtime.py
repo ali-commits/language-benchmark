@@ -1,22 +1,30 @@
 """Guard native deployments without importing Python worker-attestation schemas."""
 
-from collections.abc import Mapping
-from typing import overload
-from typing_extensions import Literal, TypedDict
-
-
 import hashlib
 import json
 import re
 import time
+from collections.abc import Mapping
 from dataclasses import asdict
 from pathlib import Path
+from typing import overload
 
 import httpx
+from typing_extensions import Literal, TypedDict
 
 from .models import NativeCell, RuntimeCell
+from .records import (
+    NativeAttestation,
+    NativeCellRecord,
+    NativeContainer,
+    NativeImage,
+    NativeLock,
+    Nofile,
+    RuntimeLock,
+    checked_record,
+)
 from .transport import execute
-from .records import (RuntimeLock, NativeLock, NativeCellRecord, NativeContainer, NativeImage, NativeAttestation, Nofile, Ulimit, checked_record)
+
 
 class ImageConfig(TypedDict, total=False):
     expected_image_ids: dict[str, str]
@@ -72,8 +80,10 @@ IMAGE_FORMAT = (
 @overload
 def _read_registry(path: Path, *, python: Literal[True]) -> RuntimeLock: ...
 
+
 @overload
 def _read_registry(path: Path, *, python: Literal[False] = False) -> NativeLock: ...
+
 
 def _read_registry(path: Path, *, python: bool = False) -> RuntimeLock | NativeLock:
     data = json.loads(path.read_text())
@@ -94,7 +104,9 @@ def validate_native_registry_cell(data: NativeCellRecord, registry: str) -> Nati
     return NativeCell(**data)
 
 
-def load_runtime_cell(cell_id: str, registry_root: str | Path = Path("runtimes")) -> RuntimeCell | NativeCell:
+def load_runtime_cell(
+    cell_id: str, registry_root: str | Path = Path("runtimes")
+) -> RuntimeCell | NativeCell:
     """Python selection is deliberately independent of unselected native registries."""
     root = Path(registry_root)
     python = _read_registry(root / "python/lock.json", python=True)
@@ -116,9 +128,14 @@ def load_runtime_cell(cell_id: str, registry_root: str | Path = Path("runtimes")
     return matches[0]
 
 
-def load_runtime_cells(registry_root: str | Path = Path("runtimes")) -> list[RuntimeCell | NativeCell]:
+def load_runtime_cells(
+    registry_root: str | Path = Path("runtimes"),
+) -> list[RuntimeCell | NativeCell]:
     root = Path(registry_root)
-    cells: list[RuntimeCell | NativeCell] = [RuntimeCell(**data) for data in _read_registry(root / "python/lock.json", python=True)["cells"]]
+    cells: list[RuntimeCell | NativeCell] = [
+        RuntimeCell(**data)
+        for data in _read_registry(root / "python/lock.json", python=True)["cells"]
+    ]
     for language in LANGUAGES:
         path = root / language / "lock.json"
         if not path.exists():
@@ -147,7 +164,9 @@ def expected_image_id(config: ImageConfig, cell: NativeCell) -> str:
     return value
 
 
-def validate_native_container(data: NativeContainer, cell: NativeCell, run_id: str, image: str) -> NativeContainer:
+def validate_native_container(
+    data: NativeContainer, cell: NativeCell, run_id: str, image: str
+) -> NativeContainer:
     if (
         data.get("image") != image
         or data.get("running") is not True
@@ -229,7 +248,9 @@ def validate_process_nofile(text: str) -> Nofile:
     return {"soft": NOFILE_LIMIT, "hard": NOFILE_LIMIT, "process_samples": len(matches)}
 
 
-def verify_runtime_nofile(backend: Mapping[str, str], compose: list[str], env: Mapping[str, object]) -> Nofile:
+def verify_runtime_nofile(
+    backend: Mapping[str, str], compose: list[str], env: Mapping[str, object]
+) -> Nofile:
     ids = execute(backend, compose + ["ps", "--quiet"], env, timeout=30).stdout.split()
     if len(ids) != 1:
         raise ValueError("exactly one measured backend container required")
@@ -262,7 +283,15 @@ def verify_runtime_nofile(backend: Mapping[str, str], compose: list[str], env: M
     return validate_process_nofile(text)
 
 
-def native_preflight(backend: Mapping[str, str], cell: NativeCell, compose: list[str], env: Mapping[str, object], base_url: str, run_id: str, expected: str) -> NativeAttestation:
+def native_preflight(
+    backend: Mapping[str, str],
+    cell: NativeCell,
+    compose: list[str],
+    env: Mapping[str, object],
+    base_url: str,
+    run_id: str,
+    expected: str,
+) -> NativeAttestation:
     wait_native_ready(base_url)
     ids = execute(backend, compose + ["ps", "--quiet"], env, timeout=30).stdout.split()
     if len(ids) != 1:
@@ -272,7 +301,9 @@ def native_preflight(backend: Mapping[str, str], cell: NativeCell, compose: list
             backend, ["docker", "inspect", "--format", CONTAINER_FORMAT, ids[0]], timeout=30
         ).stdout
     )
-    safe_container = validate_native_container(checked_record(container, NativeContainer), cell, run_id, expected)
+    safe_container = validate_native_container(
+        checked_record(container, NativeContainer), cell, run_id, expected
+    )
     process_limits = execute(
         backend,
         [
@@ -302,6 +333,8 @@ def native_preflight(backend: Mapping[str, str], cell: NativeCell, compose: list
     }
 
 
-def native_collector_hosts(backend: Mapping[str, str], load: Mapping[str, str]) -> dict[str, Mapping[str, str]]:
+def native_collector_hosts(
+    backend: Mapping[str, str], load: Mapping[str, str]
+) -> dict[str, Mapping[str, str]]:
     host = {key: value for key, value in backend.items() if key != "runtime_dir"}
     return {"backend": host, "generator": load}

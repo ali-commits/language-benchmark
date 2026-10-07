@@ -1,9 +1,5 @@
 """Build and verify the local-only non-Python matrix, without AWS access."""
 
-from collections.abc import Sequence, Mapping
-from typing_extensions import TypedDict, Unpack
-from .records import NativeCellRecord, NativeLock, LanguageVerification, checked_record
-
 import argparse
 import json
 import os
@@ -11,12 +7,15 @@ import subprocess
 import tempfile
 import time
 import uuid
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 import httpx
+from typing_extensions import TypedDict, Unpack
 
 from .manifest import atomic_json
 from .native_runtime import BUDGET, REGISTRY_LANGUAGES, validate_native_registry_cell
+from .records import LanguageVerification, NativeCellRecord, NativeLock, checked_record
 
 LANGUAGES = tuple(REGISTRY_LANGUAGES)
 SECRET = "test-secret-that-has-at-least-32-bytes"
@@ -36,7 +35,9 @@ def execute(argv: list[str], **kwargs: Unpack[RunOptions]) -> subprocess.Complet
 def cells(selected: Sequence[str]) -> list[NativeCellRecord]:
     result = []
     for language in selected:
-        lock = checked_record(json.loads((Path("runtimes") / language / "lock.json").read_text()), NativeLock)
+        lock = checked_record(
+            json.loads((Path("runtimes") / language / "lock.json").read_text()), NativeLock
+        )
         if lock.get("budget") != BUDGET:
             raise ValueError("uncontrolled native registry budget")
         if len(lock["cells"]) != 1:
@@ -162,7 +163,13 @@ def tls_files(folder: str | Path) -> None:
     )
 
 
-def verify(selected: Sequence[str], output: Path, db_port: int = 55440, api_port: int = 58040, tls: bool = True) -> list[LanguageVerification]:
+def verify(
+    selected: Sequence[str],
+    output: Path,
+    db_port: int = 55440,
+    api_port: int = 58040,
+    tls: bool = True,
+) -> list[LanguageVerification]:
     output.mkdir(parents=True, exist_ok=False)
     nonce = uuid.uuid4().hex[:10]
     network, db = "lb-contract-net-" + nonce, "lb-contract-db-" + nonce

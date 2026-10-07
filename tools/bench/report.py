@@ -1,15 +1,25 @@
 """Reports derive distributions from raw points; failures remain in denominators."""
 
-from collections.abc import Iterator
-from .records import (JourneyMetrics, EndpointMetrics, StreamStatus, MetricPoint, TrialSummary, CampaignSummary, TrialManifest, TrialResult, ExternalResources, checked_record)
-
 import html
 import json
 import statistics
 import zlib
+from collections.abc import Iterator
 from pathlib import Path
 
 from .manifest import atomic_json
+from .records import (
+    CampaignSummary,
+    EndpointMetrics,
+    ExternalResources,
+    JourneyMetrics,
+    MetricPoint,
+    StreamStatus,
+    TrialManifest,
+    TrialResult,
+    TrialSummary,
+    checked_record,
+)
 from .telemetry import validate_rds_evidence
 
 
@@ -68,7 +78,15 @@ def read_metrics(path: Path) -> JourneyMetrics:
             metrics["dropped"] += value
     metrics["incomplete"] = status["incomplete"]
     if durations:
-        metrics.update({'mean': statistics.fmean(durations), 'p999': percentile(durations, 0.999), 'p50': percentile(durations, 0.5), 'p95': percentile(durations, 0.95), 'p99': percentile(durations, 0.99)})
+        metrics.update(
+            {
+                "mean": statistics.fmean(durations),
+                "p999": percentile(durations, 0.999),
+                "p50": percentile(durations, 0.5),
+                "p95": percentile(durations, 0.95),
+                "p99": percentile(durations, 0.99),
+            }
+        )
     metrics["endpoints"] = {
         op: {
             "attempted": b["attempted"],
@@ -283,7 +301,13 @@ def plot_curves(report: CampaignSummary, output_dir: Path) -> list[Path]:
             used = []
             for rate in rates:
                 sample = [
-                    (t.get("successful_operations_s") if metric == "successful_operations_s" else t["metrics"].get("p95")) for t in trials if t["rate"] == rate
+                    (
+                        t.get("successful_operations_s")
+                        if metric == "successful_operations_s"
+                        else t["metrics"].get("p95")
+                    )
+                    for t in trials
+                    if t["rate"] == rate
                 ]
                 present = [v for v in sample if v is not None]
                 if present:

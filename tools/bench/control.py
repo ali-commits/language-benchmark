@@ -1,13 +1,12 @@
 """Bounded recovery and reuse of immutable, qualified probe artifacts."""
 
-from collections.abc import Callable
-from .records import Campaign, Outcome, TrialResult, checked_record
-
 import json
 import time
 from collections import defaultdict, deque
+from collections.abc import Callable
 from pathlib import Path
 
+from .records import Campaign, Outcome, TrialResult, checked_record
 from .transport import execute
 
 
@@ -18,7 +17,14 @@ def recover_hosts(config: Campaign) -> None:
             execute(host, ["sudo", "systemctl", "start", "docker"], timeout=60)
 
 
-def retry_probe(probe: Callable[[int], Outcome], users: int, recover: Callable[[], None], attempts: int = 3, delay: float = 30, sleep: Callable[[float], None] = time.sleep) -> Outcome:
+def retry_probe(
+    probe: Callable[[int], Outcome],
+    users: int,
+    recover: Callable[[], None],
+    attempts: int = 3,
+    delay: float = 30,
+    sleep: Callable[[float], None] = time.sleep,
+) -> Outcome:
     for attempt in range(attempts):
         result = probe(users)
         if result["outcome"] != "invalid" or result.get("lifecycle_status") == "interrupted":

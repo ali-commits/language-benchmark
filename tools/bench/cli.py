@@ -1,11 +1,10 @@
 """Run with PYTHONPATH=tools python -m bench.cli; credentials are environment-only."""
 
-from collections.abc import Iterator
-
 import argparse
 import json
 import os
 import tempfile
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import asdict
 from pathlib import Path
@@ -186,7 +185,15 @@ def main() -> None:
 @contextmanager
 def private_pilot_config(source: Path, output: Path) -> Iterator[Path]:
     cfg = json.loads(source.read_text())
-    cfg.update({'smoke': True, 'repeats': 1, 'measure_seconds': 30, 'warmup_seconds': 30, 'rates': [25, 50, 100, 200, 400, 800, 1600, 3200]})
+    cfg.update(
+        {
+            "smoke": True,
+            "repeats": 1,
+            "measure_seconds": 30,
+            "warmup_seconds": 30,
+            "rates": [25, 50, 100, 200, 400, 800, 1600, 3200],
+        }
+    )
     cfg["rates"] = [r for r in cfg["rates"] if r <= cfg.get("max_rate", 3200)]
     output.mkdir(parents=True, exist_ok=True)
     atomic_json(output / "pilot-config.redacted.json", cfg)

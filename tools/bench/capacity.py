@@ -1,7 +1,8 @@
 """Concurrent-user search: invalid generator/evidence results never move backend bounds."""
 
 from collections.abc import Callable
-from .records import Outcome, CapacityResult
+
+from .records import CapacityResult, Outcome
 
 
 def search_capacity(
@@ -30,7 +31,9 @@ def search_capacity(
 
     candidate = start
     adaptive = next_candidate is not None and start < next_candidate <= ceiling
-    growth = max(resolution, next_candidate - start) if adaptive and next_candidate is not None else step
+    growth = (
+        max(resolution, next_candidate - start) if adaptive and next_candidate is not None else step
+    )
     while candidate <= ceiling:
         outcome = measure(candidate)
         if outcome == "invalid":

@@ -1,11 +1,10 @@
 """Deterministic logical data; password hashes use real random salts."""
 
-from collections.abc import Iterator
-
 import csv
 import json
 import os
 import random
+from collections.abc import Iterator
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import asdict
 from datetime import datetime, timedelta
@@ -164,7 +163,9 @@ def count_rows(connection: psycopg.Connection[tuple[object, ...]], table: str) -
     """COUNT(*) returns one non-null PostgreSQL bigint, checked at the SQL boundary."""
     from psycopg import sql
 
-    row = connection.execute(sql.SQL("SELECT count(*) FROM {}").format(sql.Identifier(table))).fetchone()
+    row = connection.execute(
+        sql.SQL("SELECT count(*) FROM {}").format(sql.Identifier(table))
+    ).fetchone()
     if row is None or not isinstance(row[0], int):
         raise ValueError("database count is missing or invalid")
     return row[0]

@@ -37,7 +37,7 @@ def probe_cell(cell: RuntimeCell) -> dict[str, object]:
             importlib.import_module(name)
         except Exception as e:
             reasons.append(f"{name}: {type(e).__name__}: {e}")
-    result.update({'supported': not reasons, 'reasons': reasons, 'executable': sys.executable})
+    result.update({"supported": not reasons, "reasons": reasons, "executable": sys.executable})
     return result
 
 

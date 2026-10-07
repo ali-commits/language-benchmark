@@ -1,18 +1,18 @@
 """Monitor-host controller supervision with persisted, bounded recovery attempts."""
 
-from collections.abc import Callable
-from typing import TypeVar, overload
-from typing_extensions import TypeForm
-from .records import Campaign, ControllerStatus, checked_record
-
 import argparse
 import json
 import subprocess
 import time
+from collections.abc import Callable
 from pathlib import Path
+from typing import TypeVar, overload
+
+from typing_extensions import TypeForm
 
 from .control import recover_hosts
 from .manifest import atomic_json
+from .records import Campaign, ControllerStatus, checked_record
 
 COMPLETE = {"complete", "complete_with_unstable_boundaries"}
 
@@ -23,12 +23,18 @@ T = TypeVar("T")
 @overload
 def read_status(path: Path) -> dict[str, object]: ...
 
+
 @overload
 def read_status(path: Path, schema: TypeForm[T]) -> T: ...
 
+
 def read_status(path: Path, schema: TypeForm[T] | None = None) -> T | dict[str, object]:
     value = json.loads(path.read_text()) if path.exists() else {}
-    return checked_record(value, schema) if schema is not None else checked_record(value, dict[str, object])
+    return (
+        checked_record(value, schema)
+        if schema is not None
+        else checked_record(value, dict[str, object])
+    )
 
 
 def controller_active(unit: str) -> bool:
@@ -38,7 +44,14 @@ def controller_active(unit: str) -> bool:
     )
 
 
-def supervise(config_path: Path, output: Path, state_path: Path, existing_unit: str, max_attempts: int = 3, sleep: Callable[[float], None] = time.sleep) -> None:
+def supervise(
+    config_path: Path,
+    output: Path,
+    state_path: Path,
+    existing_unit: str,
+    max_attempts: int = 3,
+    sleep: Callable[[float], None] = time.sleep,
+) -> None:
     config = checked_record(json.loads(config_path.read_text()), Campaign)
     if not 1 <= max_attempts <= 3:
         raise ValueError("supervisor recovery budget must be between one and three")
@@ -83,7 +96,8 @@ def supervise(config_path: Path, output: Path, state_path: Path, existing_unit: 
                 return
             if (
                 current == "needs_attention"
-                and read_status(campaign_status, ControllerStatus).get("updated_epoch", 0) >= started
+                and read_status(campaign_status, ControllerStatus).get("updated_epoch", 0)
+                >= started
             ):
                 # Probe-level retries have already exhausted their own bounded budget.
                 status(

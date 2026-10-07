@@ -3,7 +3,6 @@
 import json
 
 import pytest
-
 from bench.majority import measurement_identity
 from bench.records import Campaign, CapacityResult, TrialManifest, _adapter, checked_record
 
@@ -42,7 +41,11 @@ def test_nested_checkpoints_keep_unknown_trial_evidence():
 
 
 def test_partial_historical_attestation_remains_a_valid_wire_record():
-    manifest = {"native_runtime": {"container": {"nofile": {"soft": 250000, "hard": 250000, "process_samples": 2}}}}
+    manifest = {
+        "native_runtime": {
+            "container": {"nofile": {"soft": 250000, "hard": 250000, "process_samples": 2}}
+        }
+    }
     assert checked_record(manifest, TrialManifest) is manifest
 
 

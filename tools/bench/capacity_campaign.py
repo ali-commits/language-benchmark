@@ -1,7 +1,5 @@
 """Persistent mixed-language capacity controller with guarded same-campaign recovery."""
 
-from .records import Campaign, checked_record
-
 import argparse
 import json
 import uuid
@@ -10,6 +8,7 @@ from pathlib import Path
 from .models import NativeCell
 from .native_runtime import expected_image_id, load_runtime_cell
 from .profiles import normalize_config
+from .records import Campaign, checked_record
 from .user_capacity import run_user_capacity, validate_config
 
 

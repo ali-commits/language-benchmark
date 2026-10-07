@@ -1,7 +1,3 @@
-from collections.abc import Mapping
-from typing import overload
-from .records import Campaign, Trial, TrialManifest, checked_record
-
 import hashlib
 import json
 import os
@@ -9,6 +5,9 @@ import platform
 import re
 import subprocess
 from pathlib import Path
+from typing import overload
+
+from .records import Campaign, Trial, TrialManifest, checked_record
 
 SECRET_KEYS = ("password", "secret", "token", "credentials", "database_url", "dsn")
 
@@ -16,8 +15,10 @@ SECRET_KEYS = ("password", "secret", "token", "credentials", "database_url", "ds
 @overload
 def redact(value: str) -> str: ...
 
+
 @overload
 def redact(value: object) -> object: ...
+
 
 def redact(value: object) -> object:
     if isinstance(value, dict):
@@ -44,18 +45,16 @@ def collect_manifest(campaign: Campaign, trial: Trial) -> TrialManifest:
     rev = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
     dirty = bool(subprocess.check_output(["git", "status", "--porcelain"], text=True).strip())
     payload = {
-            "campaign": campaign,
-            "trial": trial,
-            "git_revision": rev,
-            "dirty": dirty,
-            "orchestrator": platform.platform(),
-            "label": (campaign["mode"].upper() + " SMOKE")
-            if campaign.get("smoke")
-            else campaign["mode"].upper(),
-            "lock_checksum": hashlib.sha256(
-                Path("runtimes/python/lock.json").read_bytes()
-            ).hexdigest(),
-        }
+        "campaign": campaign,
+        "trial": trial,
+        "git_revision": rev,
+        "dirty": dirty,
+        "orchestrator": platform.platform(),
+        "label": (campaign["mode"].upper() + " SMOKE")
+        if campaign.get("smoke")
+        else campaign["mode"].upper(),
+        "lock_checksum": hashlib.sha256(Path("runtimes/python/lock.json").read_bytes()).hexdigest(),
+    }
     return checked_record({key: redact(value) for key, value in payload.items()}, TrialManifest)
 
 

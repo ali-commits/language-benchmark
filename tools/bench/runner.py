@@ -1,8 +1,3 @@
-from collections.abc import Callable, Iterator
-from types import FrameType
-from pydantic import TypeAdapter
-from .records import Campaign, Trial, TrialResult, Lifecycle, WorkerSnapshot, checked_record
-
 import fcntl
 import json
 import os
@@ -10,6 +5,7 @@ import signal
 import threading
 import time
 import uuid
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -32,6 +28,7 @@ from .native_runtime import (
     verify_runtime_nofile,
 )
 from .profiles import methodology
+from .records import Campaign, Lifecycle, Trial, TrialResult, WorkerSnapshot, checked_record
 from .reset import restore_fixture
 from .runtime import validate_dependency_inventory, validate_worker_snapshots
 from .schedule import schedule_trials
@@ -58,7 +55,9 @@ def run_trial(campaign: Campaign, trial: Trial, output_dir: Path) -> TrialResult
     output_dir.mkdir(parents=True, exist_ok=False)
     cell = load_runtime_cell(trial["cell"])
     native = isinstance(cell, NativeCell)
-    expected_native_image = expected_image_id(campaign, cell) if isinstance(cell, NativeCell) else None
+    expected_native_image = (
+        expected_image_id(campaign, cell) if isinstance(cell, NativeCell) else None
+    )
     journey = campaign.get("operation") == "user-journey"
     manifest = collect_manifest(campaign, trial)
     result: TrialResult = {
@@ -72,10 +71,16 @@ def run_trial(campaign: Campaign, trial: Trial, output_dir: Path) -> TrialResult
         method = methodology(campaign)
         manifest["methodology"] = method
         result["methodology"] = method
-        result.update({"ramp_seconds": campaign["ramp_seconds"], "settle_seconds": campaign["settle_seconds"], "hold_seconds": campaign["hold_seconds"]})
+        result.update(
+            {
+                "ramp_seconds": campaign["ramp_seconds"],
+                "settle_seconds": campaign["settle_seconds"],
+                "hold_seconds": campaign["hold_seconds"],
+            }
+        )
     atomic_json(output_dir / "manifest.json", manifest)
     if not cell.supported:
-        result.update({'status': "unsupported", 'reasons': cell.reasons})
+        result.update({"status": "unsupported", "reasons": cell.reasons})
         atomic_json(output_dir / "result.json", result)
         return result
     dsn = os.environ["DATABASE_URL"]
@@ -105,7 +110,15 @@ def run_trial(campaign: Campaign, trial: Trial, output_dir: Path) -> TrialResult
         manifest["runtime_lock"] = registry_metadata(cell)
         manifest["lock_checksum"] = manifest["runtime_lock"]["sha256"]
     else:
-        env.update({'WORKERS': str(cell.workers), 'ADAPTER': cell.adapter, 'EXPECTED_GIL': str(cell.gil).lower(), 'EXPECTED_JIT': str(cell.jit).lower(), 'PYTHON_JIT': str(int(cell.jit))})
+        env.update(
+            {
+                "WORKERS": str(cell.workers),
+                "ADAPTER": cell.adapter,
+                "EXPECTED_GIL": str(cell.gil).lower(),
+                "EXPECTED_JIT": str(cell.jit).lower(),
+                "PYTHON_JIT": str(int(cell.jit)),
+            }
+        )
         compose = ["docker", "compose", "-f", "compose.aws.yaml"]
 
     def stop() -> None:
@@ -190,9 +203,12 @@ def run_trial(campaign: Campaign, trial: Trial, output_dir: Path) -> TrialResult
             snapshots: list[WorkerSnapshot] = []
             while time.monotonic() < deadline:
                 code = "import pathlib,json,os; print(json.dumps([json.loads(p.read_text()) for p in pathlib.Path(os.environ['TARGET']).glob('*.json')]))"
-                snapshots = checked_record(json.loads(
-                    execute(backend, ["python3", "-c", code], {"TARGET": runtime}).stdout
-                ), list[WorkerSnapshot])
+                snapshots = checked_record(
+                    json.loads(
+                        execute(backend, ["python3", "-c", code], {"TARGET": runtime}).stdout
+                    ),
+                    list[WorkerSnapshot],
+                )
                 if len(snapshots) == cell.workers and all(
                     s["run_id"] == runtime_identity for s in snapshots
                 ):
@@ -261,15 +277,22 @@ def run_trial(campaign: Campaign, trial: Trial, output_dir: Path) -> TrialResult
                     "timeout_seconds",
                 )
             }
-            scenario.update({'users': trial["users"], 'success_fraction': campaign.get("success_fraction", 0.99), 'authentication_fraction': campaign.get(
-                    "authentication_fraction", campaign.get("success_fraction", 0.99)
-                ), 'tags': {
-                    "cell": cell.id,
-                    "trial": trial["id"],
-                    "campaign": trial["campaign_id"],
-                    "workload": "user-journey",
-                    "target_users": str(trial["users"]),
-                }})
+            scenario.update(
+                {
+                    "users": trial["users"],
+                    "success_fraction": campaign.get("success_fraction", 0.99),
+                    "authentication_fraction": campaign.get(
+                        "authentication_fraction", campaign.get("success_fraction", 0.99)
+                    ),
+                    "tags": {
+                        "cell": cell.id,
+                        "trial": trial["id"],
+                        "campaign": trial["campaign_id"],
+                        "workload": "user-journey",
+                        "target_users": str(trial["users"]),
+                    },
+                }
+            )
         else:
             required = campaign["warmup_seconds"] + campaign["measure_seconds"] + 120
             os.environ["PAIR_BUDGET"] = str(
@@ -397,7 +420,7 @@ def run_trial(campaign: Campaign, trial: Trial, output_dir: Path) -> TrialResult
                 result["reasons"].append("RDS telemetry missing: " + type(e).__name__)
 
     def persist_cleanup(state: Lifecycle) -> None:
-        result.update({'status': state["status"], 'reset_verified': state["reset_verified"]})
+        result.update({"status": state["status"], "reset_verified": state["reset_verified"]})
         result["reasons"] += state["reasons"]
         atomic_json(output_dir / "result.json", result)
 
@@ -464,7 +487,12 @@ def defer_cleanup_signals() -> Iterator[list[int]]:
             signal.signal(name, handler)
 
 
-def trial_lifecycle(stop: Callable[[], None], reset: Callable[[], None], measure: Callable[[], None], persist: Callable[[Lifecycle], None] | None = None) -> Lifecycle:
+def trial_lifecycle(
+    stop: Callable[[], None],
+    reset: Callable[[], None],
+    measure: Callable[[], None],
+    persist: Callable[[Lifecycle], None] | None = None,
+) -> Lifecycle:
     result: Lifecycle = {"status": "failed", "reset_verified": False, "reasons": []}
     try:
         stop()

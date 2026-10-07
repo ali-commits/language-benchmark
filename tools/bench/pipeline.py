@@ -1,20 +1,27 @@
 """Sequential, checkpointed campaign supervision on the monitoring host."""
 
-from collections.abc import Callable
-from .models import NativeCell
-from .records import Campaign, CapacityResult, TrialManifest, TrialResult, PipelineStage, PipelineConfig, ControllerStatus
-
 import argparse
 import fcntl
 import hashlib
 import subprocess
 import time
+from collections.abc import Callable
 from pathlib import Path
 
 from .majority import measurement_identity, validate_decision_handoff
 from .manifest import atomic_json
+from .models import NativeCell
 from .native_runtime import load_runtime_cell, registry_metadata
 from .profiles import normalize_config
+from .records import (
+    Campaign,
+    CapacityResult,
+    ControllerStatus,
+    PipelineConfig,
+    PipelineStage,
+    TrialManifest,
+    TrialResult,
+)
 from .runner import defer_cleanup_signals
 from .supervisor import COMPLETE, controller_active, read_status, supervise
 from .transport import execute
@@ -28,7 +35,8 @@ def verify_completion(stage: PipelineStage) -> None:
     config = read_status(Path(stage["config"]), Campaign)
     fixed = config["experiment_type"] == "fixed-load"
     results = read_status(
-        output / ("fixed-load-results.json" if fixed else "capacity-results.json"), dict[str, CapacityResult]
+        output / ("fixed-load-results.json" if fixed else "capacity-results.json"),
+        dict[str, CapacityResult],
     )
     if set(results) != set(config["cells"]):
         raise RuntimeError("stage results do not cover the configured cells")
@@ -72,7 +80,9 @@ def verify_completion(stage: PipelineStage) -> None:
         )
         if manifest.get("runtime_lock"):
             runtime = load_runtime_cell(manifest["trial"]["cell"])
-            if not isinstance(runtime, NativeCell) or manifest["runtime_lock"] != registry_metadata(runtime):
+            if not isinstance(runtime, NativeCell) or manifest["runtime_lock"] != registry_metadata(
+                runtime
+            ):
                 raise RuntimeError("completed stage runtime registry differs from measured binary")
     latest = read_status(manifests[-1].with_name("result.json"))
     if latest.get("status") != "measured" or latest.get("reset_verified") is not True:
@@ -94,7 +104,9 @@ def verify_hosts_idle(stage: PipelineStage) -> None:
             raise RuntimeError("test containers remain after stage completion")
 
 
-def run_pipeline(config_path: str | Path, state_path: str | Path, sleep: Callable[[float], None] = time.sleep) -> None:
+def run_pipeline(
+    config_path: str | Path, state_path: str | Path, sleep: Callable[[float], None] = time.sleep
+) -> None:
     config_path, state_path = Path(config_path), Path(state_path)
     config = read_status(config_path, PipelineConfig)
     stages = config["stages"]

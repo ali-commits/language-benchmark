@@ -1,14 +1,23 @@
 """Credentials, phase-aware metrics, and response-based concurrent-user classification."""
 
-from typing import Literal
-from pydantic import TypeAdapter
-from .records import (Credential, StreamStatus, Latency, JourneyMetrics, PhaseMetrics, EndpointMetrics, Authentication, TrialResult, MetricPoint, checked_record)
-
 import json
 import os
 from datetime import datetime
 from pathlib import Path
+from typing import Literal
 
+from .records import (
+    Authentication,
+    Credential,
+    EndpointMetrics,
+    JourneyMetrics,
+    Latency,
+    MetricPoint,
+    PhaseMetrics,
+    StreamStatus,
+    TrialResult,
+    checked_record,
+)
 from .report import metric_lines, percentile
 
 
@@ -70,7 +79,17 @@ def read_journey_metrics(path: Path, steady_seconds: float | None = None) -> Jou
         "http_requests": 0,
         "completed_journeys": 0,
     }
-    names: dict[str, Literal["attempted", "succeeded", "timeouts", "network_errors", "http_requests", "completed_journeys"]] = {
+    names: dict[
+        str,
+        Literal[
+            "attempted",
+            "succeeded",
+            "timeouts",
+            "network_errors",
+            "http_requests",
+            "completed_journeys",
+        ],
+    ] = {
         "operations_attempted": "attempted",
         "operations_succeeded": "succeeded",
         "journey_timeouts": "timeouts",
@@ -185,19 +204,49 @@ def read_journey_metrics(path: Path, steady_seconds: float | None = None) -> Jou
             m.update(checked_record({key: steady.get(key)}, JourneyMetrics))
     for phase in ("ramp", "settle"):
         for key in ("attempted", "succeeded"):
-            m.update(checked_record({phase + "_" + key: buckets.get(phase, {}).get(key, 0)}, JourneyMetrics))
+            m.update(
+                checked_record(
+                    {phase + "_" + key: buckets.get(phase, {}).get(key, 0)}, JourneyMetrics
+                )
+            )
     if activity_start is not None:
-        m.update({'activity_started_epoch': activity_start, 'activity_finished_epoch': activity_end})
+        m.update(
+            {"activity_started_epoch": activity_start, "activity_finished_epoch": activity_end}
+        )
     if "started_epoch" in steady:
-        m.update({'steady_started_epoch': steady["started_epoch"], 'steady_finished_epoch': steady["finished_epoch"]})
+        m.update(
+            {
+                "steady_started_epoch": steady["started_epoch"],
+                "steady_finished_epoch": steady["finished_epoch"],
+            }
+        )
     auth["login_success_fraction"] = (
         auth["login_succeeded"] / auth["login_attempted"] if auth["login_attempted"] else None
     )
-    m.update({'incomplete': status["incomplete"], 'phases': buckets, 'endpoints': steady.get("endpoints", {}), 'authentication': auth})
+    m.update(
+        {
+            "incomplete": status["incomplete"],
+            "phases": buckets,
+            "endpoints": steady.get("endpoints", {}),
+            "authentication": auth,
+        }
+    )
     if steady_seconds is not None:
-        m.update({'steady_seconds': steady_seconds, 'attempted_operations_s': m["attempted"] / steady_seconds, 'successful_operations_s': m["succeeded"] / steady_seconds, 'http_requests_s': m["http_requests"] / steady_seconds})
+        m.update(
+            {
+                "steady_seconds": steady_seconds,
+                "attempted_operations_s": m["attempted"] / steady_seconds,
+                "successful_operations_s": m["succeeded"] / steady_seconds,
+                "http_requests_s": m["http_requests"] / steady_seconds,
+            }
+        )
         for endpoint in m["endpoints"].values():
-            endpoint.update({'attempted_operations_s': endpoint["attempted"] / steady_seconds, 'successful_operations_s': endpoint["succeeded"] / steady_seconds})
+            endpoint.update(
+                {
+                    "attempted_operations_s": endpoint["attempted"] / steady_seconds,
+                    "successful_operations_s": endpoint["succeeded"] / steady_seconds,
+                }
+            )
     return m
 
 

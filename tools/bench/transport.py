@@ -1,13 +1,12 @@
 """Local or SSH subprocess transport. Environment secrets travel via encrypted stdin."""
 
-from collections.abc import Mapping
-from typing import Protocol
-
 import json
 import os
 import shlex
 import subprocess
+from collections.abc import Mapping
 from pathlib import Path
+from typing import Protocol
 
 REMOTE = "import sys,json,subprocess,os; d=json.load(sys.stdin); r=subprocess.run(d['argv'],cwd=d['cwd'],env={**os.environ,**d['env']}); sys.exit(r.returncode)"
 
@@ -21,7 +20,10 @@ class CommandFailure(RuntimeError):
 
 
 def execute(
-    host: Mapping[str, str], argv: list[str], env: Mapping[str, object] | None = None, timeout: float = 1800
+    host: Mapping[str, str],
+    argv: list[str],
+    env: Mapping[str, object] | None = None,
+    timeout: float = 1800,
 ) -> subprocess.CompletedProcess[str]:
     cwd = host.get("project", str(Path.cwd()))
     supplied = {str(k): str(v) for k, v in (env or {}).items()}
@@ -83,6 +85,9 @@ class ExecuteCommand(Protocol):
     """Injectable transport; callers preserve environment and timeout semantics."""
 
     def __call__(
-        self, host: Mapping[str, str], argv: list[str],
-        env: Mapping[str, object] | None = None, timeout: float = 1800,
+        self,
+        host: Mapping[str, str],
+        argv: list[str],
+        env: Mapping[str, object] | None = None,
+        timeout: float = 1800,
     ) -> subprocess.CompletedProcess[str]: ...

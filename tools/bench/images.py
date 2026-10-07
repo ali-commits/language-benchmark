@@ -1,13 +1,12 @@
 """Build missing locked images away from the measured backend, then verify transfer."""
 
-from collections.abc import Mapping
-
 import tempfile
+from collections.abc import Mapping
 from pathlib import Path
 
 from .models import NativeCell, RuntimeCell
-from .records import Campaign
 from .native_runtime import expected_image_id
+from .records import Campaign
 from .transport import CommandFailure, copy_from, copy_to, execute
 
 
@@ -86,7 +85,9 @@ def ensure_backend_image(config: Campaign, cell: RuntimeCell | NativeCell, direc
             execute(host, ["rm", "-f", archive], timeout=30)
 
 
-def verify_backend_limits(backend: Mapping[str, str], compose: list[str], env: Mapping[str, object]) -> None:
+def verify_backend_limits(
+    backend: Mapping[str, str], compose: list[str], env: Mapping[str, object]
+) -> None:
     ids = execute(backend, compose + ["ps", "--quiet"], env, timeout=30).stdout.split()
     if len(ids) != 1:
         raise RuntimeError("exactly one measured backend container required")

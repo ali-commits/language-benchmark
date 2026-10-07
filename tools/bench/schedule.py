@@ -1,8 +1,8 @@
-from .records import Campaign, Trial
-
 import hashlib
 import json
 import random
+
+from .records import Campaign, Trial
 
 
 def validate_campaign(c: Campaign) -> Campaign:

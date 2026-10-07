@@ -1,18 +1,16 @@
 """Lightweight host counters, container resource state, and PostgreSQL activity."""
 
-from collections.abc import Mapping
-from pydantic import TypeAdapter
-from datetime import datetime
-from types import TracebackType
-from .records import TelemetrySample, HostSample, RdsEvidence, RdsPoint, RdsEvent, checked_record
-
 import json
 import threading
 import time
+from collections.abc import Mapping
+from datetime import datetime
 from pathlib import Path
+from types import TracebackType
 
 import psycopg
 
+from .records import HostSample, RdsEvent, RdsEvidence, TelemetrySample, checked_record
 from .transport import execute
 
 HOST_PROBE = "import json,pathlib,time; print(json.dumps({'time':time.time(),'stat':pathlib.Path('/proc/stat').read_text(),'meminfo':pathlib.Path('/proc/meminfo').read_text(),'netdev':pathlib.Path('/proc/net/dev').read_text(),'loadavg':pathlib.Path('/proc/loadavg').read_text(),'cpuinfo':pathlib.Path('/proc/cpuinfo').read_text(),'vmstat':pathlib.Path('/proc/vmstat').read_text()}))"
@@ -33,9 +31,12 @@ class Collector:
                 entry: TelemetrySample = {"time": time.time(), "hosts": {}}
                 for name, host in self.hosts.items():
                     try:
-                        entry["hosts"][name] = checked_record(json.loads(
-                            execute(host, ["python3", "-c", HOST_PROBE], timeout=10).stdout
-                        ), HostSample)
+                        entry["hosts"][name] = checked_record(
+                            json.loads(
+                                execute(host, ["python3", "-c", HOST_PROBE], timeout=10).stdout
+                            ),
+                            HostSample,
+                        )
                         if name == "backend":
                             read = "import pathlib,json,os; print(json.dumps([json.loads(p.read_text()) for p in pathlib.Path(os.environ['RUNTIME']).glob('*.metrics')]))"
                             if host.get("runtime_dir"):
@@ -75,7 +76,12 @@ class Collector:
         self.thread.start()
         return self
 
-    def __exit__(self, exc_type: type[BaseException] | None, exc: BaseException | None, traceback: TracebackType | None) -> None:
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
         self.stop.set()
         self.thread.join(30)
         if self.thread.is_alive():
@@ -117,9 +123,7 @@ def rds_metrics(identifier: str, region: str, start: datetime, end: datetime) ->
     events = rds.describe_events(
         SourceIdentifier=identifier, SourceType="db-instance", StartTime=start, EndTime=end
     )["Events"]
-    instance = rds.describe_db_instances(DBInstanceIdentifier=identifier)["DBInstances"][
-        0
-    ]
+    instance = rds.describe_db_instances(DBInstanceIdentifier=identifier)["DBInstances"][0]
     # Whitelist metadata; AWS response can contain internal service endpoints and secret references.
     result["events"] = checked_record(events, list[RdsEvent])
     result["instance"] = {

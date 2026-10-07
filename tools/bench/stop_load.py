@@ -1,14 +1,13 @@
 """Stop owned Compose load containers, including detached --rm one-offs."""
 
-from collections.abc import Callable, Mapping
-from subprocess import CompletedProcess
-from .records import LoadContainer, LoadCleanup, checked_record
-
 import json
 import re
 import time
+from collections.abc import Callable, Mapping
 from pathlib import PurePosixPath
+from subprocess import CompletedProcess
 
+from .records import LoadCleanup, LoadContainer, checked_record
 from .transport import CommandFailure, ExecuteCommand, execute
 
 PROJECT = "language-benchmark-load"
@@ -21,8 +20,11 @@ FORMAT = (
 
 
 def stop_owned_load(
-    host: Mapping[str, str], working_dir: str, execute_command: ExecuteCommand = execute,
-    sleep: Callable[[float], None] = time.sleep, monotonic: Callable[[], float] = time.monotonic
+    host: Mapping[str, str],
+    working_dir: str,
+    execute_command: ExecuteCommand = execute,
+    sleep: Callable[[float], None] = time.sleep,
+    monotonic: Callable[[], float] = time.monotonic,
 ) -> LoadCleanup:
     if not isinstance(working_dir, str) or not PurePosixPath(working_dir).is_absolute():
         raise ValueError("absolute Compose load working directory required")
@@ -73,7 +75,9 @@ def stop_owned_load(
         if data is None:
             continue
         if data.get("running"):
-            optional(["docker", "stop", "--signal", "SIGINT", "--timeout", "30", identity], timeout=60)
+            optional(
+                ["docker", "stop", "--signal", "SIGINT", "--timeout", "30", identity], timeout=60
+            )
             stopped.append(identity)
         remaining = inspect(identity)
         if remaining is not None:
