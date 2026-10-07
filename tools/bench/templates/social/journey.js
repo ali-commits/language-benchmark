@@ -5,15 +5,44 @@ import { SharedArray } from 'k6/data';
 import execution from 'k6/execution';
 import http from 'k6/http';
 
-const actors = new SharedArray('social actors', () => JSON.parse(open('./actors.json')).actors);
+/** @param {unknown} value @returns {Record<string, unknown>} */
+function record(value) {
+  if (value === null || typeof value !== 'object' || Array.isArray(value))
+    throw new Error('expected object');
+  return Object.fromEntries(Object.entries(value));
+}
+/** @param {unknown} value @returns {string} */
+function string(value) {
+  if (typeof value !== 'string') throw new Error('expected string');
+  return value;
+}
+/** @param {unknown} value @returns {unknown[]} */
+function array(value) {
+  if (!Array.isArray(value)) throw new Error('expected array');
+  return value;
+}
+const actors = new SharedArray('social actors', () =>
+  array(record(JSON.parse(open('./actors.json'))).actors).map((item) => {
+    const actor = record(item);
+    return { username: string(actor.username), password: string(actor.password) };
+  }),
+);
+/** @type {string | null} */
 let token = null;
+/** @param {import("./contracts").WorkloadContext} context */
 export default function (context) {
   // All VU IDs belong to the single load scenario, so exactly peak_users
   // distinct accounts suffice and each VU retains its account across stages.
   const index = execution.vu.idInTest - 1;
   const actor = actors[index];
-  if (!actor || !actor.username || !actor.password) throw new Error('missing actor');
-  const timeout = (context.parameters.timeout_seconds || 5) + 's';
+  if (!actor?.username || !actor.password) throw new Error('missing actor');
+  const timeoutSeconds = context.parameters.timeout_seconds || 5;
+  const waitSeconds =
+    context.parameters.wait_seconds === undefined ? 0.05 : context.parameters.wait_seconds;
+  if (typeof timeoutSeconds !== 'number' || typeof waitSeconds !== 'number')
+    throw new Error('invalid social timing parameters');
+  const timeout = timeoutSeconds + 's';
+  /** @param {string} name @param {string} method @param {string} path @param {unknown} body @param {number} status */
   function request(name, method, path, body, status) {
     return context.operation(
       name,
@@ -34,13 +63,13 @@ export default function (context) {
         if (response.status !== status) return false;
         if (status === 204) return true;
         try {
-          const data = response.json();
+          const data = record(response.json());
           return name === 'login'
             ? typeof data.access_token === 'string'
             : name === 'feed' || name === 'comments'
               ? Array.isArray(data.items)
               : Number.isInteger(data.id);
-        } catch (_) {
+        } catch {
           return false;
         }
       },
@@ -58,7 +87,7 @@ export default function (context) {
       sleep(0.05);
       return;
     }
-    token = login.json().access_token;
+    token = string(record(login.json()).access_token);
     if (!token) throw new Error('missing token');
     context.record('authenticated_account', {
       value: 1,
@@ -72,9 +101,9 @@ export default function (context) {
     sleep(0.05);
     return;
   }
-  const posts = feed.json().items;
+  const posts = array(record(feed.json()).items);
   if (posts.length) {
-    const post = posts[0];
+    const post = record(posts[0]);
     request(
       post.liked ? 'unlike' : 'like',
       post.liked ? 'DELETE' : 'PUT',
@@ -91,5 +120,5 @@ export default function (context) {
         201,
       );
   }
-  sleep(context.parameters.wait_seconds === undefined ? 0.05 : context.parameters.wait_seconds);
+  sleep(waitSeconds);
 }

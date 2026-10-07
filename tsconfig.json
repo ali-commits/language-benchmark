@@ -10,6 +10,11 @@
     "types": ["k6"],
     "lib": ["ES2022"]
   },
-  "include": ["benchmarks/k6/**/*.js", "tools/**/*.js", "examples/**/*.js"],
+  "include": [
+    "benchmarks/k6/**/*.js",
+    "tools/**/*.js",
+    "examples/**/*.js",
+    "benchmarks/k6/**/*.d.ts"
+  ],
   "exclude": ["backends", "node_modules", "artifacts", "output", "tmp", ".superpowers"]
 }

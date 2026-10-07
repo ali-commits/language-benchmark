@@ -1,13 +1,16 @@
 import { SharedArray } from 'k6/data';
 import exec from 'k6/execution';
+import * as dataTypes from './lib/data.js';
 import { perform } from './lib/requests.js';
 import { choice, operation } from './lib/selection.js';
 
-const cfg = JSON.parse(open(__ENV.SCENARIO_CONFIG || '/inputs/scenario.json'));
+const cfg = dataTypes.capacityConfig(
+  JSON.parse(open(__ENV.SCENARIO_CONFIG || '/inputs/scenario.json')),
+);
 const path = __ENV.LOAD_DATA || '/inputs/load-data.json';
-const actors = new SharedArray('actors', () => JSON.parse(open(path)).actors);
-const posts = new SharedArray('posts', () => JSON.parse(open(path)).posts);
-const pairs = new SharedArray('pairs', () => JSON.parse(open(path)).like_pairs);
+const actors = new SharedArray('actors', () => dataTypes.actors(JSON.parse(open(path))));
+const posts = new SharedArray('posts', () => dataTypes.posts(JSON.parse(open(path))));
+const pairs = new SharedArray('pairs', () => dataTypes.pairs(JSON.parse(open(path))));
 const expiry = cfg.expires_at;
 if (!cfg.rate || cfg.rate < 1 || !cfg.vus || cfg.vus < 1 || cfg.duration < 1)
   throw new Error('invalid bounded scenario');
@@ -36,6 +39,7 @@ export const options = {
     dropped_iterations: ['count==0'],
   },
 };
+/** @type {[number, number] | null} */
 let pendingUnlike = null;
 export default function () {
   const i = exec.scenario.iterationInTest;
@@ -52,6 +56,7 @@ export default function () {
     if (ok) pendingUnlike = removing ? null : pair;
   } else perform(op, actor, post, i % 4 === 0 ? actor.cursor : null, __ENV.BASE_URL, null, false);
 }
+/** @param {unknown} data */
 export function handleSummary(data) {
   return { '/output/summary.json': JSON.stringify(data, null, 2) };
 }

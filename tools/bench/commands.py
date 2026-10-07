@@ -312,6 +312,9 @@ def dispatch(args: Arguments) -> int:
         if assets.exists():
             raise FileExistsError("template asset directory already exists")
         shutil.copytree(str(source), assets)
+        from .engine.resources import wrapper_path
+
+        shutil.copyfile(wrapper_path("contracts.d.ts"), assets / "contracts.d.ts")
         import yaml
 
         from .engine.config import UniqueLoader

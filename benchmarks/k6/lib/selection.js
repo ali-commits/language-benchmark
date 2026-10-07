@@ -1,9 +1,11 @@
+/** @param {number} iteration @param {number} seed */
 export function choice(iteration, seed) {
   let x = (iteration + seed) | 0;
   x = Math.imul(x ^ (x >>> 16), 0x45d9f3b);
   x = Math.imul(x ^ (x >>> 16), 0x45d9f3b);
   return (x ^ (x >>> 16)) >>> 0;
 }
+/** @param {number} n */
 export function operation(n) {
   const p = n % 100;
   if (p < 60) return 'feed';

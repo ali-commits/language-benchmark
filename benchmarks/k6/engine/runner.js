@@ -1,11 +1,11 @@
 import { sleep } from 'k6';
 import execution from 'k6/execution';
-import { emit, sample, stageAt } from './metrics.js';
+import { emit, engineConfig, sample, stageAt } from './metrics.js';
 // Lifecycle replaces this literal with a relative path to the prepared entry,
 // preserving the workload's original directory and all declared dependencies.
 import workload from './workload.js';
 
-const config = JSON.parse(__ENV.BENCH_CONFIG);
+const config = engineConfig(JSON.parse(__ENV.BENCH_CONFIG));
 const stages = config.stages;
 if (!Array.isArray(stages) || !stages.length) throw new Error('stages required');
 let previous = 0;
@@ -35,6 +35,7 @@ const drain = config.drain === undefined ? 30 : config.drain;
 const interval = config.telemetryInterval === undefined ? 0.1 : config.telemetryInterval;
 if (![grace, drain, interval].every(Number.isFinite) || grace < 0 || drain < 0 || interval <= 0)
   throw new Error('invalid timing');
+/** @param {number} seconds */
 const duration = (seconds) => {
   if (Math.abs(seconds * 1000 - Math.round(seconds * 1000)) > 1e-7)
     throw new Error('durations require exact millisecond precision');
@@ -99,6 +100,7 @@ export function journey() {
   };
   emit(Object.assign({ type: 'journey_start', timestamp: started, stage: stage.id }, identity));
   let operationCount = 0;
+  /** @type {import("./contracts").WorkloadContext} */
   const context = {
     baseUrl: config.baseUrl,
     parameters: config.parameters || {},
@@ -171,7 +173,7 @@ export function journey() {
   };
   try {
     workload(context);
-  } catch (error) {
+  } catch {
     emit(Object.assign({ type: 'journey_error', timestamp: timestamp() }, identity));
   } finally {
     emit(Object.assign({ type: 'journey_end', timestamp: timestamp() }, identity));
@@ -184,6 +186,7 @@ export function journey() {
 export function setup() {
   return { observationDeadline: Date.now() + (total + 1) * 1000 };
 }
+/** @param {{observationDeadline: number}} data */
 export function teardown(data) {
   const remaining = (data.observationDeadline - Date.now()) / 1000;
   if (remaining > 0) sleep(remaining);

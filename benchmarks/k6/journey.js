@@ -1,7 +1,9 @@
 import { sleep } from 'k6';
+import * as dataTypes from './lib/data.js';
 import { perform } from './lib/requests.js';
 
-const data = JSON.parse(open(__ENV.LOAD_DATA || '/inputs/load-data.json'));
+const raw = JSON.parse(open(__ENV.LOAD_DATA || '/inputs/load-data.json'));
+const data = { actors: dataTypes.actors(raw), posts: dataTypes.posts(raw) };
 export const options = {
   vus: Number(__ENV.JOURNEY_VUS || 20),
   duration: __ENV.JOURNEY_DURATION || '300s',

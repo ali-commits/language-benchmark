@@ -1,10 +1,10 @@
 import { SharedArray } from 'k6/data';
 import exec from 'k6/execution';
 import http from 'k6/http';
+import * as dataTypes from './lib/data.js';
 
-const actors = new SharedArray(
-  'actors',
-  () => JSON.parse(open(__ENV.LOAD_DATA || '/inputs/load-data.json')).actors,
+const actors = new SharedArray('actors', () =>
+  dataTypes.actors(JSON.parse(open(__ENV.LOAD_DATA || '/inputs/load-data.json'))),
 );
 export const options = {
   scenarios: {

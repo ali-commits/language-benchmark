@@ -1,7 +1,13 @@
 import { check } from 'k6';
 import http from 'k6/http';
+import { record } from './data.js';
 import { attempted, completed, duration, failed, failureRate, succeeded } from './metrics.js';
 
+/**
+ * @param {string} op @param {import("./data.js").Actor} actor
+ * @param {number} post @param {string | null | undefined} cursor @param {string} base
+ * @param {number | null} pair @param {boolean} remove
+ */
 export function perform(op, actor, post, cursor, base, pair, remove) {
   const tags = { operation: op, name: op };
   const options = {
@@ -48,7 +54,7 @@ export function perform(op, actor, post, cursor, base, pair, remove) {
   let ok = r.status === expected;
   if (ok && expected !== 204) {
     try {
-      const b = r.json();
+      const b = record(r.json());
       ok =
         op === 'login'
           ? typeof b.access_token === 'string'

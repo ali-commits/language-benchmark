@@ -2,6 +2,8 @@
   "files": {
     "includes": [
       "benchmarks/k6/**/*.js",
+      "benchmarks/k6/**/*.d.ts",
+      "tools/bench/templates/**/*.d.ts",
       "tools/**/*.js",
       "tools/bench/templates/**/*.json",
       "examples/**/*.js",
@@ -21,7 +23,7 @@
   "linter": {
     "enabled": true,
     "rules": {
-      "recommended": true
+      "preset": "recommended"
     }
   },
   "javascript": {

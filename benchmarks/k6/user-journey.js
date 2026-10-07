@@ -3,11 +3,13 @@ import { SharedArray } from 'k6/data';
 import exec from 'k6/execution';
 import http from 'k6/http';
 import { Counter, Gauge, Rate, Trend } from 'k6/metrics';
+import * as dataTypes from './lib/data.js';
 
-const cfg = JSON.parse(open(__ENV.SCENARIO_CONFIG || '/inputs/scenario.json'));
-const actors = new SharedArray(
-  'unique journey actors',
-  () => JSON.parse(open(__ENV.LOAD_DATA || '/inputs/load-data.json')).actors,
+const cfg = dataTypes.journeyConfig(
+  JSON.parse(open(__ENV.SCENARIO_CONFIG || '/inputs/scenario.json')),
+);
+const actors = new SharedArray('unique journey actors', () =>
+  dataTypes.actors(JSON.parse(open(__ENV.LOAD_DATA || '/inputs/load-data.json'))),
 );
 if (cfg.users < 1 || actors.length < cfg.users || cfg.wait_min < 0 || cfg.wait_max < cfg.wait_min)
   throw new Error('invalid user journey configuration');
@@ -51,6 +53,7 @@ export const options = {
   },
   systemTags: ['status', 'method', 'name', 'scenario'],
 };
+/** @type {string | null} */
 let token = null;
 let everAuthenticated = false;
 let anchorEmitted = false;
@@ -74,6 +77,7 @@ function phase() {
         ? 'steady'
         : 'drain';
 }
+/** @param {string} op @param {string} method @param {string} path @param {unknown} body @param {number} expected */
 function request(op, method, path, body, expected) {
   const tags = { operation: op, name: op, phase: phase() };
   active.add(exec.instance.vusActive, tags);
@@ -92,11 +96,12 @@ function request(op, method, path, body, expected) {
       timeout: cfg.timeout_seconds + 's',
     },
   );
+  /** @type {Record<string, unknown> | null} */
   let json = null;
   let ok = res.status === expected;
   if (ok && expected !== 204) {
     try {
-      json = res.json();
+      json = dataTypes.record(res.json());
       ok =
         op === 'login'
           ? typeof json.access_token === 'string'
@@ -147,18 +152,23 @@ export default function () {
       wait();
       return;
     }
-    token = r.json.access_token;
+    token = dataTypes.string(r.json?.access_token);
     if (!everAuthenticated) {
       authenticated.add(1, r.tags);
       everAuthenticated = true;
     }
   }
   const feed = request('feed', 'GET', '/feed?limit=20', null, 200);
-  if (!feed.ok || feed.json.items.length === 0) {
+  if (!feed.ok) {
     wait();
     return;
   }
-  const post = feed.json.items[Math.floor(random() * feed.json.items.length)];
+  const items = dataTypes.array(feed.json?.items);
+  if (items.length === 0) {
+    wait();
+    return;
+  }
+  const post = dataTypes.record(items[Math.floor(random() * items.length)]);
   wait();
   request(
     post.liked ? 'unlike' : 'like',
@@ -183,6 +193,7 @@ export default function () {
   }
   journeys.add(1, { phase: phase() });
 }
+/** @param {unknown} data */
 export function handleSummary(data) {
   return { '/output/summary.json': JSON.stringify(data, null, 2) };
 }

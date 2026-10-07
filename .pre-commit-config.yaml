@@ -1,4 +1,4 @@
-# Install only once all gates pass: uv run pre-commit install
+# Install after all gates pass: uv run --locked pre-commit install
 repos:
   - repo: local
     hooks:
@@ -32,3 +32,13 @@ repos:
         language: system
         pass_filenames: false
         always_run: true
+      - id: check-json
+        name: Validate editable JSON configuration
+        entry: uv run --locked python -c 'import json, sys; [json.load(open(path)) for path in sys.argv[1:]]'
+        language: system
+        files: ^(package\.json|biome\.json|tsconfig\.json|benchmarks/[^/]+\.json|tools/bench/templates/.*\.json|examples/.*\.json)$
+      - id: check-yaml
+        name: Validate workflow and template YAML
+        entry: uv run --locked python -c 'import sys, yaml; [list(yaml.safe_load_all(open(path))) for path in sys.argv[1:]]'
+        language: system
+        files: ^(\.pre-commit-config\.yaml|\.github/workflows/.*\.ya?ml|tools/bench/templates/.*\.ya?ml|examples/.*\.ya?ml)$
