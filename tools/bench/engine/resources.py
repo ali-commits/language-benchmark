@@ -7,3 +7,17 @@ def wrapper_path(name):
     if package.exists():
         return package
     return Path(__file__).resolve().parents[3] / 'benchmarks/k6/engine' / name
+
+
+def runtime_root():
+    package = Path(__file__).parent / 'attestation' / 'runtimes'
+    if package.exists():
+        return package
+    return Path(__file__).resolve().parents[3] / 'runtimes'
+
+
+def dependency_lock_path(relative):
+    package = Path(__file__).parent / 'attestation' / relative
+    if package.exists():
+        return package
+    return Path(__file__).resolve().parents[3] / relative

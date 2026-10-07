@@ -50,3 +50,14 @@ select = ["E4", "E7", "E9", "F", "I"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "benchmarks/k6/engine" = "tools/bench/engine/k6"
+"runtimes/python/lock.json" = "tools/bench/engine/attestation/runtimes/python/lock.json"
+"runtimes/java/lock.json" = "tools/bench/engine/attestation/runtimes/java/lock.json"
+"runtimes/php/lock.json" = "tools/bench/engine/attestation/runtimes/php/lock.json"
+"runtimes/go/lock.json" = "tools/bench/engine/attestation/runtimes/go/lock.json"
+"runtimes/rust/lock.json" = "tools/bench/engine/attestation/runtimes/rust/lock.json"
+"runtimes/node/lock.json" = "tools/bench/engine/attestation/runtimes/node/lock.json"
+"runtimes/bun/lock.json" = "tools/bench/engine/attestation/runtimes/bun/lock.json"
+"runtimes/csharp/lock.json" = "tools/bench/engine/attestation/runtimes/csharp/lock.json"
+"runtimes/php-octane/lock.json" = "tools/bench/engine/attestation/runtimes/php-octane/lock.json"
+"backends/python/baseline/requirements.lock" = "tools/bench/engine/attestation/backends/python/baseline/requirements.lock"
+"backends/python/modern/requirements.lock" = "tools/bench/engine/attestation/backends/python/modern/requirements.lock"

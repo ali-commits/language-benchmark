@@ -440,7 +440,7 @@ def _execute_job(store, queue, state, claimed, interrupt_requested=lambda: False
             if job.test.type == "search":
                 if data["search"] is None:
                     search = SearchState(
-                        policy=SearchPolicy.from_test(job.test),
+                        policy=_search_policy(job),
                         budget=JobBudget.model_validate(data["budget"]),
                     )
                     search, reused_decisions = _reuse_probes(
@@ -619,3 +619,12 @@ def run_queue(store: QueueStore, queue: str, *, interrupt_requested=lambda: Fals
                     )
             _save(store, queue, state, status)
     return store.snapshot(queue)
+
+
+def _search_policy(job):
+    ceilings = None
+    if job.workload.adapter == 'social':
+        from ..engine.social import preflight_social
+        capacity = preflight_social(job.workload)
+        ceilings = {'fixture_accounts': capacity['account_capacity']}
+    return SearchPolicy.from_test(job.test, feasible_ceilings=ceilings)

@@ -2,7 +2,7 @@ version: 1
 name: social-demo
 targets:
   http:
-    image: language-benchmark-go:local
+    image: lb-go:1.27.1
     env: {DATABASE_URL: {env: BENCH_DATABASE_URL}}
     port: 8000
     resources: {cpus: 1, memory: 256MiB, swap: 0}
@@ -16,7 +16,7 @@ workloads:
       dsn: {env: BENCH_DATABASE_URL}
       manifest: ./fixture.json
       allowed_database: language_benchmark_test
-      runtime_cell: go
+      runtime_cell: go-net-http
     parameters: {wait: 0.02}
     metrics:
       latency: {name: latency, type: trend, unit: ms, includes_failures: true}

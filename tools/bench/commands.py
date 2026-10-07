@@ -88,12 +88,34 @@ def doctor(config):
     from .engine.targets import execute_host, resolve_endpoints
     from .engine.workloads import prepare_workload
     for job in resolve_jobs(config):
+        if job.workload.adapter == 'social':
+            from .engine.social import preflight_social
+            from .engine.stages import fixed_populations, resolve_stages
+            if job.test.type == 'fixed':
+                populations = fixed_populations(job)
+            else:
+                ceilings = [value for value in (job.test.users.max, job.test.limits.hard_users) if isinstance(value, int)]
+                capacity = preflight_social(job.workload)
+                ceilings.append(capacity['account_capacity'])
+                populations = (min(ceilings),)
+            peak = max(max(stage.from_users, stage.to_users) for users in populations for stage in resolve_stages(job, users))
+            capacity = preflight_social(job.workload, peak)
+            print(f'{job.id}: social fixture/accounts/runtime: {json.dumps(capacity)}')
         validate_container_environment({key: os.environ[value.env] for key, value in job.target.env.items()})
         for host in (job.environment.backend, job.environment.generator):
             execute_host(host, ['docker', 'info'], timeout=20)
         execute_host(job.environment.generator, ['docker', 'image', 'inspect', 'grafana/k6:1.4.2'], timeout=20)
         if job.target.image:
-            execute_host(job.environment.backend, ['docker', 'image', 'inspect', job.target.image], timeout=20)
+            inspection = execute_host(job.environment.backend, ['docker', 'image', 'inspect', job.target.image], timeout=20)
+            if job.workload.adapter == 'social':
+                from .engine.resources import runtime_root
+                from .models import NativeCell
+                from .native_runtime import load_runtime_cell, native_image_metadata
+                cell = load_runtime_cell(job.workload.fixture.runtime_cell, runtime_root())
+                if isinstance(cell, NativeCell):
+                    image = json.loads(inspection.stdout)[0]
+                    native_image_metadata({'id': image['Id'], 'os': image['Os'], 'architecture': image['Architecture'],
+                        'labels': image['Config'].get('Labels', {})}, cell, image['Id'])
         else:
             from .engine.types import Host
             execute_host(Host(transport='local'), ['docker', 'buildx', 'version'], timeout=20)
@@ -176,8 +198,19 @@ def dispatch(args):
         if assets.exists():
             raise FileExistsError('template asset directory already exists')
         shutil.copytree(str(source), assets)
-        yaml = (assets / 'queue.yaml').read_text().replace('./', f'./{assets.name}/')
-        output.write_text(yaml)
+        import yaml
+
+        from .engine.config import UniqueLoader
+        data = yaml.load((assets / 'queue.yaml').read_text(), Loader=UniqueLoader)
+        def relocate(value):
+            if isinstance(value, dict):
+                return {key: relocate(item) for key, item in value.items()}
+            if isinstance(value, list):
+                return [relocate(item) for item in value]
+            if isinstance(value, str) and value.startswith('./'):
+                return f'./{assets.name}/' + value[2:]
+            return value
+        output.write_text(yaml.safe_dump(relocate(data), sort_keys=False))
         (assets / 'queue.yaml').unlink()
         print(str(output))
         return 0
