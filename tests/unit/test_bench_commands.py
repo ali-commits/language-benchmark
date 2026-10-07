@@ -24,7 +24,10 @@ def image_config(path):
 def test_init_validate_and_yaml12(tmp_path, capsys):
     path = template(tmp_path)
     assert load_config(path).jobs[0].test.users == [100, 500, 1000]
-    path.write_text(path.read_text().replace('database: "off"', 'database: off'))
+    original = path.read_text()
+    assert "database: 'off'" in original
+    path.write_text(original.replace("database: 'off'", 'database: off'))
+    assert load_config(path).environments['local'].telemetry.database == 'off'
     assert commands.main(['validate', str(path), '--show-effective']) == 0
     assert 'http-fixed' in capsys.readouterr().out
     assert commands.main(['init', '--output', str(path)]) == 2

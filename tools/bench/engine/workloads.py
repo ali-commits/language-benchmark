@@ -81,7 +81,10 @@ def _source_references(text: str, suffix: str = ".js"):
             dependency = node.child_by_field_name("source")
             if dependency is not None:
                 references.append(("module", literal(dependency)))
-        elif node.type in ("import", "meta_property"):
+        elif node.type == "import" or (
+            node.type == "meta_property"
+            and any(child.type == "import" for child in node.children)
+        ):
             raise ValueError("dynamic/meta workload imports are not reproducible")
         elif node.type in ("identifier", "property_identifier", "shorthand_property_identifier"):
             name = source[node.start_byte : node.end_byte].decode("utf-8")

@@ -326,3 +326,19 @@ def test_parser_preserves_supported_language_syntax(tmp_path, suffix, text):
     script.write_text(text)
     prepared = prepare_workload(workload(script), tmp_path / "bundle")
     assert prepared.script.read_text() == text
+
+
+def test_new_target_is_not_a_dynamic_import(tmp_path):
+    script = tmp_path / "main.js"
+    script.write_text(
+        "function Actor() { this.constructed = Boolean(new.target); } export default function() { return new Actor(); }"
+    )
+    prepared = prepare_workload(workload(script), tmp_path / "bundle")
+    assert prepared.script.read_bytes() == script.read_bytes()
+
+
+def test_import_meta_remains_rejected(tmp_path):
+    script = tmp_path / "main.js"
+    script.write_text("export default function() { return import.meta.url; }")
+    with pytest.raises(ValueError, match="dynamic/meta"):
+        prepare_workload(workload(script), tmp_path / "bundle")
