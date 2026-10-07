@@ -2,7 +2,7 @@
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, AliasChoices, model_validator
 
 
 class Model(BaseModel):
@@ -146,8 +146,8 @@ class Criterion(Model):
     value: float
     unit: str | None = None
     stages: list[str] | None = None
-    minimum_samples: StrictInt = 1
-    minimum_coverage: float = Field(default=1, ge=0, le=1)
+    minimum_samples: StrictInt = Field(default=1, ge=1, validation_alias=AliasChoices('min_samples', 'minimum_samples'))
+    minimum_coverage: float = Field(default=.95, ge=0, le=1, validation_alias=AliasChoices('min_coverage', 'minimum_coverage'))
 
 
 class SearchUsers(Model):
@@ -281,3 +281,66 @@ class ResolvedJob(Model):
     objectives: dict[str, list[Criterion]] = Field(default_factory=dict)
     drain: float = 30
     hold_tolerance: OccupancyTolerance = Field(default_factory=OccupancyTolerance)
+
+
+class Sample(Model):
+    """Raw measurement. Times are seconds relative to load start, never epochs.
+
+    Interval values are provider-normalized levels over [timestamp,end_seconds).
+    Gauges hold until the next sample, capped by max_gap_seconds.
+    Rate records carry their own numerator and denominator.
+    """
+    model_config = ConfigDict(extra='forbid', frozen=True, strict=True, allow_inf_nan=True)
+    metric: str
+    scope: Literal['workload', 'backend_host', 'container', 'database', 'generator'] = 'workload'
+    kind: Literal['event', 'rate', 'gauge', 'interval'] = 'event'
+    timestamp: float
+    value: float | None = None
+    numerator: float | None = None
+    denominator: float | None = None
+    end_seconds: float | None = None
+    max_gap_seconds: float | None = None
+    unit: str | None = None
+    includes_failures: bool = True
+    normalization: str | None = None
+    provider_fields: dict[str, Any] = Field(default_factory=dict)
+    collection_interval: float | None = None
+    formula: str | None = None
+
+
+class CriterionResult(Model):
+    criterion: Criterion
+    valid: bool
+    passed: bool = False
+    value: float | None = None
+    sample_count: int = 0
+    coverage: float | None = None
+    reason: str | None = None
+
+
+class Evaluation(Model):
+    verdict: Literal['pass', 'fail', 'invalid']
+    results: tuple[CriterionResult, ...] = ()
+    reasons: tuple[str, ...] = ()
+    warnings: tuple[str, ...] = ()
+
+    @property
+    def valid(self):
+        return self.verdict != 'invalid'
+
+    @property
+    def passed(self):
+        return self.verdict == 'pass'
+
+
+class TrialEvidence(Model):
+    trial_id: str = ''
+    users: int | None = None
+    execution_id: str = ''
+    stages: tuple[ResolvedStage, ...] = ()
+    samples: tuple[Sample, ...] = ()
+    valid: bool = True
+    invalid_reasons: tuple[str, ...] = ()
+    cleanup_verified: bool = False
+    manifest_path: Path | None = None
+    samples_path: Path | None = None
