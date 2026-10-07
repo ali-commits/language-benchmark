@@ -241,7 +241,10 @@ def snapshot_build(build: Build, destination: Path) -> BuildSnapshot:
 
 
 def resolve_target(
-    target: Target, environment: Environment, *, snapshot_directory: Path | None = None,
+    target: Target,
+    environment: Environment,
+    *,
+    snapshot_directory: Path | None = None,
     validate_snapshot: Callable[[BuildSnapshot], None] | None = None,
 ) -> ResolvedTarget:
     host = environment.build or environment.backend
@@ -427,9 +430,7 @@ def prepared_execution_identity(
             "image_id": resolved_target.image_id,
             "generator_image_id": generator_image_id,
             "generator_version": "grafana/k6:1.4.2",
-            "fixture_manifest_sha256": hashlib.sha256(
-                fixture_manifest.read_bytes()
-            ).hexdigest()
+            "fixture_manifest_sha256": hashlib.sha256(fixture_manifest.read_bytes()).hexdigest()
             if fixture_manifest is not None
             else None,
             "wrapper_sha256": {

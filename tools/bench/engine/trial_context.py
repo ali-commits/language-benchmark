@@ -47,9 +47,11 @@ class TrialContext:
         fixture = self.job.workload.fixture
         if self.prepared_fixture is None or fixture is None:
             return self.job.workload
-        return self.job.workload.model_copy(update={
-            "fixture": fixture.model_copy(update={"manifest": self.prepared_fixture.verify()})
-        })
+        return self.job.workload.model_copy(
+            update={
+                "fixture": fixture.model_copy(update={"manifest": self.prepared_fixture.verify()})
+            }
+        )
 
     @property
     def environment(self) -> Environment:

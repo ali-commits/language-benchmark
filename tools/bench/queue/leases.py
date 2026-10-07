@@ -59,7 +59,9 @@ class LeaseReceipt:
 class HostLease:
     name = "bench-queue-lease"
 
-    def __init__(self, host: Host, queue_id: str, owner: str, *, execute: HostExecutor | None = None) -> None:
+    def __init__(
+        self, host: Host, queue_id: str, owner: str, *, execute: HostExecutor | None = None
+    ) -> None:
         if not owner or not queue_id:
             raise QueueConflict("lease owner required")
         self.host, self.queue_id, self.owner = host, queue_id, owner

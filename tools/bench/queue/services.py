@@ -152,7 +152,9 @@ def stop_service(queue: str, state_dir: Path, *, after_current: bool = False) ->
     _command(["systemctl", "--user", "disable", _unit_name(queue, Path(state_dir))])
 
 
-def resume_service(queue: str, state_dir: Path, *, environment_file: Path | None = None) -> ServiceReceipt:
+def resume_service(
+    queue: str, state_dir: Path, *, environment_file: Path | None = None
+) -> ServiceReceipt:
     state_dir = Path(state_dir).resolve()
     name = _unit_name(queue, state_dir)
     config = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")).resolve()

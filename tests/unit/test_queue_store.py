@@ -236,8 +236,13 @@ def test_included_queue_state_rejected_before_registration(tmp_path):
 def test_controller_checkpoint_preserves_nested_extension_metadata(tmp_path):
     store = QueueStore(tmp_path / "queue.db")
     store.register(config(tmp_path))
-    payload = {"owner": "worker", "jobs": {}, "leases": {}, "last_error": None,
-               "future_metadata": {"version": 2}}
+    payload = {
+        "owner": "worker",
+        "jobs": {},
+        "leases": {},
+        "last_error": None,
+        "future_metadata": {"version": 2},
+    }
     store.checkpoint("test", payload)
     retained = store.controller_state("test")
     assert retained == payload
@@ -256,11 +261,11 @@ def test_malformed_controller_checkpoint_fails_closed(tmp_path):
     assert store.jobs("test")[0].state == "pending"
 
 
-@pytest.mark.parametrize('operation', ['append', 'update', 'claim'])
+@pytest.mark.parametrize("operation", ["append", "update", "claim"])
 def test_input_preparation_does_not_hold_write_lock(tmp_path, monkeypatch, operation):
     from tools.bench.queue import store as module
 
-    store = QueueStore(tmp_path / 'queue.db')
+    store = QueueStore(tmp_path / "queue.db")
     cfg = config(tmp_path)
     store.register(cfg)
     observer = QueueStore(store.path)
@@ -269,30 +274,30 @@ def test_input_preparation_does_not_hold_write_lock(tmp_path, monkeypatch, opera
 
     def prepare(jobs, path):
         # Mimic a long Docker/hash operation while another controller handles stop.
-        checkpoints.append(observer.request_stop('test'))
+        checkpoints.append(observer.request_stop("test"))
         return original(jobs, path)
 
-    monkeypatch.setattr(module, '_inputs', prepare)
-    if operation == 'append':
-        store.append('test', cfg.jobs[0].model_copy(update={'id': 'two'}))
-    elif operation == 'update':
-        store.update('test', 'one', cfg.jobs[0], 1)
+    monkeypatch.setattr(module, "_inputs", prepare)
+    if operation == "append":
+        store.append("test", cfg.jobs[0].model_copy(update={"id": "two"}))
+    elif operation == "update":
+        store.update("test", "one", cfg.jobs[0], 1)
     else:
-        assert store.claim_next('test', 'worker') is None
-        assert store.jobs('test')[0].state == 'pending'
+        assert store.claim_next("test", "worker") is None
+        assert store.jobs("test")[0].state == "pending"
     assert len(checkpoints) == 1
-    assert observer.stop_request('test') is False
+    assert observer.stop_request("test") is False
 
 
-@pytest.mark.parametrize('concurrent', ['append', 'update', 'checkpoint'])
+@pytest.mark.parametrize("concurrent", ["append", "update", "checkpoint"])
 def test_claim_preparation_allows_controller_and_pending_writes(tmp_path, monkeypatch, concurrent):
     from tools.bench.queue import store as module
 
-    store = QueueStore(tmp_path / 'queue.db')
+    store = QueueStore(tmp_path / "queue.db")
     cfg = config(tmp_path)
     store.register(cfg)
-    second = cfg.jobs[0].model_copy(update={'id': 'second'})
-    store.append('test', second)
+    second = cfg.jobs[0].model_copy(update={"id": "second"})
+    store.append("test", second)
     observer = QueueStore(store.path)
     original = module._inputs
     called = False
@@ -301,24 +306,26 @@ def test_claim_preparation_allows_controller_and_pending_writes(tmp_path, monkey
         nonlocal called
         if not called:
             called = True
-            if concurrent == 'append':
-                observer.append('test', cfg.jobs[0].model_copy(update={'id': 'third'}))
-            elif concurrent == 'update':
-                observer.update('test', 'second', second, 1)
+            if concurrent == "append":
+                observer.append("test", cfg.jobs[0].model_copy(update={"id": "third"}))
+            elif concurrent == "update":
+                observer.update("test", "second", second, 1)
             else:
-                observer.checkpoint('test', {'owner': 'worker', 'jobs': {}, 'leases': {}, 'last_error': None})
+                observer.checkpoint(
+                    "test", {"owner": "worker", "jobs": {}, "leases": {}, "last_error": None}
+                )
         return original(jobs, path)
 
-    monkeypatch.setattr(module, '_inputs', prepare)
-    assert store.claim_next('test', 'worker').job_id == 'one'
+    monkeypatch.setattr(module, "_inputs", prepare)
+    assert store.claim_next("test", "worker").job_id == "one"
     assert called
 
 
-@pytest.mark.parametrize('concurrent', ['update', 'cancel'])
+@pytest.mark.parametrize("concurrent", ["update", "cancel"])
 def test_claim_rechecks_revision_after_input_preparation(tmp_path, monkeypatch, concurrent):
     from tools.bench.queue import store as module
 
-    store = QueueStore(tmp_path / 'queue.db')
+    store = QueueStore(tmp_path / "queue.db")
     cfg = config(tmp_path)
     store.register(cfg)
     observer = QueueStore(store.path)
@@ -329,38 +336,40 @@ def test_claim_rechecks_revision_after_input_preparation(tmp_path, monkeypatch, 
         nonlocal called
         if not called:
             called = True
-            if concurrent == 'cancel':
-                observer.cancel('test', 'one')
+            if concurrent == "cancel":
+                observer.cancel("test", "one")
             else:
-                replacement = cfg.jobs[0].model_copy(update={'test': cfg.jobs[0].test.model_copy(update={'users': [2]})})
-                observer.update('test', 'one', replacement, 1)
+                replacement = cfg.jobs[0].model_copy(
+                    update={"test": cfg.jobs[0].test.model_copy(update={"users": [2]})}
+                )
+                observer.update("test", "one", replacement, 1)
         return original(jobs, path)
 
-    monkeypatch.setattr(module, '_inputs', prepare)
-    claimed = store.claim_next('test', 'worker')
-    if concurrent == 'cancel':
+    monkeypatch.setattr(module, "_inputs", prepare)
+    claimed = store.claim_next("test", "worker")
+    if concurrent == "cancel":
         assert claimed is None
-        assert store.jobs('test')[0].state == 'cancelled'
+        assert store.jobs("test")[0].state == "cancelled"
     else:
         assert claimed.revision == 3
         assert claimed.resolved_jobs[0].test.users == [2]
-        assert store.jobs('test')[0].state == 'active'
+        assert store.jobs("test")[0].state == "active"
 
 
 def test_update_rechecks_pending_state_after_input_preparation(tmp_path, monkeypatch):
     from tools.bench.queue import store as module
 
-    store = QueueStore(tmp_path / 'queue.db')
+    store = QueueStore(tmp_path / "queue.db")
     cfg = config(tmp_path)
     store.register(cfg)
     observer = QueueStore(store.path)
     original = module._inputs
 
     def prepare(jobs, path):
-        observer.cancel('test', 'one')
+        observer.cancel("test", "one")
         return original(jobs, path)
 
-    monkeypatch.setattr(module, '_inputs', prepare)
-    with pytest.raises(QueueConflict, match='revision changed'):
-        store.update('test', 'one', cfg.jobs[0], 1)
-    assert store.jobs('test')[0].state == 'cancelled'
+    monkeypatch.setattr(module, "_inputs", prepare)
+    with pytest.raises(QueueConflict, match="revision changed"):
+        store.update("test", "one", cfg.jobs[0], 1)
+    assert store.jobs("test")[0].state == "cancelled"

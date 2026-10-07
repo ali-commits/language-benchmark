@@ -108,9 +108,7 @@ def prepare_trial(context: TrialContext, *, execute: HostExecutor) -> Preparatio
         "image_id": prepared_target.image_id,
         "generator_image_id": generator_image_id,
         "workload_identity": prepared_workload.identity,
-        "fixture_manifest_sha256": hashlib.sha256(
-            fixture_manifest.read_bytes()
-        ).hexdigest()
+        "fixture_manifest_sha256": hashlib.sha256(fixture_manifest.read_bytes()).hexdigest()
         if fixture_manifest is not None
         else None,
         "wrapper_sha256": {
@@ -119,7 +117,10 @@ def prepare_trial(context: TrialContext, *, execute: HostExecutor) -> Preparatio
         "colocated_generator": job.environment.backend == job.environment.generator,
     }
     if context.prepared_fixture is not None:
-        manifest["prepared_fixture"] = {"manifest": str(context.prepared_fixture.manifest), "checksums": context.prepared_fixture.checksums}
+        manifest["prepared_fixture"] = {
+            "manifest": str(context.prepared_fixture.manifest),
+            "checksums": context.prepared_fixture.checksums,
+        }
     immutable_json(directory / "manifest.json", manifest)
     return Preparation(
         directory,

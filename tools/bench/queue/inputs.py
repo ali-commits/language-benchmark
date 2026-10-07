@@ -1,4 +1,5 @@
 """Bind preparation's retained copies to the inventory frozen at enqueue time."""
+
 import hashlib
 import json
 import os

@@ -1,4 +1,5 @@
 """Recover one durable pending reservation before any new dispatch."""
+
 from collections.abc import Callable
 from pathlib import Path
 
@@ -52,4 +53,3 @@ def recover_pending(data: JobCheckpoint, *, save: Callable[[str | None], None]) 
         raise QueueConflict("trial evidence identity differs from reservation")
     pending["evidence"] = evidence.model_dump(mode="json")
     save(None)
-
