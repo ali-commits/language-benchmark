@@ -1,16 +1,20 @@
 """Execute both journeys to catch changes to historical pacing, mix and validation."""
 
+import json
 import shutil
 import subprocess
 from pathlib import Path
 
 import pytest
 
+from tools.bench.engine.social import social_adapter
+from tools.bench.engine.types import Fixture, Sample, SecretRef, Workload
+
 ROOT = Path(__file__).resolve().parents[2]
 pytestmark = pytest.mark.skipif(shutil.which("bun") is None, reason="requires Bun")
 
 
-def test_confirmation_replays_historical_journey():
+def test_confirmation_replays_historical_journey_and_counts_distinct_accounts(tmp_path):
     result = subprocess.run(
         [
             "bun",
@@ -21,6 +25,7 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 import * as dataTypes from './benchmarks/k6/lib/data.js';
 const target = 'benchmarks/k6/engine/social-confirmation.js';
+const authenticationSamples = [];
 assert.ok(fs.existsSync(target), 'confirmation workload must exist');
 function replay(path, vu, fault = '') {
   const trace = [], outcomes = [], authenticated = [];
@@ -76,7 +81,12 @@ function replay(path, vu, fault = '') {
     operation(name, callback, success) {
       const response = callback(); outcomes.push([name, success(response)]); return response;
     },
-    record(name, fields) {if (name === 'authenticated_account') authenticated.push(fields.value);},
+    record(name, fields) {
+      if (name === 'authenticated_account') {
+        authenticated.push(fields.value);
+        if (!fault) authenticationSamples.push({metric: name, timestamp: now / 1000, ...fields});
+      }
+    },
   };
   for (let i = 0; i < 200; i++) context.run(workloadContext);
   return JSON.parse(JSON.stringify({trace, outcomes, authenticated}));
@@ -100,6 +110,7 @@ for (const vu of [1, 2, 1000]) {
     }
   }
 }
+console.log(JSON.stringify(authenticationSamples));
 """,
         ],
         cwd=ROOT,
@@ -107,3 +118,21 @@ for (const vu of [1, 2, 1000]) {
         capture_output=True,
     )
     assert result.returncode == 0, result.stdout + result.stderr
+    samples = [Sample.model_validate(item) for item in json.loads(result.stdout)]
+    workload = Workload(
+        adapter="social",
+        script=ROOT / "benchmarks/k6/engine/social-confirmation.js",
+        metrics={},
+        fixture=Fixture(
+            adapter="social",
+            dsn=SecretRef(env="TEST_DSN"),
+            manifest=tmp_path / "manifest.json",
+            allowed_database="language_benchmark_test",
+            runtime_cell="go-net-http",
+        ),
+    )
+    assert social_adapter(workload).authentication(samples, 3) == {
+        "distinct_accounts": 3,
+        "target_accounts": 3,
+        "fraction": 1.0,
+    }

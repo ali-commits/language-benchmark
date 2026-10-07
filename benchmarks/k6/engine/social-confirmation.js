@@ -116,7 +116,7 @@ export default function (context) {
       context.record('authenticated_account', {
         value: 1,
         unit: 'count',
-        provider_fields: { account: index + 1 },
+        provider_fields: { account: actor.username },
       });
       everAuthenticated = true;
     }
