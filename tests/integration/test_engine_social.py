@@ -207,3 +207,39 @@ def test_social_fixture_restore_and_100_users(tmp_path, monkeypatch):
         info = json.loads(docker("inspect", db))[0]
         assert info["Config"]["Labels"]["bench.integration"] == name
         docker("rm", "-f", db)
+
+
+def test_target_environment_cannot_redirect_docker_client():
+    from tools.bench.engine.targets import owner_labels
+    from tools.bench.engine.trial import OwnedDocker
+
+    name = "bench-env-isolation-" + uuid.uuid4().hex[:12]
+    docker("image", "inspect", "postgres:18-alpine")
+    owned = OwnedDocker(Host(transport="local"), owner_labels(name, "environment", "roundtrip"))
+    values = {
+        "DOCKER_HOST": "tcp://127.0.0.1:1",
+        "DOCKER_CONTEXT": "target-only-context",
+        "DOCKER_CONFIG": "/nonexistent-target-config",
+        "PATH": "/target-only-path",
+        "TOKEN": r"literal\nvalue $variable #comment=keep",
+        "SPACES": "  keep both edges  ",
+    }
+    info = None
+    try:
+        info = owned.create(
+            name, ["--entrypoint", "/usr/bin/env", "postgres:18-alpine", "-0"], env=values
+        )
+        observed = dict(item.split("=", 1) for item in info["Config"]["Env"])
+        assert all(observed[key] == value for key, value in values.items())
+        owned.start(info["Id"])
+        deadline = time.monotonic() + 10
+        while owned.inspect(info["Id"])["State"]["Running"]:
+            assert time.monotonic() < deadline
+            time.sleep(0.05)
+        output = owned.command("logs", info["Id"]).stdout
+        running_env = dict(item.split("=", 1) for item in output.split("\0") if item)
+        assert all(running_env[key] == value for key, value in values.items())
+    finally:
+        if info is not None:
+            owned.remove(info["Id"])
+    assert not owned.owned()

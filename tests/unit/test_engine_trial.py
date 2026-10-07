@@ -177,7 +177,7 @@ def test_failure_cleanup_and_reconciliation(tmp_path, monkeypatch, crash):
         def create(self, name, args, **kwargs):
             if name.startswith("bench-target-"):
                 assert secret not in json.dumps(args)
-                assert "BENCH_TOKEN" in args
+                assert "BENCH_TOKEN" not in args
                 assert kwargs["env"] == {"BENCH_TOKEN": secret}
             info = {
                 "Id": name,
@@ -519,7 +519,7 @@ def test_missing_lease_without_durable_restore_receipt_stays_blocked(tmp_path, m
 
 
 @pytest.mark.parametrize("transport", ["local", "ssh"])
-def test_owned_docker_create_secrets_use_transport_environment(transport):
+def test_owned_docker_create_secrets_use_transport_stdin(transport):
     secret = "credential-that-must-not-appear-in-argv"
     calls = []
     labels = {"bench.trial": "secret-test"}
@@ -528,7 +528,7 @@ def test_owned_docker_create_secrets_use_transport_environment(transport):
         calls.append((argv, kwargs))
         if argv[1] == "ps":
             return SimpleNamespace(stdout="")
-        if argv[1] == "create":
+        if argv[0] == "python3":
             return SimpleNamespace(stdout="container-id")
         return SimpleNamespace(
             stdout=json.dumps([{"Id": "container-id", "Config": {"Labels": labels}}])
@@ -539,9 +539,11 @@ def test_owned_docker_create_secrets_use_transport_environment(transport):
         labels,
         execute=execute,
     )
-    docker.create("test-container", ["-e", "TOKEN", "sha256:image"], env={"TOKEN": secret})
+    docker.create("test-container", ["sha256:image"], env={"TOKEN": secret})
     assert all(secret not in json.dumps(argv) for argv, kwargs in calls)
-    assert next(kwargs["env"] for argv, kwargs in calls if argv[1] == "create") == {"TOKEN": secret}
+    helper = next(kwargs for argv, kwargs in calls if argv[0] == "python3")
+    assert json.loads(helper["input_data"])["environment"] == {"TOKEN": secret}
+    assert not helper.get("env")
 
 
 def run_baseline_samples(
@@ -671,14 +673,15 @@ def test_real_transport_keeps_docker_secret_out_of_all_argv(monkeypatch, transpo
         assert secret not in json.dumps(argv)
         if transport == "ssh":
             payload = json.loads(kwargs["input"])
-            child_argv, child_env = payload["argv"], payload["env"]
+            child_argv, child_env, child_input = payload["argv"], payload["env"], payload["stdin"]
         else:
-            child_argv, child_env = argv, kwargs["env"]
+            child_argv, child_env, child_input = argv, kwargs["env"], kwargs["input"]
         assert secret not in json.dumps(child_argv)
         if child_argv[1] == "ps":
             output = ""
-        elif child_argv[1] == "create":
-            assert child_env["TOKEN"] == secret
+        elif child_argv[0] == "python3":
+            assert secret not in child_env.values()
+            assert json.loads(child_input)["environment"]["TOKEN"] == secret
             seen.append(child_argv)
             output = "container-id"
         else:
@@ -689,9 +692,7 @@ def test_real_transport_keeps_docker_secret_out_of_all_argv(monkeypatch, transpo
 
     monkeypatch.setattr(targets.subprocess, "run", run)
     host = Host(transport=transport, host="test.example" if transport == "ssh" else None)
-    OwnedDocker(host, labels).create(
-        "test-container", ["-e", "TOKEN", "sha256:image"], env={"TOKEN": secret}
-    )
+    OwnedDocker(host, labels).create("test-container", ["sha256:image"], env={"TOKEN": secret})
     assert len(seen) == 1
 
 
@@ -745,3 +746,60 @@ def test_cleanup_resumes_partial_two_host_release_without_repeating_restore(tmp_
     assert module._cleanup(context, journal).verified
     assert fixture_calls == ["reset", "verify"]
     assert not any(resources.values())
+
+
+@pytest.mark.parametrize("value", ["line one\nline two", "line one\rline two", "value\0suffix"])
+def test_container_environment_rejects_unrepresentable_values_before_mutation(value):
+    calls = []
+    docker = OwnedDocker(
+        Host(transport="local"),
+        {"bench.trial": "invalid-env"},
+        execute=lambda *args, **kwargs: calls.append((args, kwargs)),
+    )
+    with pytest.raises(ValueError, match="CR, LF or NUL"):
+        docker.create("test-container", ["sha256:image"], env={"TOKEN": value})
+    assert not calls
+
+
+def test_container_env_helper_keeps_client_environment_and_closes_private_fd(monkeypatch):
+    import io
+    import os
+    import shutil
+    import subprocess
+    import sys
+
+    from tools.bench.engine.docker_env import CREATE_WITH_ENV
+
+    values = {
+        "DOCKER_HOST": "tcp://target-only:1",
+        "PATH": "/target-only",
+        "TOKEN": r"literal\nvalue λ",
+    }
+    original = dict(os.environ)
+    descriptors = []
+    monkeypatch.setattr(
+        sys, "stdin", io.StringIO(json.dumps({"environment": values, "timeout": 1}))
+    )
+    monkeypatch.setattr(sys, "argv", ["helper", "--name", "test", "image"])
+    monkeypatch.setattr(shutil, "which", lambda command: "/trusted/docker")
+
+    def run(argv, **kwargs):
+        assert argv[0] == "/trusted/docker"
+        assert dict(os.environ) == original
+        assert "env" not in kwargs
+        assert not any(value in json.dumps(argv) for value in values.values())
+        descriptor = kwargs["pass_fds"][0]
+        descriptors.append(descriptor)
+        assert os.fstat(descriptor).st_mode & 0o777 == 0o600
+        path = argv[argv.index("--env-file") + 1]
+        with open(path, encoding="utf-8") as stream:
+            contents = stream.read()
+        assert contents == "".join(key + "=" + value + "\n" for key, value in values.items())
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(subprocess, "run", run)
+    with pytest.raises(SystemExit) as finished:
+        exec(compile(CREATE_WITH_ENV, "<container-env-helper>", "exec"), {})
+    assert finished.value.code == 0
+    with pytest.raises(OSError):
+        os.fstat(descriptors[0])

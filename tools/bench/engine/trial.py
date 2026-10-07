@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Callable
 
 from .collectors import HOST_PROBE, Collection, collectors_for, health_reasons
+from .docker_env import CREATE_WITH_ENV, validate_container_environment
 from .evidence import Journal, immutable_json
 from .stages import resolve_stages
 from .targets import (
@@ -237,13 +238,20 @@ class OwnedDocker:
         return self.inspect(ids[0]) if ids else None
 
     def create(self, name, arguments, *, env=None):
+        validate_container_environment(env or {})
         if self.by_name(name):
             raise ValueError("existing resource requires explicit reconciliation")
         flags = [flag for k, v in self.labels.items() for flag in ("--label", k + "=" + v)]
         try:
-            identity = self.command(
-                "create", "--name", name, *flags, *arguments, env=env
-            ).stdout.strip()
+            if env:
+                result = self.execute(
+                    self.host,
+                    ["python3", "-c", CREATE_WITH_ENV, "--name", name, *flags, *arguments],
+                    input_data=json.dumps({"environment": env, "timeout": 1800}),
+                )
+            else:
+                result = self.command("create", "--name", name, *flags, *arguments)
+            identity = result.stdout.strip()
         except Exception:
             # A successful remote create may lose its SSH response. Never issue
             # a duplicate create until actual owner-labelled state is known.
@@ -648,6 +656,8 @@ def _run_trial(context, stop_requested):
     if (directory / "manifest.json").exists():
         raise ValueError("trial already exists: reconcile and use a new trial identity")
     job = context.job
+    target_env = {key: os.environ[ref.env] for key, ref in job.target.env.items()}
+    validate_container_environment(target_env)
     stages = resolve_stages(job, context.users)
     for value in [*(s.duration for s in stages), job.drain, job.graceful_ramp_down]:
         if abs(value * 1000 - round(value * 1000)) > 1e-7:
@@ -762,9 +772,6 @@ def _run_trial(context, stop_requested):
                 network = backend.create_network(network_name)
                 args += ["--network", network["Id"]]
                 journal.record("network", "done", {"id": network["Id"]})
-        target_env = {key: os.environ[ref.env] for key, ref in job.target.env.items()}
-        for key in target_env:
-            args.extend(["-e", key])
         for key, value in job.target.labels.items():
             args.extend(["--label", key + "=" + value])
         if job.workload.adapter == "social":

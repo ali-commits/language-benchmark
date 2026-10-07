@@ -165,6 +165,13 @@ def test_real_loopback_ssh_stages_verified_inputs_and_argv(tmp_path, monkeypatch
             [sys.executable, "-c", "import sys;print(sys.argv[1])", "$(echo unsafe); actual space"],
         )
         assert result.stdout.strip() == "$(echo unsafe); actual space"
+        stdin_value = "stdin-only value\nwith literal \\n and Unicode λ"
+        echoed = execute_host(
+            host,
+            [sys.executable, "-c", "import sys;sys.stdout.write(sys.stdin.read())"],
+            input_data=stdin_value,
+        )
+        assert echoed.stdout == stdin_value
         script = tmp_path / "main.js"
         script.write_text("export default function() {}")
         prepared = prepare_workload(workload(script), tmp_path / "bundle")

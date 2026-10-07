@@ -49,14 +49,14 @@ class Endpoints:
 _REMOTE = """import json,os,subprocess,sys
 p=json.load(sys.stdin)
 try:
- r=subprocess.run(p['argv'],cwd=p['cwd'],env={**os.environ,**p['env']},capture_output=True,text=True,timeout=p['timeout'])
+ r=subprocess.run(p['argv'],input=p.get('stdin'),cwd=p['cwd'],env={**os.environ,**p['env']},capture_output=True,text=True,timeout=p['timeout'])
  print(json.dumps({'returncode':r.returncode,'stdout':r.stdout,'stderr':r.stderr}))
 except subprocess.TimeoutExpired:
  print(json.dumps({'timeout':True}))
 """
 
 
-def execute_host(host: Host, argv: list[str], *, env=None, timeout=1800):
+def execute_host(host: Host, argv: list[str], *, env=None, timeout=1800, input_data=None):
     if not argv or any(not isinstance(v, str) for v in argv):
         raise ValueError("command must be a nonempty argv list")
     supplied = {str(k): str(v) for k, v in (env or {}).items()}
@@ -70,7 +70,15 @@ def execute_host(host: Host, argv: list[str], *, env=None, timeout=1800):
             command += ["--", address, "python3 -c " + shlex.quote(_REMOTE)]
             outer = subprocess.run(
                 command,
-                input=json.dumps({"argv": argv, "env": supplied, "cwd": cwd, "timeout": timeout}),
+                input=json.dumps(
+                    {
+                        "argv": argv,
+                        "env": supplied,
+                        "cwd": cwd,
+                        "timeout": timeout,
+                        "stdin": input_data,
+                    }
+                ),
                 text=True,
                 capture_output=True,
                 timeout=timeout + 10,
@@ -89,6 +97,7 @@ def execute_host(host: Host, argv: list[str], *, env=None, timeout=1800):
         else:
             result = subprocess.run(
                 argv,
+                input=input_data,
                 cwd=cwd,
                 env={**os.environ, **supplied},
                 capture_output=True,
@@ -369,7 +378,9 @@ def load_build_snapshot(directory: Path) -> BuildSnapshot:
     )
 
 
-def prepared_execution_identity(job, users, resolved_target: ResolvedTarget, prepared_workload, *, generator_image_id=None):
+def prepared_execution_identity(
+    job, users, resolved_target: ResolvedTarget, prepared_workload, *, generator_image_id=None
+):
     """Canonical identity from preparation receipts, independent of mutable source."""
     from .evidence import execution_identity
 
@@ -380,8 +391,19 @@ def prepared_execution_identity(job, users, resolved_target: ResolvedTarget, pre
             "image_id": resolved_target.image_id,
             "generator_image_id": generator_image_id,
             "generator_version": "grafana/k6:1.4.2",
-            "fixture_manifest_sha256": hashlib.sha256(job.workload.fixture.manifest.read_bytes()).hexdigest() if job.workload.fixture and job.workload.fixture.manifest else None,
-            "wrapper_sha256": {name: hashlib.sha256((Path(__file__).resolve().parents[3] / "benchmarks/k6/engine" / name).read_bytes()).hexdigest() for name in ("runner.js", "metrics.js")},
+            "fixture_manifest_sha256": hashlib.sha256(
+                job.workload.fixture.manifest.read_bytes()
+            ).hexdigest()
+            if job.workload.fixture and job.workload.fixture.manifest
+            else None,
+            "wrapper_sha256": {
+                name: hashlib.sha256(
+                    (
+                        Path(__file__).resolve().parents[3] / "benchmarks/k6/engine" / name
+                    ).read_bytes()
+                ).hexdigest()
+                for name in ("runner.js", "metrics.js")
+            },
             "build_input_identity": resolved_target.build_snapshot.identity
             if resolved_target.build_snapshot
             else None,
