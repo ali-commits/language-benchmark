@@ -11,3 +11,5 @@ fixtures/
 *.pyc
 output
 tmp
+
+.bench/

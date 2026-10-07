@@ -19,8 +19,24 @@ dependencies = [
   "matplotlib==3.10.8",
 ]
 
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project.scripts]
+bench = "tools.bench.commands:main"
+
+[project.optional-dependencies]
+orchestration = ["PyYAML==6.0.3", "pydantic==2.13.5"]
+
+[tool.hatch.build.targets.wheel]
+only-include = ["tools/bench"]
+
+[tool.hatch.build.targets.wheel.sources]
+"tools/bench" = "tools/bench"
+
 [tool.uv]
-package = false
+package = true
 
 [tool.ruff]
 line-length = 100
