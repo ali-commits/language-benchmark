@@ -1,5 +1,8 @@
 """Threshold analysis of observed valid populations, never an exact capacity estimate."""
 
+from collections.abc import Iterable
+from .records import Campaign, Methodology, Outcome, TrialSummary, Observation, ObservedBound, AnalysisReport, checked_record
+
 import json
 import math
 from collections import defaultdict
@@ -10,7 +13,7 @@ from .journeys import classify_journey
 DEFAULT_THRESHOLDS = (0.90, 0.95, 0.99, 0.999)
 
 
-def validate_threshold(value) -> float:
+def validate_threshold(value: float | str) -> float:
     if isinstance(value, bool):
         raise ValueError("threshold must be a finite fraction in [0.90,1.00]")
     result = float(value)
@@ -19,14 +22,14 @@ def validate_threshold(value) -> float:
     return result
 
 
-def authentication_gate(value) -> float:
+def authentication_gate(value: float | str) -> float:
     result = float(value)
     if isinstance(value, bool) or not math.isfinite(result) or not 0 <= result <= 1:
         raise ValueError("authentication gate must be a finite fraction in [0,1]")
     return result
 
 
-def methodology(config: dict) -> dict:
+def methodology(config: Campaign | Methodology) -> Methodology:
     keys = (
         "profile",
         "experiment_type",
@@ -42,7 +45,7 @@ def methodology(config: dict) -> dict:
         "backend_nofile_limit",
         "classification_version",
     )
-    method = {k: config[k] for k in keys if k in config}
+    method = checked_record({k: config.get(k) for k in keys if k in config}, Methodology)
     timing = tuple(config.get(k) for k in ("ramp_seconds", "settle_seconds", "hold_seconds"))
     if "profile" in config:
         method["configured_profile"] = config["profile"]
@@ -78,7 +81,7 @@ def backend_log_flags(artifact: Path) -> list[str]:
     )
 
 
-def _compact_observation(item: dict, cell: str, source: Path, users=None) -> dict:
+def _compact_observation(item: Outcome, cell: str, source: Path, users: int | None = None) -> Observation:
     metrics = item.get("metrics", {})
     users = item.get("users", users)
     trial = item.get("trial_id", "")
@@ -94,13 +97,9 @@ def _compact_observation(item: dict, cell: str, source: Path, users=None) -> dic
     )
     method = methodology(item.get("methodology", {}))
     seconds = method.get("hold_seconds")
-    enriched = dict(metrics)
+    enriched = metrics.copy()
     if seconds:
-        enriched.update(
-            steady_seconds=seconds,
-            attempted_operations_s=metrics.get("attempted", 0) / seconds,
-            successful_operations_s=metrics.get("succeeded", 0) / seconds,
-        )
+        enriched.update({'steady_seconds': seconds, 'attempted_operations_s': metrics.get("attempted", 0) / seconds, 'successful_operations_s': metrics.get("succeeded", 0) / seconds})
     return {
         "id": trial,
         "campaign": item.get(
@@ -118,7 +117,7 @@ def _compact_observation(item: dict, cell: str, source: Path, users=None) -> dic
     }
 
 
-def _summary_observation(row: dict) -> dict:
+def _summary_observation(row: TrialSummary) -> Observation:
     return {
         "id": row["id"],
         "campaign": row["campaign"],
@@ -135,7 +134,7 @@ def _summary_observation(row: dict) -> dict:
     }
 
 
-def load_observations(path: Path) -> list[dict]:
+def load_observations(path: Path) -> list[Observation]:
     from .report import read_trial_summary
 
     path = Path(path)
@@ -171,48 +170,52 @@ def load_observations(path: Path) -> list[dict]:
     return rows
 
 
-def analyze_observations(rows: list[dict], thresholds=None, authentication_threshold=None) -> dict:
-    thresholds = [
+def analyze_observations(rows: list[Observation], thresholds: Iterable[float | str] | None = None, authentication_threshold: float | str | None = None) -> AnalysisReport:
+    parsed_thresholds = [
         validate_threshold(value)
         for value in (DEFAULT_THRESHOLDS if thresholds is None else thresholds)
     ]
-    if not thresholds:
+    if not parsed_thresholds:
         raise ValueError("at least one threshold is required")
     if authentication_threshold is not None:
         authentication_threshold = authentication_gate(authentication_threshold)
-    groups = defaultdict(list)
+    groups: dict[tuple[str, str, str], list[Observation]] = defaultdict(list)
     for row in rows:
         if not row.get("users"):
             continue
         method = row.get("methodology", methodology({}))
         key = (row.get("campaign", "unknown"), row["cell"], json.dumps(method, sort_keys=True))
         groups[key].append(row)
-    bounds = []
+    bounds: list[ObservedBound] = []
     invalid_ids = set()
     for (campaign, cell, method_json), samples in groups.items():
-        method = json.loads(method_json)
+        method = checked_record(json.loads(method_json), Methodology)
         gate = (
-            authentication_threshold
+            authentication_gate(authentication_threshold)
             if authentication_threshold is not None
             else authentication_gate(
                 method.get("authentication_fraction", method.get("success_fraction", 0.99))
             )
         )
-        for threshold in thresholds:
-            passed, failed = [], []
-            outcomes = defaultdict(set)
+        for threshold in parsed_thresholds:
+            passed: list[int] = []
+            failed: list[int] = []
+            outcomes: dict[int, set[str]] = defaultdict(set)
             for index, row in enumerate(samples):
+                users = row["users"]
+                if users is None:
+                    continue
                 reasons = list(row.get("reasons", []))
                 if not row.get("valid", True):
                     reasons.append("recorded evidence invalid")
                 outcome = classify_journey(
-                    row["metrics"], row["users"], reasons, threshold, authentication_fraction=gate
+                    row["metrics"], users, reasons, threshold, authentication_fraction=gate
                 )
                 if outcome == "invalid":
                     invalid_ids.add((campaign, cell, row.get("id") or index))
                     continue
-                outcomes[row["users"]].add(outcome)
-                (passed if outcome == "pass" else failed).append(row["users"])
+                outcomes[users].add(outcome)
+                (passed if outcome == "pass" else failed).append(users)
             high, low = max(passed, default=None), min(failed, default=None)
             counts = sorted(outcomes)
             mixed = sorted(n for n, values in outcomes.items() if len(values) > 1)
@@ -238,14 +241,14 @@ def analyze_observations(rows: list[dict], thresholds=None, authentication_thres
             )
     return {
         "method": "Reclassification at operation thresholds with separate recorded authentication gates. Highest/lowest observed bounds are not exact capacity; a lower-threshold guided search does not locate higher-threshold boundaries. Invalid evidence remains excluded and campaign/methodology identities are never pooled.",
-        "thresholds": thresholds,
+        "thresholds": parsed_thresholds,
         "invalid_observations": len(invalid_ids),
         "observations": rows,
         "bounds": bounds,
     }
 
 
-def human_summary(report: dict) -> str:
+def human_summary(report: AnalysisReport) -> str:
     lines = [
         report["method"],
         "",

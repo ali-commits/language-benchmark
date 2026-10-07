@@ -1,5 +1,8 @@
 """Audited decision-only majority votes; measurement evidence remains immutable."""
 
+from collections.abc import Callable, Mapping
+from .records import Campaign, Outcome, CapacityResult, Decision
+
 import hashlib
 import json
 from collections import Counter
@@ -37,7 +40,7 @@ MEASUREMENT_KEYS = (
 )
 
 
-def measurement_identity(config):
+def measurement_identity(config: Campaign) -> str:
     c = normalize_config(config)
     return hashlib.sha256(
         json.dumps(
@@ -49,26 +52,26 @@ def measurement_identity(config):
     ).hexdigest()
 
 
-def projected_config(original, new):
+def projected_config(original: Campaign, new: Campaign) -> Campaign:
     """Project audited search-resolution and queue changes onto original evidence."""
     old = normalize_config(original)
     current = normalize_config(new)
     if old["resolution_users"] != current["resolution_users"]:
-        receipt = current.get("resolution_handoff", {})
-        previous = {**current, "resolution_users": old["resolution_users"]}
+        resolution_receipt = current.get("resolution_handoff", {})
+        previous: Campaign = {**current, "resolution_users": old["resolution_users"]}
         if (
             old["resolution_users"] != 100
             or current["resolution_users"] != 50
-            or not isinstance(receipt, dict)
-            or type(receipt.get("from")) is not int
-            or receipt.get("from") != 100
-            or type(receipt.get("to")) is not int
-            or receipt.get("to") != 50
-            or receipt.get("measurement_identity_sha256") != measurement_identity(previous)
-            or not isinstance(receipt.get("reason"), str)
-            or not receipt["reason"].strip()
+            or not isinstance(resolution_receipt, dict)
+            or type(resolution_receipt.get("from")) is not int
+            or resolution_receipt.get("from") != 100
+            or type(resolution_receipt.get("to")) is not int
+            or resolution_receipt.get("to") != 50
+            or resolution_receipt.get("measurement_identity_sha256") != measurement_identity(previous)
+            or not isinstance(resolution_receipt.get("reason"), str)
+            or not resolution_receipt["reason"].strip()
         ):
-            raise ValueError("resolution change requires audited 100-to-50 handoff receipt")
+            raise ValueError("resolution change requires audited 100-to-50 handoff resolution_receipt")
         # Older queue/decision receipts attest the complete pre-refinement config.
         current = previous
     if measurement_identity(old) == measurement_identity(current):
@@ -82,12 +85,14 @@ def projected_config(original, new):
         )
         raise ValueError("resume configuration differs: " + key)
     added = set(after[len(before) :])
-    projected = dict(current)
+    projected = current.copy()
     projected["cells"] = before
-    for key in ("cell_starting_hints", "expected_image_ids"):
-        projected[key] = {k: v for k, v in current.get(key, {}).items() if k not in added}
-        if key not in old and not projected[key]:
-            projected.pop(key, None)
+    projected["cell_starting_hints"] = {k: v for k, v in current.get("cell_starting_hints", {}).items() if k not in added}
+    if "cell_starting_hints" not in old and not projected["cell_starting_hints"]:
+        projected.pop("cell_starting_hints", None)
+    projected["expected_image_ids"] = {k: v for k, v in current.get("expected_image_ids", {}).items() if k not in added}
+    if "expected_image_ids" not in old and not projected["expected_image_ids"]:
+        projected.pop("expected_image_ids", None)
     if (
         receipt.get("from_cells") != before
         or receipt.get("to_cells") != after
@@ -101,7 +106,7 @@ def projected_config(original, new):
     return projected
 
 
-def validate_decision_handoff(original, new):
+def validate_decision_handoff(original: Campaign, new: Campaign) -> Campaign:
     old = normalize_config(original)
     current = projected_config(old, new)
     before = old.get("boundary_decision_policy", "legacy")
@@ -124,12 +129,12 @@ def validate_decision_handoff(original, new):
 
 
 class Consensus:
-    def __init__(self, probe, existing, persist):
+    def __init__(self, probe: Callable[[int], Outcome] | None, existing: Mapping[int, list[Outcome]], persist: Callable[[dict[str, Decision]], None] | None) -> None:
         self.probe = probe
-        self.votes = {}
-        self.invalid = []
+        self.votes: dict[int, list[Outcome]] = {}
+        self.invalid: list[Outcome] = []
         self.persist = persist
-        seen = {}
+        seen: dict[str, tuple[int, str]] = {}
         for users, items in existing.items():
             self.votes[int(users)] = []
             for item in items:
@@ -143,21 +148,21 @@ class Consensus:
                         raise ValueError("conflicting trial vote identity")
                     continue
                 seen[identity] = (int(users), item["outcome"])
-                self.votes[int(users)].append(dict(item))
+                self.votes[int(users)].append(item.copy())
             if len(self.votes[int(users)]) > 3:
                 raise ValueError("existing evidence exceeds three valid votes per population")
         self.save()
 
-    def decision(self, users):
+    def decision(self, users: int) -> str | None:
         items = self.votes.get(users, [])
         if not items:
             return None
         counts = Counter(i["outcome"] for i in items)
         if len(items) == 2 and len(counts) == 2:
             return None
-        return max(counts, key=counts.get)
+        return max(counts, key=lambda outcome: counts[outcome])
 
-    def decisions(self):
+    def decisions(self) -> dict[str, Decision]:
         return {
             str(users): {
                 "outcome": self.decision(users),
@@ -168,14 +173,16 @@ class Consensus:
             for users, items in sorted(self.votes.items())
         }
 
-    def save(self):
+    def save(self) -> None:
         if self.persist:
             self.persist(self.decisions())
 
-    def collect(self, users):
+    def collect(self, users: int) -> bool:
         items = self.votes.setdefault(users, [])
         if len(items) >= 3:
             raise ValueError("fourth valid vote is prohibited")
+        if self.probe is None:
+            raise ValueError("collect requires a probe")
         item = self.probe(users)
         if item.get("outcome") == "invalid":
             self.invalid.append({"users": users, **item})
@@ -184,30 +191,31 @@ class Consensus:
             raise ValueError("invalid vote record")
         if any(i["trial_id"] == item["trial_id"] for values in self.votes.values() for i in values):
             raise ValueError("duplicate vote cannot count twice")
-        items.append(dict(item))
+        items.append(item.copy())
         self.save()
         return True
 
-    def explore(self, users):
+    def explore(self, users: int) -> str | None:
         if not self.votes.get(users) and not self.collect(users):
             return "invalid"
         if self.decision(users) is None and not self.collect(users):
             return "invalid"
         return self.decision(users)
 
-    def confirm_failure(self, users):
+    def confirm_failure(self, users: int) -> str | None:
         if len(self.votes[users]) == 1 and not self.collect(users):
             return "invalid"
         if self.decision(users) is None and not self.collect(users):
             return "invalid"
         return self.decision(users)
 
-    def result(self, status, resolution):
+    def result(self, status: str, resolution: int) -> CapacityResult:
         decisions = {n: self.decision(n) for n in self.votes}
         passes = [n for n, value in decisions.items() if value == "pass"]
         fails = [n for n, value in decisions.items() if value == "fail"]
         lower = max(passes, default=0)
         upper = min((n for n in fails if n > lower), default=None)
+        observations: list[Outcome] = [{"users": n, **i} for n, items in self.votes.items() for i in items]
         return {
             "status": status,
             "passing_users": lower,
@@ -216,24 +224,23 @@ class Consensus:
             "boundary_decision_policy": POLICY,
             "decisions": self.decisions(),
             "observations": sorted(
-                [{"users": n, **i} for n, items in self.votes.items() for i in items]
-                + self.invalid,
+                observations + self.invalid,
                 key=lambda i: i.get("trial_id", ""),
             ),
         }
 
 
 def majority_search(
-    probe,
-    existing=None,
-    start=10000,
-    step=10000,
-    ceiling=50000,
-    resolution=100,
-    next_candidate=None,
-    growth_strategy="geometric",
-    persist=None,
-):
+    probe: Callable[[int], Outcome],
+    existing: Mapping[int, list[Outcome]] | None = None,
+    start: int = 10000,
+    step: int = 10000,
+    ceiling: int = 50000,
+    resolution: int = 100,
+    next_candidate: int | None = None,
+    growth_strategy: str = "geometric",
+    persist: Callable[[dict[str, Decision]], None] | None = None,
+) -> CapacityResult:
     if not 1 <= start <= ceiling or step < 1 or resolution < 1:
         raise ValueError("invalid search bounds")
     if growth_strategy not in ("geometric", "adaptive"):

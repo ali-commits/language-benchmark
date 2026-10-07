@@ -1,9 +1,11 @@
+from .records import Campaign, Trial
+
 import hashlib
 import json
 import random
 
 
-def validate_campaign(c: dict) -> dict:
+def validate_campaign(c: Campaign) -> Campaign:
     if c.get("mode") not in ("local", "aws"):
         raise ValueError("mode must be local or aws")
     smoke = c.get("smoke", False)
@@ -28,13 +30,13 @@ def validate_campaign(c: dict) -> dict:
     return c
 
 
-def schedule_trials(c: dict) -> list[dict]:
+def schedule_trials(c: Campaign) -> list[Trial]:
     validate_campaign(c)
     rng = random.Random(c.get("seed", 20261004))
-    trials = []
+    trials: list[Trial] = []
     identity = hashlib.sha256(json.dumps(c, sort_keys=True).encode()).hexdigest()[:12]
     for repeat in range(c["repeats"]):
-        block = [
+        block: list[Trial] = [
             {
                 "campaign_id": identity,
                 "cell": cell,

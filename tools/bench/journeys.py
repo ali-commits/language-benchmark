@@ -1,5 +1,9 @@
 """Credentials, phase-aware metrics, and response-based concurrent-user classification."""
 
+from typing import Literal
+from pydantic import TypeAdapter
+from .records import (Credential, StreamStatus, Latency, JourneyMetrics, PhaseMetrics, EndpointMetrics, Authentication, TrialResult, MetricPoint, checked_record)
+
 import json
 import os
 from datetime import datetime
@@ -8,8 +12,8 @@ from pathlib import Path
 from .report import metric_lines, percentile
 
 
-def prepare_journey_data(credentials_path: Path, users: int, output_path: Path) -> dict:
-    credentials = json.loads(credentials_path.read_text())
+def prepare_journey_data(credentials_path: Path, users: int, output_path: Path) -> dict[str, int]:
+    credentials = TypeAdapter(list[Credential]).validate_json(credentials_path.read_text(), strict=True)
     selected = credentials[:users]
     if (
         users < 1
@@ -26,7 +30,7 @@ def prepare_journey_data(credentials_path: Path, users: int, output_path: Path) 
     return {"actors": users}
 
 
-def latency_summary(values: list[float]) -> dict:
+def latency_summary(values: list[float]) -> Latency:
     if not values:
         return {"duration_samples": 0}
     import statistics
@@ -41,7 +45,7 @@ def latency_summary(values: list[float]) -> dict:
     }
 
 
-def read_journey_metrics(path: Path, steady_seconds: float | None = None) -> dict:
+def read_journey_metrics(path: Path, steady_seconds: float | None = None) -> JourneyMetrics:
     """Reduce immutable samples; latency includes failed responses and timeouts.
 
     Optional configured steady duration is the throughput denominator. Sample timestamp
@@ -51,7 +55,7 @@ def read_journey_metrics(path: Path, steady_seconds: float | None = None) -> dic
 
     if steady_seconds is not None and (not math.isfinite(steady_seconds) or steady_seconds <= 0):
         raise ValueError("configured steady duration must be finite and positive")
-    m = {
+    m: JourneyMetrics = {
         "attempted": 0,
         "succeeded": 0,
         "authenticated_users": 0,
@@ -66,7 +70,7 @@ def read_journey_metrics(path: Path, steady_seconds: float | None = None) -> dic
         "http_requests": 0,
         "completed_journeys": 0,
     }
-    names = {
+    names: dict[str, Literal["attempted", "succeeded", "timeouts", "network_errors", "http_requests", "completed_journeys"]] = {
         "operations_attempted": "attempted",
         "operations_succeeded": "succeeded",
         "journey_timeouts": "timeouts",
@@ -74,13 +78,13 @@ def read_journey_metrics(path: Path, steady_seconds: float | None = None) -> dic
         "http_reqs": "http_requests",
         "user_journeys_completed": "completed_journeys",
     }
-    buckets = {}
-    status = {"incomplete": False}
-    auth = {"login_attempted": 0, "login_succeeded": 0}
+    buckets: dict[str, PhaseMetrics] = {}
+    status: StreamStatus = {"incomplete": False}
+    auth: Authentication = {"login_attempted": 0, "login_succeeded": 0}
     activity_start = activity_end = None
     for line in metric_lines(path, status):
         try:
-            p = json.loads(line)
+            p = checked_record(json.loads(line), MetricPoint)
             if p.get("type") != "Point":
                 continue
             data, metric = p["data"], p["metric"]
@@ -156,12 +160,12 @@ def read_journey_metrics(path: Path, steady_seconds: float | None = None) -> dic
                     "login_attempted" if metric == "operations_attempted" else "login_succeeded"
                 ] += value
     for phase, bucket in buckets.items():
-        bucket.update(latency_summary(bucket.pop("durations")))
+        _add_latency(bucket, bucket.pop("durations"))
         bucket["success_fraction"] = (
             bucket["succeeded"] / bucket["attempted"] if bucket["attempted"] else None
         )
         for endpoint in bucket["endpoints"].values():
-            endpoint.update(latency_summary(endpoint.pop("durations")))
+            _add_latency(endpoint, endpoint.pop("durations"))
             endpoint["success_fraction"] = (
                 endpoint["succeeded"] / endpoint["attempted"] if endpoint["attempted"] else None
             )
@@ -178,43 +182,27 @@ def read_journey_metrics(path: Path, steady_seconds: float | None = None) -> dic
         "success_fraction",
     ):
         if key in steady:
-            m[key] = steady[key]
+            m.update(checked_record({key: steady.get(key)}, JourneyMetrics))
     for phase in ("ramp", "settle"):
         for key in ("attempted", "succeeded"):
-            m[phase + "_" + key] = buckets.get(phase, {}).get(key, 0)
+            m.update(checked_record({phase + "_" + key: buckets.get(phase, {}).get(key, 0)}, JourneyMetrics))
     if activity_start is not None:
-        m.update(activity_started_epoch=activity_start, activity_finished_epoch=activity_end)
+        m.update({'activity_started_epoch': activity_start, 'activity_finished_epoch': activity_end})
     if "started_epoch" in steady:
-        m.update(
-            steady_started_epoch=steady["started_epoch"],
-            steady_finished_epoch=steady["finished_epoch"],
-        )
+        m.update({'steady_started_epoch': steady["started_epoch"], 'steady_finished_epoch': steady["finished_epoch"]})
     auth["login_success_fraction"] = (
         auth["login_succeeded"] / auth["login_attempted"] if auth["login_attempted"] else None
     )
-    m.update(
-        incomplete=status["incomplete"],
-        phases=buckets,
-        endpoints=steady.get("endpoints", {}),
-        authentication=auth,
-    )
+    m.update({'incomplete': status["incomplete"], 'phases': buckets, 'endpoints': steady.get("endpoints", {}), 'authentication': auth})
     if steady_seconds is not None:
-        m.update(
-            steady_seconds=steady_seconds,
-            attempted_operations_s=m["attempted"] / steady_seconds,
-            successful_operations_s=m["succeeded"] / steady_seconds,
-            http_requests_s=m["http_requests"] / steady_seconds,
-        )
+        m.update({'steady_seconds': steady_seconds, 'attempted_operations_s': m["attempted"] / steady_seconds, 'successful_operations_s': m["succeeded"] / steady_seconds, 'http_requests_s': m["http_requests"] / steady_seconds})
         for endpoint in m["endpoints"].values():
-            endpoint.update(
-                attempted_operations_s=endpoint["attempted"] / steady_seconds,
-                successful_operations_s=endpoint["succeeded"] / steady_seconds,
-            )
+            endpoint.update({'attempted_operations_s': endpoint["attempted"] / steady_seconds, 'successful_operations_s': endpoint["succeeded"] / steady_seconds})
     return m
 
 
 def classify_journey(
-    metrics: dict,
+    metrics: JourneyMetrics,
     users: int,
     reasons: list[str],
     success_fraction: float = 0.99,
@@ -250,16 +238,32 @@ def classify_journey(
     return "pass" if metrics["succeeded"] / metrics["attempted"] >= success_fraction else "fail"
 
 
-def generator_window(result: dict):
+def generator_window(result: TrialResult) -> tuple[float | None, float | None]:
     metrics = result.get("journey_metrics", {})
     start = metrics.get("activity_started_epoch", result.get("execution_started_epoch"))
     end = metrics.get("activity_finished_epoch", result.get("execution_finished_epoch"))
     return (start, end) if start is not None and end is not None else (None, None)
 
 
-def journey_flags(metrics: dict) -> list[str]:
+def journey_flags(metrics: JourneyMetrics) -> list[str]:
     return (
         ["generator socket/resource errors observed"]
         if metrics.get("generator_resource_errors")
         else []
     )
+
+
+def _add_latency(target: EndpointMetrics, values: list[float]) -> None:
+    summary = latency_summary(values)
+    if "duration_samples" in summary:
+        target["duration_samples"] = summary["duration_samples"]
+    if "mean" in summary:
+        target["mean"] = summary["mean"]
+    if "p50" in summary:
+        target["p50"] = summary["p50"]
+    if "p95" in summary:
+        target["p95"] = summary["p95"]
+    if "p99" in summary:
+        target["p99"] = summary["p99"]
+    if "p999" in summary:
+        target["p999"] = summary["p999"]

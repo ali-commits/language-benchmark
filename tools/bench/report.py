@@ -1,5 +1,8 @@
 """Reports derive distributions from raw points; failures remain in denominators."""
 
+from collections.abc import Iterator
+from .records import (JourneyMetrics, EndpointMetrics, StreamStatus, MetricPoint, TrialSummary, CampaignSummary, TrialManifest, TrialResult, ExternalResources, checked_record)
+
 import html
 import json
 import statistics
@@ -10,7 +13,7 @@ from .manifest import atomic_json
 from .telemetry import validate_rds_evidence
 
 
-def qualify(metrics: dict, reasons: list[str], workload: str = "mixed") -> str:
+def qualify(metrics: JourneyMetrics, reasons: list[str], workload: str = "mixed") -> str:
     required = ("attempted", "succeeded", "dropped", "p95", "p99")
     if reasons or any(k not in metrics for k in required) or metrics.get("attempted", 0) <= 0:
         return "unknown"
@@ -32,14 +35,14 @@ def percentile(values: list[float], percent: float) -> float:
     return v[lo] + (v[hi] - v[lo]) * (i - lo)
 
 
-def read_metrics(path: Path) -> dict:
+def read_metrics(path: Path) -> JourneyMetrics:
     durations = []
-    per = {}
-    metrics = {"attempted": 0, "succeeded": 0, "dropped": 0, "http_requests": 0}
-    status = {"incomplete": False}
+    per: dict[str, EndpointMetrics] = {}
+    metrics: JourneyMetrics = {"attempted": 0, "succeeded": 0, "dropped": 0, "http_requests": 0}
+    status: StreamStatus = {"incomplete": False}
     for line in metric_lines(path, status):
         try:
-            point = json.loads(line)
+            point = checked_record(json.loads(line), MetricPoint)
         except (json.JSONDecodeError, UnicodeDecodeError):
             status["incomplete"] = True
             continue
@@ -65,16 +68,11 @@ def read_metrics(path: Path) -> dict:
             metrics["dropped"] += value
     metrics["incomplete"] = status["incomplete"]
     if durations:
-        metrics.update(
-            mean=statistics.fmean(durations),
-            p999=percentile(durations, 0.999),
-            p50=percentile(durations, 0.5),
-            p95=percentile(durations, 0.95),
-            p99=percentile(durations, 0.99),
-        )
+        metrics.update({'mean': statistics.fmean(durations), 'p999': percentile(durations, 0.999), 'p50': percentile(durations, 0.5), 'p95': percentile(durations, 0.95), 'p99': percentile(durations, 0.99)})
     metrics["endpoints"] = {
         op: {
-            **{k: b[k] for k in ["attempted", "succeeded"]},
+            "attempted": b["attempted"],
+            "succeeded": b["succeeded"],
             **(
                 {
                     "mean": statistics.fmean(b["durations"]),
@@ -101,7 +99,7 @@ def generator_flags(path: Path, start: float | None = None, end: float | None = 
     samples = 0
     for line in path.read_text().splitlines():
         sample = json.loads(line)
-        if start is not None and not start <= sample.get("time", 0) <= end:
+        if start is not None and end is not None and not start <= sample.get("time", 0) <= end:
             continue
         host = sample.get("hosts", {}).get("generator", {})
         if "stat" not in host:
@@ -132,15 +130,15 @@ def generator_flags(path: Path, start: float | None = None, end: float | None = 
     return sorted(set(flags))
 
 
-def summarize_campaign(results_dir: Path) -> dict:
+def summarize_campaign(results_dir: Path) -> CampaignSummary:
     trials = []
     for manifest_path in sorted(results_dir.glob("*/manifest.json")):
         trials.append(read_trial_summary(manifest_path))
-    groups = {}
+    groups: dict[tuple[str, str, int | None], list[TrialSummary]] = {}
     for t in trials:
         key = (t["campaign"], t["cell"], t["rate"])
         groups.setdefault(key, []).append(t)
-    summary = []
+    summary: list[dict[str, object]] = []
     for (campaign, cell, rate), rows in groups.items():
         values = [
             r["successful_operations_s"] for r in rows if r["successful_operations_s"] is not None
@@ -237,7 +235,7 @@ def write_report(results_dir: Path, output_path: Path) -> None:
     )
 
 
-def metric_lines(path: Path, status: dict):
+def metric_lines(path: Path, status: StreamStatus) -> Iterator[bytes]:
     decoder = zlib.decompressobj(16 + zlib.MAX_WBITS)
     buffer = b""
     with path.open("rb") as f:
@@ -261,14 +259,14 @@ def metric_lines(path: Path, status: dict):
         yield buffer
 
 
-def plot_curves(report: dict, output_dir: Path) -> list[Path]:
+def plot_curves(report: CampaignSummary, output_dir: Path) -> list[Path]:
     import matplotlib
 
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    groups = {}
+    groups: dict[tuple[str, str], list[TrialSummary]] = {}
     for trial in report["trials"]:
         if not trial["metrics"].get("attempted", 1):
             continue
@@ -280,17 +278,17 @@ def plot_curves(report: dict, output_dir: Path) -> list[Path]:
     ]:
         fig, axis = plt.subplots(figsize=(9, 5), layout="constrained")
         for (campaign, cell), trials in groups.items():
-            rates = sorted({t["rate"] for t in trials})
+            rates = sorted({t["rate"] for t in trials if t["rate"] is not None})
             values = []
             used = []
             for rate in rates:
                 sample = [
-                    t.get(metric, t["metrics"].get(metric)) for t in trials if t["rate"] == rate
+                    (t.get("successful_operations_s") if metric == "successful_operations_s" else t["metrics"].get("p95")) for t in trials if t["rate"] == rate
                 ]
-                sample = [v for v in sample if v is not None]
-                if sample:
+                present = [v for v in sample if v is not None]
+                if present:
                     used.append(rate)
-                    values.append(statistics.median(sample))
+                    values.append(statistics.median(present))
             if used:
                 axis.plot(used, values, marker="o", label=cell + " / " + campaign)
         axis.set_xlabel(
@@ -310,11 +308,11 @@ def plot_curves(report: dict, output_dir: Path) -> list[Path]:
     return paths
 
 
-def read_trial_summary(manifest_path: Path, *, prefer_saved_metrics: bool = False) -> dict:
+def read_trial_summary(manifest_path: Path, *, prefer_saved_metrics: bool = False) -> TrialSummary:
     p = manifest_path.with_name("result.json")
-    manifest = json.loads(manifest_path.read_text())
-    result = (
-        json.loads(p.read_text())
+    manifest = checked_record(json.loads(manifest_path.read_text()), TrialManifest)
+    result: TrialResult = (
+        checked_record(json.loads(p.read_text()), TrialResult)
         if p.exists()
         else {
             "trial": manifest["trial"],
@@ -325,13 +323,13 @@ def read_trial_summary(manifest_path: Path, *, prefer_saved_metrics: bool = Fals
         }
     )
     metrics_path = p.parent / "k6/metrics.json.gz"
-    metrics = {}
+    metrics: JourneyMetrics = {}
     config = manifest["campaign"]
     journey = manifest["campaign"].get("operation") == "user-journey"
     metrics_source = "raw metric samples"
     if prefer_saved_metrics:
         # The live exporter trusts only finalized reductions and never scans raw gzip.
-        saved = result.get("journey_metrics" if journey else "metrics")
+        saved = result.get("journey_metrics") if journey else result.get("metrics")
         required = (
             ("attempted", "succeeded", "authenticated_users", "active_users_max", "p95", "p99")
             if journey
@@ -342,7 +340,7 @@ def read_trial_summary(manifest_path: Path, *, prefer_saved_metrics: bool = Fals
             and isinstance(saved, dict)
             and all(key in saved for key in required)
         ):
-            metrics = dict(saved)
+            metrics = saved.copy()
             metrics_source = "finalized saved reduction"
         else:
             metrics_source = "finalized saved reduction unavailable"
@@ -409,7 +407,7 @@ def read_trial_summary(manifest_path: Path, *, prefer_saved_metrics: bool = Fals
         p.parent / "telemetry.jsonl", phase_windows(result, config, metrics)
     )
     method = methodology(config)
-    external_resources = {
+    external_resources: ExternalResources = {
         "generator": summarize_generator_resources(
             p.parent / "telemetry.jsonl", phase_windows(result, config, metrics)
         ),
@@ -420,7 +418,7 @@ def read_trial_summary(manifest_path: Path, *, prefer_saved_metrics: bool = Fals
         ),
     }
 
-    def rate(count):
+    def rate(count: float) -> float | None:
         return count / seconds if seconds else None
 
     return {

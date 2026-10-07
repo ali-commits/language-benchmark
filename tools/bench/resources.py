@@ -1,5 +1,7 @@
 """Sampled backend Docker resources; generator/RDS budgets remain separate."""
 
+from .records import Campaign, TrialResult, JourneyMetrics, Resources, GeneratorResources, RdsResources
+
 import json
 import math
 import re
@@ -26,15 +28,13 @@ def parse_memory_bytes(value: str) -> float:
     return float(match[1]) * units[match[2]]
 
 
-def phase_windows(result: dict, campaign: dict, metrics: dict) -> dict:
+def phase_windows(result: TrialResult, campaign: Campaign, metrics: JourneyMetrics) -> dict[str, list[float]]:
     """Configured phase boundaries where saved; legacy raw extrema are labeled fallback."""
     start = metrics.get("scenario_started_epoch", result.get("scenario_started_epoch"))
     if start is not None and all(
         k in campaign for k in ("ramp_seconds", "settle_seconds", "hold_seconds")
     ):
-        ramp, settle, hold = (
-            campaign[k] for k in ("ramp_seconds", "settle_seconds", "hold_seconds")
-        )
+        ramp, settle, hold = campaign["ramp_seconds"], campaign["settle_seconds"], campaign["hold_seconds"]
         return {
             "ramp": [start, start + ramp],
             "settle": [start + ramp, start + ramp + settle],
@@ -47,11 +47,11 @@ def phase_windows(result: dict, campaign: dict, metrics: dict) -> dict:
     }
 
 
-def summarize_resources(path: Path, phases: dict, allocated_cpus: float = 2) -> dict:
+def summarize_resources(path: Path, phases: dict[str, list[float]], allocated_cpus: float = 2) -> Resources:
     if not math.isfinite(allocated_cpus) or allocated_cpus <= 0:
         raise ValueError("positive allocated CPUs required")
-    samples = {name: {"cpu": [], "memory": []} for name in phases}
-    result = {
+    samples: dict[str, dict[str, list[float]]] = {name: {"cpu": [], "memory": []} for name in phases}
+    result: Resources = {
         "allocated_cpus": allocated_cpus,
         "source": "Docker stats sampled Linux working set",
         "limitation": "Averages/peaks are sampled Docker working-set measurements, not RSS or guaranteed transient maxima; CPU100% uses the full allocated budget. Phase boundaries use the actual k6 scenario anchor with configured stages when available, otherwise raw phase extrema (partial sampling boundaries).",
@@ -97,14 +97,14 @@ def summarize_resources(path: Path, phases: dict, allocated_cpus: float = 2) -> 
     return result
 
 
-def summarize_generator_resources(path: Path, phases: dict) -> dict:
-    result = {
+def summarize_generator_resources(path: Path, phases: dict[str, list[float]]) -> GeneratorResources:
+    result: GeneratorResources = {
         "budget": "Independent load-generator host; CPU100% spans its own logical CPUs, not the backend2CPU budget",
         "phases": {},
     }
     if not path.exists():
         return result
-    buckets = {phase: {"cpu": [], "available": []} for phase in phases}
+    buckets: dict[str, dict[str, list[float]]] = {phase: {"cpu": [], "available": []} for phase in phases}
     previous = None
     for line in path.read_text().splitlines():
         try:
@@ -134,24 +134,18 @@ def summarize_generator_resources(path: Path, phases: dict) -> dict:
     for phase, bucket in buckets.items():
         values = {}
         if bucket["cpu"]:
-            values.update(
-                cpu_percent_of_generator_host_mean=statistics.fmean(bucket["cpu"]),
-                cpu_percent_of_generator_host_peak=max(bucket["cpu"]),
-            )
+            values.update({'cpu_percent_of_generator_host_mean': statistics.fmean(bucket["cpu"]), 'cpu_percent_of_generator_host_peak': max(bucket["cpu"])})
         if bucket["available"]:
-            values.update(
-                memory_available_mib_mean=statistics.fmean(bucket["available"]),
-                memory_available_mib_min=min(bucket["available"]),
-            )
+            values.update({'memory_available_mib_mean': statistics.fmean(bucket["available"]), 'memory_available_mib_min': min(bucket["available"])})
         if values:
             result["phases"][phase] = values
     return result
 
 
-def summarize_rds_resources(path: Path, start: float, end: float) -> dict:
+def summarize_rds_resources(path: Path, start: float, end: float) -> RdsResources:
     from datetime import datetime
 
-    result = {
+    result: RdsResources = {
         "budget": "RDS is an independent managed database instance; its CPU is not backend CPU",
         "limitation": "Minute CloudWatch buckets overlap measurement boundaries; these are sampled database statistics, not backend allocations",
         "metrics": {},
