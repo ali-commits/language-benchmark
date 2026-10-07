@@ -68,7 +68,7 @@ def stop_owned_load(
         if data is None:
             continue
         if data.get("running"):
-            optional(["docker", "stop", "--signal", "SIGINT", "--time", "30", identity], timeout=60)
+            optional(["docker", "stop", "--signal", "SIGINT", "--timeout", "30", identity], timeout=60)
             stopped.append(identity)
         remaining = inspect(identity)
         if remaining is not None:
