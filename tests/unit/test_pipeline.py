@@ -199,3 +199,53 @@ def test_interrupt_during_past_stage_validation_stops_owned_unfinished_controlle
     assert calls == [["sudo", "systemctl", "stop", "owned-controller"]]
     assert json.loads(state.read_text())["stage"] == "second"
     assert json.loads(state.read_text())["completed_stages"] == ["first"]
+
+
+def test_complete_capacity_bracket_cannot_skip_requested_refinement(tmp_path):
+    s = stage(tmp_path, "capacity")
+    cfg = Path(s["config"])
+    d = json.loads(cfg.read_text())
+    d["resolution_users"] = 50
+    cfg.write_text(json.dumps(d))
+    manifest = Path(s["output"]) / "trial-0001/manifest.json"
+    m = json.loads(manifest.read_text())
+    m["campaign"]["resolution_users"] = 50
+    manifest.write_text(json.dumps(m))
+    output = Path(s["output"]) / "capacity-results.json"
+    output.write_text(
+        json.dumps(
+            {"example": {"status": "bracket_found", "passing_users": 1000, "failing_users": 1062}}
+        )
+    )
+    with pytest.raises(RuntimeError, match="resolution"):
+        verify_completion(s)
+
+
+def test_refined_completion_accepts_audited_old_resolution_evidence(tmp_path):
+    from bench.majority import measurement_identity
+
+    s = stage(tmp_path, "capacity")
+    cfg = Path(s["config"])
+    old = json.loads(cfg.read_text())
+    old["resolution_users"] = 100
+    mf = Path(s["output"]) / "trial-0001/manifest.json"
+    m = json.loads(mf.read_text())
+    m["campaign"] = normalize_config(old)
+    mf.write_text(json.dumps(m))
+    new = {
+        **old,
+        "resolution_users": 50,
+        "resolution_handoff": {
+            "from": 100,
+            "to": 50,
+            "measurement_identity_sha256": measurement_identity(old),
+            "reason": "explicituserrefinement",
+        },
+    }
+    cfg.write_text(json.dumps(new))
+    (Path(s["output"]) / "capacity-results.json").write_text(
+        json.dumps(
+            {"example": {"status": "bracket_found", "passing_users": 1031, "failing_users": 1062}}
+        )
+    )
+    verify_completion(s)

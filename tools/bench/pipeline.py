@@ -7,7 +7,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from .majority import measurement_identity
+from .majority import measurement_identity, validate_decision_handoff
 from .manifest import atomic_json
 from .native_runtime import load_runtime_cell, registry_metadata
 from .profiles import normalize_config
@@ -40,13 +40,23 @@ def verify_completion(stage):
                 raise RuntimeError("fixed-load stage has incomplete or invalid evidence")
         elif result.get("status") not in ("bracket_found", "ceiling_reached", "unstable_boundary"):
             raise RuntimeError("capacity stage has incomplete or invalid evidence")
+        elif result.get("status") == "bracket_found":
+            gap = result.get("failing_users", 0) - result.get("passing_users", 0)
+            if not 0 < gap <= normalize_config(config)["resolution_users"]:
+                raise RuntimeError("capacity bracket exceeds configured resolution")
     manifests = sorted(output.glob("*/manifest.json"))
     if not manifests:
         raise RuntimeError("stage is missing original trial manifests")
     for path in manifests:
         manifest = read_status(path)
         saved = read_status(path.with_name("result.json"))
-        if measurement_identity(manifest.get("campaign", {})) != measurement_identity(config):
+        try:
+            projected = validate_decision_handoff(manifest.get("campaign", {}), config)
+        except ValueError as error:
+            raise RuntimeError(
+                "completed stage measurement identity differs from configuration"
+            ) from error
+        if measurement_identity(manifest.get("campaign", {})) != measurement_identity(projected):
             raise RuntimeError("completed stage measurement identity differs from configuration")
         validate_resume_resource_policy(
             manifest,
