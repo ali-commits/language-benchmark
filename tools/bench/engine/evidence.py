@@ -15,12 +15,19 @@ def _file_identity(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def execution_identity(job, users):
+def execution_identity(job, users, *, provenance=None):
     payload=job.model_dump(mode='json',by_alias=True)
     for field in ('criteria','objectives','test','id'):
         payload.pop(field,None)
     payload['stages']=[s.model_dump(mode='json',exclude={'evaluate'}) for s in resolve_stages(job,users)]
     payload['users']=users
+    if provenance is not None:
+        if not provenance.get('image_id') or not provenance.get('workload_identity'):
+            raise ValueError('prepared provenance requires image and workload identities')
+        if job.target.build and not provenance.get('build_input_identity'):
+            raise ValueError('prepared provenance requires build input identity')
+        payload['prepared_inputs']=provenance
+        return _digest(payload)
     payload['files']={str(p):_file_identity(p) for p in [job.workload.script,*job.workload.dependencies]}
     if job.target.build:
         context=job.target.build.context

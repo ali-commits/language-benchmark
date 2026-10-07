@@ -51,8 +51,9 @@ class Environment(Model):
 
 class Readiness(Model):
     path: str = '/health'
-    timeout: float = 60
-    interval: float = 1
+    status: StrictInt = Field(default=200, ge=100, le=599)
+    timeout: float = Field(default=60, gt=0)
+    interval: float = Field(default=1, gt=0)
 
 
 class Resources(Model):
@@ -95,9 +96,9 @@ class Metric(Model):
 
 
 class Hook(Model):
-    argv: list[str]
+    argv: list[str] = Field(min_length=1)
     host: Literal['backend', 'generator', 'controller'] = 'backend'
-    timeout: float = 60
+    timeout: float = Field(default=60, gt=0)
     env: dict[str, SecretRef] = Field(default_factory=dict)
 
 
