@@ -1,12 +1,23 @@
 """Validated public configuration objects. Quantities are normalized at loading."""
+
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictInt, AliasChoices, model_validator
+from pydantic import (
+    AliasChoices,
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictBool,
+    StrictInt,
+    model_validator,
+)
 
 
 class Model(BaseModel):
-    model_config = ConfigDict(extra='forbid', populate_by_name=True, allow_inf_nan=False, frozen=True, strict=True)
+    model_config = ConfigDict(
+        extra="forbid", populate_by_name=True, allow_inf_nan=False, frozen=True, strict=True
+    )
 
 
 class SecretRef(Model):
@@ -14,32 +25,32 @@ class SecretRef(Model):
 
 
 class Host(Model):
-    transport: Literal['local', 'ssh']
+    transport: Literal["local", "ssh"]
     host: str | None = None
     user: str | None = None
     port: StrictInt = 22
     identity_file: Path | None = None
     workdir: Path | None = None
 
-    @model_validator(mode='after')
+    @model_validator(mode="after")
     def ssh_host(self):
-        if self.transport == 'ssh' and not self.host:
-            raise ValueError('SSH transport requires host')
+        if self.transport == "ssh" and not self.host:
+            raise ValueError("SSH transport requires host")
         return self
 
 
 class Network(Model):
-    mode: Literal['compose', 'bridge', 'host', 'direct'] = 'compose'
+    mode: Literal["compose", "bridge", "host", "direct"] = "compose"
     backend_url: str | None = None
 
 
 class Telemetry(Model):
-    host: Literal['required', 'optional', 'off'] = 'optional'
-    container: Literal['required', 'optional', 'off'] = 'optional'
-    database: Literal['required', 'optional', 'off'] = 'off'
+    host: Literal["required", "optional", "off"] = "optional"
+    container: Literal["required", "optional", "off"] = "optional"
+    database: Literal["required", "optional", "off"] = "off"
     interval: float = Field(default=1, gt=0)
-    generator: Literal['required', 'optional', 'off'] = 'required'
-    generator_cpu_max: float = Field(default=.98, gt=0, le=1)
+    generator: Literal["required", "optional", "off"] = "required"
+    generator_cpu_max: float = Field(default=0.98, gt=0, le=1)
 
 
 class Baseline(Model):
@@ -47,8 +58,8 @@ class Baseline(Model):
     interval: float = Field(default=5, gt=0)
     timeout: float = Field(default=120, gt=0)
     consecutive_samples: StrictInt = Field(default=3, ge=1)
-    stopped_cpu_max: float = Field(default=.15, ge=0, le=1)
-    ready_cpu_max: float = Field(default=.20, ge=0, le=1)
+    stopped_cpu_max: float = Field(default=0.15, ge=0, le=1)
+    ready_cpu_max: float = Field(default=0.20, ge=0, le=1)
     stopped_memory_available: float = Field(default=1073741824, ge=0)
     ready_memory_available: float = Field(default=536870912, ge=0)
     allowed_containers: list[str] = Field(default_factory=list)
@@ -65,7 +76,7 @@ class Environment(Model):
 
 
 class Readiness(Model):
-    path: str = '/health'
+    path: str = "/health"
     status: StrictInt = Field(default=200, ge=100, le=599)
     timeout: float = Field(default=60, gt=0)
     interval: float = Field(default=1, gt=0)
@@ -94,31 +105,31 @@ class Target(Model):
     labels: dict[str, str] = Field(default_factory=dict)
     command: list[str] | None = None
 
-    @model_validator(mode='after')
+    @model_validator(mode="after")
     def source(self):
         if (self.image is None) == (self.build is None):
-            raise ValueError('target requires exactly one of image or build')
+            raise ValueError("target requires exactly one of image or build")
         if not 1 <= self.port <= 65535:
-            raise ValueError('invalid target port')
+            raise ValueError("invalid target port")
         return self
 
 
 class Metric(Model):
     name: str
-    type: Literal['rate', 'trend', 'counter', 'gauge']
-    unit: Literal['ms', 's', 'bytes', 'fraction', 'count'] | None = None
+    type: Literal["rate", "trend", "counter", "gauge"]
+    unit: Literal["ms", "s", "bytes", "fraction", "count"] | None = None
     includes_failures: StrictBool = True
 
 
 class Hook(Model):
     argv: list[str] = Field(min_length=1)
-    host: Literal['backend', 'generator', 'controller'] = 'backend'
+    host: Literal["backend", "generator", "controller"] = "backend"
     timeout: float = Field(default=60, gt=0)
     env: dict[str, SecretRef] = Field(default_factory=dict)
 
 
 class Fixture(Model):
-    adapter: str = 'hooks'
+    adapter: str = "hooks"
     prepare: Hook | None = None
     reset: Hook | None = None
     verify: Hook | None = None
@@ -129,7 +140,7 @@ class Fixture(Model):
 
 
 class Workload(Model):
-    adapter: Literal['k6', 'social'] = 'k6'
+    adapter: Literal["k6", "social"] = "k6"
     script: Path
     metrics: dict[str, Metric]
     parameters: dict[str, Any] = Field(default_factory=dict)
@@ -141,39 +152,43 @@ class Fraction(Model):
     fraction_of_target: float = Field(ge=0, le=1)
 
 
-Endpoint = StrictInt | Literal['target'] | Fraction
+Endpoint = StrictInt | Literal["target"] | Fraction
 
 
 class Stage(Model):
     id: str
-    from_users: Endpoint = Field(alias='from')
-    to_users: Endpoint = Field(alias='to')
+    from_users: Endpoint = Field(alias="from")
+    to_users: Endpoint = Field(alias="to")
     duration: float = Field(gt=0)
     evaluate: StrictBool = False
 
-    @model_validator(mode='after')
+    @model_validator(mode="after")
     def endpoints(self):
         if any(isinstance(v, int) and v < 0 for v in (self.from_users, self.to_users)):
-            raise ValueError('negative stage endpoint')
+            raise ValueError("negative stage endpoint")
         return self
 
 
 class Criterion(Model):
     metric: str
-    scope: Literal['workload', 'backend_host', 'container', 'database', 'generator'] = 'workload'
+    scope: Literal["workload", "backend_host", "container", "database", "generator"] = "workload"
     statistic: str
-    operator: Literal['>=', '<=', '>', '<', '==']
+    operator: Literal[">=", "<=", ">", "<", "=="]
     value: float
     unit: str | None = None
     stages: list[str] | None = None
-    minimum_samples: StrictInt = Field(default=1, ge=1, validation_alias=AliasChoices('min_samples', 'minimum_samples'))
-    minimum_coverage: float = Field(default=.95, ge=0, le=1, validation_alias=AliasChoices('min_coverage', 'minimum_coverage'))
+    minimum_samples: StrictInt = Field(
+        default=1, ge=1, validation_alias=AliasChoices("min_samples", "minimum_samples")
+    )
+    minimum_coverage: float = Field(
+        default=0.95, ge=0, le=1, validation_alias=AliasChoices("min_coverage", "minimum_coverage")
+    )
 
 
 class SearchUsers(Model):
     min: StrictInt = Field(default=1, ge=1)
     start: StrictInt = Field(ge=1)
-    max: StrictInt | Literal['auto']
+    max: StrictInt | Literal["auto"]
 
 
 class SweepUsers(Model):
@@ -189,54 +204,63 @@ class Limits(Model):
 
 
 class TestPolicy(Model):
-    type: Literal['fixed', 'search', 'stress', 'staged']
-    strategy: Literal['search', 'sweep'] | None = None
+    type: Literal["fixed", "search", "stress", "staged"]
+    strategy: Literal["search", "sweep"] | None = None
     users: StrictInt | list[StrictInt] | SearchUsers | SweepUsers | None = None
     repetitions: StrictInt = Field(default=1, gt=0)
     stop_on_failure: StrictBool = False
     limits: Limits | None = None
     expansion_factor: float = Field(default=2, gt=1)
     resolution: StrictInt = Field(default=1, gt=0)
-    confirmation: Literal['majority_on_disagreement', 'single_observation'] = 'majority_on_disagreement'
+    confirmation: Literal["majority_on_disagreement", "single_observation"] = (
+        "majority_on_disagreement"
+    )
     invalid_retries: StrictInt = Field(default=1, ge=0)
 
-    @model_validator(mode='after')
+    @model_validator(mode="after")
     def combinations(self):
-        if self.strategy is not None and self.type != 'stress':
-            raise ValueError('strategy is accepted only by stress alias')
-        if self.type == 'stress':
+        if self.strategy is not None and self.type != "stress":
+            raise ValueError("strategy is accepted only by stress alias")
+        if self.type == "stress":
             if self.strategy is None:
-                raise ValueError('stress requires search or sweep strategy')
-            object.__setattr__(self, 'type', 'search' if self.strategy == 'search' else 'fixed')
-            object.__setattr__(self, 'strategy', None)
-        if self.type == 'search':
+                raise ValueError("stress requires search or sweep strategy")
+            object.__setattr__(self, "type", "search" if self.strategy == "search" else "fixed")
+            object.__setattr__(self, "strategy", None)
+        if self.type == "search":
             if not isinstance(self.users, SearchUsers) or self.limits is None:
-                raise ValueError('search requires users bounds and finite limits')
+                raise ValueError("search requires users bounds and finite limits")
             ceilings = [v for v in (self.users.max, self.limits.hard_users) if isinstance(v, int)]
             ceiling = min(ceilings) if ceilings else None
-            if self.users.start < self.users.min or (ceiling is not None and (self.users.start > ceiling or self.users.min > ceiling)):
-                raise ValueError('search start/min outside ceilings')
-        elif self.type == 'staged':
+            if self.users.start < self.users.min or (
+                ceiling is not None and (self.users.start > ceiling or self.users.min > ceiling)
+            ):
+                raise ValueError("search start/min outside ceilings")
+        elif self.type == "staged":
             if self.users is not None:
-                raise ValueError('staged does not accept users')
-            object.__setattr__(self, 'type', 'fixed')
+                raise ValueError("staged does not accept users")
+            object.__setattr__(self, "type", "fixed")
         elif isinstance(self.users, SweepUsers):
             if self.users.end < self.users.start:
-                raise ValueError('sweep end precedes start')
+                raise ValueError("sweep end precedes start")
             values = list(range(self.users.start, self.users.end + 1, self.users.step))
             if values[-1] != self.users.end:
                 values.append(self.users.end)
-            object.__setattr__(self, 'users', values)
+            object.__setattr__(self, "users", values)
         elif self.users is not None:
             values = [self.users] if isinstance(self.users, int) else self.users
-            if not isinstance(values, list) or not values or any(v < 1 for v in values) or len(values) != len(set(values)):
-                raise ValueError('fixed users must be unique positive integers')
-            object.__setattr__(self, 'users', values)
+            if (
+                not isinstance(values, list)
+                or not values
+                or any(v < 1 for v in values)
+                or len(values) != len(set(values))
+            ):
+                raise ValueError("fixed users must be unique positive integers")
+            object.__setattr__(self, "users", values)
         return self
 
 
 class OccupancyTolerance(Model):
-    fraction: float = Field(default=.05, ge=0, le=1)
+    fraction: float = Field(default=0.05, ge=0, le=1)
     grace: float = Field(default=0, ge=0)
 
 
@@ -286,7 +310,7 @@ class BenchmarkConfig(Model):
     source: Path | None = Field(default=None, exclude=True)
 
     def public_snapshot(self):
-        return self.model_dump(mode='json', by_alias=True)
+        return self.model_dump(mode="json", by_alias=True)
 
 
 class ResolvedJob(Model):
@@ -313,10 +337,11 @@ class Sample(Model):
     Gauges hold until the next sample, capped by max_gap_seconds.
     Rate records carry their own numerator and denominator.
     """
-    model_config = ConfigDict(extra='forbid', frozen=True, strict=True, allow_inf_nan=True)
+
+    model_config = ConfigDict(extra="forbid", frozen=True, strict=True, allow_inf_nan=True)
     metric: str
-    scope: Literal['workload', 'backend_host', 'container', 'database', 'generator'] = 'workload'
-    kind: Literal['event', 'rate', 'gauge', 'interval'] = 'event'
+    scope: Literal["workload", "backend_host", "container", "database", "generator"] = "workload"
+    kind: Literal["event", "rate", "gauge", "interval"] = "event"
     timestamp: float
     value: float | None = None
     numerator: float | None = None
@@ -342,24 +367,24 @@ class CriterionResult(Model):
 
 
 class Evaluation(Model):
-    verdict: Literal['pass', 'fail', 'invalid']
+    verdict: Literal["pass", "fail", "invalid"]
     results: tuple[CriterionResult, ...] = ()
     reasons: tuple[str, ...] = ()
     warnings: tuple[str, ...] = ()
 
     @property
     def valid(self):
-        return self.verdict != 'invalid'
+        return self.verdict != "invalid"
 
     @property
     def passed(self):
-        return self.verdict == 'pass'
+        return self.verdict == "pass"
 
 
 class TrialEvidence(Model):
-    trial_id: str = ''
+    trial_id: str = ""
     users: int | None = None
-    execution_id: str = ''
+    execution_id: str = ""
     stages: tuple[ResolvedStage, ...] = ()
     samples: tuple[Sample, ...] = ()
     valid: bool = True
