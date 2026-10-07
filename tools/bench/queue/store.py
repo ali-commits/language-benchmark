@@ -51,6 +51,13 @@ class ClaimedJob(JobReceipt):
     inputs: FrozenInputs
 
 
+@dataclass(frozen=True)
+class PendingDefinition:
+    definition: Job
+    resolved: tuple[ResolvedJob, ...]
+    inputs: FrozenInputs
+
+
 def _json(value: object) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
@@ -181,8 +188,12 @@ class QueueStore:
         )
         return checked_record(revision, int)
 
-    def _insert(self, conn: sqlite3.Connection, queue: str, config: BenchmarkConfig, job: Job) -> JobReceipt:
-        resolved = resolve_jobs(config.model_copy(update={"jobs": [job]}))
+    def _prepare_definition(self, config: BenchmarkConfig, job: Job) -> PendingDefinition:
+        resolved = tuple(resolve_jobs(config.model_copy(update={"jobs": [job]})))
+        return PendingDefinition(job, resolved, _inputs(resolved, self.path))
+
+    def _insert(self, conn: sqlite3.Connection, queue: str, prepared: PendingDefinition) -> JobReceipt:
+        job, resolved = prepared.definition, prepared.resolved
         position = conn.execute(
             "SELECT COALESCE(MAX(position),0)+1 FROM jobs WHERE queue=?", (queue,)
         ).fetchone()[0]
@@ -197,7 +208,7 @@ class QueueStore:
                     "pending",
                     job.model_dump_json(by_alias=True),
                     _json([j.model_dump(mode="json", by_alias=True) for j in resolved]),
-                    _json(_inputs(resolved, self.path)),
+                    _json(prepared.inputs),
                 ),
             )
         except sqlite3.IntegrityError as exc:
@@ -208,6 +219,7 @@ class QueueStore:
 
     def register(self, config: BenchmarkConfig) -> QueueReceipt:
         queue = config.name or str(uuid4())
+        prepared = [self._prepare_definition(config, job) for job in config.jobs]
         with self._transaction() as conn:
             try:
                 conn.execute(
@@ -216,8 +228,8 @@ class QueueStore:
                 )
             except sqlite3.IntegrityError as exc:
                 raise QueueConflict("queue already registered") from exc
-            for job in config.jobs:
-                self._insert(conn, queue, config, job)
+            for definition in prepared:
+                self._insert(conn, queue, definition)
             return QueueReceipt(
                 queue,
                 conn.execute("SELECT revision FROM queues WHERE id=?", (queue,)).fetchone()[0],
@@ -230,8 +242,11 @@ class QueueStore:
         return BenchmarkConfig.model_validate_json(row[0])
 
     def append(self, queue: str, job: Job) -> JobReceipt:
+        with self._connection() as conn:
+            config = self._config(conn, queue)
+        prepared = self._prepare_definition(config, job)
         with self._transaction() as conn:
-            return self._insert(conn, queue, self._config(conn, queue), job)
+            return self._insert(conn, queue, prepared)
 
     def _job(self, conn: sqlite3.Connection, queue: str, job_id: str) -> JobRow:
         row = conn.execute("SELECT * FROM jobs WHERE queue=? AND id=?", (queue, job_id)).fetchone()
@@ -242,20 +257,23 @@ class QueueStore:
     def update(self, queue: str, job_id: str, replacement: Job, expected_revision: int) -> JobReceipt:
         if replacement.id != job_id:
             raise QueueConflict("replacement ID differs")
+        with self._connection() as conn:
+            row = self._job(conn, queue, job_id)
+            if row["state"] != "pending" or row["revision"] != expected_revision:
+                raise QueueConflict("job is active or revision changed")
+            config = self._config(conn, queue)
+        prepared = self._prepare_definition(config, replacement)
         with self._transaction() as conn:
             row = self._job(conn, queue, job_id)
             if row["state"] != "pending" or row["revision"] != expected_revision:
                 raise QueueConflict("job is active or revision changed")
-            resolved = resolve_jobs(
-                self._config(conn, queue).model_copy(update={"jobs": [replacement]})
-            )
             revision = expected_revision + 1
             conn.execute(
                 "UPDATE jobs SET definition=?,resolved=?,inputs=?,revision=? WHERE queue=? AND id=?",
                 (
                     replacement.model_dump_json(by_alias=True),
-                    _json([j.model_dump(mode="json", by_alias=True) for j in resolved]),
-                    _json(_inputs(resolved, self.path)),
+                    _json([j.model_dump(mode="json", by_alias=True) for j in prepared.resolved]),
+                    _json(prepared.inputs),
                     revision,
                     queue,
                     job_id,
@@ -283,50 +301,62 @@ class QueueStore:
             self._event(conn, queue, job_id, "cancel")
             return JobReceipt(queue, job_id, revision, "cancelled")
 
+    def _dispatch_blocked(self, conn: sqlite3.Connection, queue: str) -> bool:
+        return bool(conn.execute("SELECT 1 FROM requests WHERE queue=?", (queue,)).fetchone()
+                    or conn.execute("SELECT 1 FROM jobs WHERE queue=? AND state='active'", (queue,)).fetchone())
+
+    def _next_pending(self, conn: sqlite3.Connection, queue: str) -> JobRow | None:
+        row = conn.execute(
+            "SELECT * FROM jobs WHERE queue=? AND state='pending' ORDER BY position LIMIT 1",
+            (queue,),
+        ).fetchone()
+        return checked_record(dict(row), JobRow) if row else None
+
     def claim_next(self, queue: str, owner: str) -> ClaimedJob | None:
         if not owner:
             raise QueueConflict("owner required")
-        with self._transaction() as conn:
-            self._config(conn, queue)
-            if conn.execute("SELECT 1 FROM requests WHERE queue=?", (queue,)).fetchone():
-                return None
-            if conn.execute(
-                "SELECT 1 FROM jobs WHERE queue=? AND state='active'", (queue,)
-            ).fetchone():
-                return None
-            row = conn.execute(
-                "SELECT * FROM jobs WHERE queue=? AND state='pending' ORDER BY position LIMIT 1",
-                (queue,),
-            ).fetchone()
-            if not row:
-                conn.execute("UPDATE queues SET state='completed' WHERE id=?", (queue,))
-                return None
-            resolved = tuple(
-                ResolvedJob.model_validate_json(_json(j)) for j in checked_record(json.loads(row["resolved"]), list[dict[str, JsonValue]])
-            )
-            try:
-                actual = _inputs(resolved, self.path)
-            except OSError as exc:
-                raise QueueConflict("frozen input missing") from exc
-            if actual != checked_record(json.loads(row["inputs"]), FrozenInputs):
-                raise QueueConflict("frozen input changed; explicitly update pending job")
-            row = checked_record(dict(row), JobRow)
-            revision = row["revision"] + 1
-            conn.execute(
-                "UPDATE jobs SET state='active',owner=?,revision=? WHERE queue=? AND id=?",
-                (owner, revision, queue, row["id"]),
-            )
-            self._event(conn, queue, row["id"], "claim", {"owner": owner})
-            return ClaimedJob(
-                queue,
-                row["id"],
-                revision,
-                "active",
-                owner,
-                Job.model_validate_json(row["definition"]),
-                resolved,
-                checked_record(json.loads(row["inputs"]), FrozenInputs),
-            )
+        # Docker export and source hashing never hold the SQLite writer lock.
+        # Recheck stop, ownership, ordering and revision in one short transaction.
+        for _ in range(3):
+            with self._connection() as conn:
+                self._config(conn, queue)
+                if self._dispatch_blocked(conn, queue):
+                    return None
+                row = self._next_pending(conn, queue)
+            resolved: tuple[ResolvedJob, ...] = ()
+            expected: FrozenInputs = {}
+            actual: FrozenInputs = {}
+            failure: Exception | None = None
+            if row is not None:
+                resolved = tuple(ResolvedJob.model_validate_json(_json(j)) for j in
+                    checked_record(json.loads(row["resolved"]), list[dict[str, JsonValue]]))
+                expected = checked_record(json.loads(row["inputs"]), FrozenInputs)
+                try:
+                    actual = _inputs(resolved, self.path)
+                except (OSError, QueueConflict) as exc:
+                    failure = exc
+            with self._transaction() as conn:
+                if self._dispatch_blocked(conn, queue):
+                    return None
+                current = self._next_pending(conn, queue)
+                if current is None:
+                    conn.execute("UPDATE queues SET state='completed' WHERE id=?", (queue,))
+                    return None
+                if row is None or (current["id"], current["revision"]) != (row["id"], row["revision"]):
+                    continue
+                if failure is not None:
+                    raise QueueConflict("frozen input missing or unavailable") from failure
+                if actual != expected:
+                    raise QueueConflict("frozen input changed; explicitly update pending job")
+                revision = row["revision"] + 1
+                conn.execute(
+                    "UPDATE jobs SET state='active',owner=?,revision=? WHERE queue=? AND id=?",
+                    (owner, revision, queue, row["id"]),
+                )
+                self._event(conn, queue, row["id"], "claim", {"owner": owner})
+                return ClaimedJob(queue, row["id"], revision, "active", owner,
+                    Job.model_validate_json(row["definition"]), resolved, expected)
+        raise QueueConflict("pending job changed repeatedly during input preparation; retry claim")
 
     def finish(
         self, queue: str, job_id: str, owner: str, *, state: str = "completed", expected_revision: int | None = None
