@@ -131,6 +131,7 @@ class QueueStore:
                 CREATE TABLE IF NOT EXISTS jobs(queue TEXT REFERENCES queues(id), id TEXT, position INTEGER, revision INTEGER NOT NULL, state TEXT NOT NULL, definition TEXT NOT NULL, resolved TEXT NOT NULL, inputs TEXT NOT NULL, owner TEXT, PRIMARY KEY(queue,id));
                 CREATE TABLE IF NOT EXISTS events(sequence INTEGER PRIMARY KEY, queue TEXT REFERENCES queues(id), job TEXT, kind TEXT NOT NULL, revision INTEGER NOT NULL, payload TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS trials(queue TEXT, job TEXT, id TEXT, path TEXT NOT NULL, state TEXT NOT NULL, PRIMARY KEY(queue,job,id), FOREIGN KEY(queue,job) REFERENCES jobs(queue,id));
+                CREATE TABLE IF NOT EXISTS controllers(queue TEXT PRIMARY KEY REFERENCES queues(id), payload TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS requests(sequence INTEGER PRIMARY KEY, queue TEXT REFERENCES queues(id), after_current INTEGER NOT NULL);
                 CREATE TRIGGER IF NOT EXISTS events_no_update BEFORE UPDATE ON events BEGIN SELECT RAISE(ABORT, 'events are append-only'); END;
                 CREATE TRIGGER IF NOT EXISTS events_no_delete BEFORE DELETE ON events BEGIN SELECT RAISE(ABORT, 'events are append-only'); END;
@@ -429,3 +430,32 @@ class QueueStore:
                     ResolvedJob.model_validate_json(_json(j)) for j in json.loads(row["resolved"])
                 ),
             )
+
+    def controller_state(self, queue):
+        """Durable private controller checkpoint; callers hold ControllerLock."""
+        with self._connection() as conn:
+            self._config(conn, queue)
+            row = conn.execute("SELECT payload FROM controllers WHERE queue=?", (queue,)).fetchone()
+            return json.loads(row[0]) if row else None
+
+    def checkpoint(self, queue, payload, *, state=None):
+        with self._transaction() as conn:
+            self._config(conn, queue)
+            conn.execute(
+                "INSERT INTO controllers VALUES(?,?) ON CONFLICT(queue) DO UPDATE SET payload=excluded.payload",
+                (queue, _json(payload)),
+            )
+            if state is not None:
+                if state not in {
+                    "pending",
+                    "preparing",
+                    "running",
+                    "cleaning",
+                    "stopping",
+                    "completed",
+                    "interrupted",
+                    "needs_attention",
+                }:
+                    raise QueueConflict("invalid queue state")
+                conn.execute("UPDATE queues SET state=? WHERE id=?", (state, queue))
+            self._event(conn, queue, None, "checkpoint", {"state": state})
