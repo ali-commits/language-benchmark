@@ -16,6 +16,7 @@ from tools.bench.engine.targets import (
     ResolvedTarget,
     load_build_snapshot,
     tree_checksums,
+    validate_source_ips,
 )
 from tools.bench.engine.types import Build, Environment, Host, ResolvedJob, SearchUsers, Target
 from tools.bench.engine.workloads import PreparedWorkload, prepare_workload
@@ -76,6 +77,7 @@ def prepare(
     inspect_image: Callable[[Host, str], str],
     execution_identity: ExecutionIdentity,
 ) -> tuple[ResolvedTarget, PreparedWorkload, str, BoundEnvironment | None]:
+    validate_source_ips(job.environment)
     key = str(index)
     bindings = data.setdefault("environment_bindings", {})
     expected = bindings.get(key)
@@ -133,6 +135,7 @@ def prepare(
                 )
             retained_target = checked_record(
                 {
+                    "mount_sources": target.mount_sources,
                     "image": target.image_id,
                     "requested_image": target.requested_image,
                     "repo_digests": list(target.repo_digests),
@@ -152,6 +155,7 @@ def prepare(
             load_build_snapshot(Path(retained_target["build"]))
             if retained_target["build"]
             else None,
+            retained_target.get("mount_sources", []),
         )
         check_stop()
         cached = data["workloads"].get(job.workload_name)
@@ -171,6 +175,7 @@ def prepare(
         generator = inspect_image(job.environment.generator, "grafana/k6:1.4.2")
         prep = checked_record(
             {
+                "mount_sources": target.mount_sources,
                 "image": target.image_id,
                 "requested_image": target.requested_image,
                 "repo_digests": list(target.repo_digests),
@@ -188,7 +193,12 @@ def prepare(
     if build is not None and job.target.build is not None:
         check_retained_build(job.target.build, build, expected_inputs)
     target = ResolvedTarget(
-        job.target, prep["requested_image"], prep["image"], tuple(prep["repo_digests"]), build
+        job.target,
+        prep["requested_image"],
+        prep["image"],
+        tuple(prep["repo_digests"]),
+        build,
+        prep.get("mount_sources", []),
     )
     work = prep["workload"]
     workload = PreparedWorkload(

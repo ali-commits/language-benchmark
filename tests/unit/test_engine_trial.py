@@ -140,7 +140,7 @@ def test_scoped_cpu_normalizations_are_weighted_intervals():
     assert container.samples(10.0)[0].normalization == "container_quota"
 
 
-@pytest.mark.parametrize("crash", ["deploy", "load", "restore"])
+@pytest.mark.parametrize("crash", ["deploy", "load", "restore", "auth-0", "auth-85", "auth-95"])
 def test_failure_cleanup_and_reconciliation(tmp_path, monkeypatch, crash):
     import tools.bench.engine.trial as module
     from tools.bench.engine.config import load_config, resolve_jobs
@@ -158,12 +158,73 @@ def test_failure_cleanup_and_reconciliation(tmp_path, monkeypatch, crash):
             )
         }
     )
+    job = job.model_copy(
+        update={
+            "environment": job.environment.model_copy(
+                update={"source_ips": ["10.0.0.10", "10.0.0.11"]}
+            )
+        }
+    )
+    monkeypatch.setattr(module, "validate_source_ips", lambda env: None)
+    monkeypatch.setattr(
+        "tools.bench.engine.trial_preparation.validate_source_ips", lambda env: None
+    )
+    auth_count = int(crash.split("-")[1]) if crash.startswith("auth-") else None
+    if auth_count is not None:
+        from tools.bench.engine.stages import resolve_stages
+        from tools.bench.engine.types import Sample
+
+        job = job.model_copy(
+            update={"workload": job.workload.model_copy(update={"adapter": "social"})}
+        )
+        stages = resolve_stages(job, 100)
+        account_samples = [
+            Sample(
+                metric="authenticated_account",
+                timestamp=0.0,
+                value=1.0,
+                provider_fields={"account": str(i)},
+            )
+            for i in range(auth_count)
+        ]
+        monkeypatch.setattr(
+            module,
+            "parse_events",
+            lambda raw: SimpleNamespace(
+                samples=account_samples,
+                reasons=[],
+                counts={},
+                metadata={
+                    "stages": [stage.model_dump(mode="json") for stage in stages],
+                    "load_start_epoch_ms": 1000,
+                },
+            ),
+        )
+        monkeypatch.setattr(module, "verify_occupancy", lambda *args: [])
+        monkeypatch.setattr(
+            "tools.bench.engine.social.social_adapter",
+            lambda workload: SimpleNamespace(
+                attest=lambda *args: None,
+                authentication=lambda samples, target: {
+                    "distinct_accounts": len(samples),
+                    "target_accounts": target,
+                    "fraction": len(samples) / target,
+                },
+            ),
+        )
     prepared = prepare_workload(job.workload, tmp_path / "prepared")
     target = SimpleNamespace(
-        image_id="sha256:target", build_snapshot=SimpleNamespace(identity="build")
+        image_id="sha256:target", build_snapshot=SimpleNamespace(identity="build"), mount_sources=[]
     )
     context = module.TrialContext(
-        job, 2, tmp_path / "trial", "q", crash, target, prepared, "sha256:k6"
+        job,
+        100 if auth_count is not None else 2,
+        tmp_path / "trial",
+        "q",
+        crash,
+        target,
+        prepared,
+        "sha256:k6",
     )
     resources = {}
     load_arguments = []
@@ -241,10 +302,29 @@ def test_failure_cleanup_and_reconciliation(tmp_path, monkeypatch, crash):
     if crash != "deploy":
         # Human progress/summary output must not split JSON metric writes on stdout.
         assert len(load_arguments) == 1
+        position = load_arguments[0].index("--local-ips")
+        assert load_arguments[0][position + 1] == "10.0.0.10,10.0.0.11"
         assert "--quiet" in load_arguments[0]
         assert "--summary-mode=disabled" in load_arguments[0]
         assert "json=/dev/stdout" in load_arguments[0]
-    assert not evidence.valid
+    if auth_count is not None:
+        from tools.bench.engine.metrics import evaluate
+        from tools.bench.engine.types import Criterion
+
+        assert evidence.valid, evidence.invalid_reasons
+        result = evaluate(
+            evidence,
+            [Criterion(metric="authentication", statistic="rate", operator=">=", value=0.90)],
+        )
+        assert result.valid
+        assert result.verdict == ("pass" if auth_count >= 90 else "fail")
+        assert all(
+            s.numerator == float(auth_count)
+            for s in evidence.samples
+            if s.metric == "authentication"
+        )
+    else:
+        assert not evidence.valid
     if crash == "restore":
         assert not evidence.cleanup_verified
         assert "bench-engine-lease" in resources

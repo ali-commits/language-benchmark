@@ -10,13 +10,20 @@ import subprocess
 import tempfile
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 from uuid import uuid4
 
 from ..records import Ulimit, checked_record
-from .records import BuildManifest, CommandResponse, ContainerInfo, DockerImage
+from .records import (
+    BuildManifest,
+    CommandResponse,
+    ContainerInfo,
+    DockerImage,
+    HostInterface,
+    MountSource,
+)
 
 if TYPE_CHECKING:
     from .workloads import PreparedWorkload
@@ -42,6 +49,8 @@ class ResolvedTarget:
     image_id: str
     repo_digests: tuple[str, ...]
     build_snapshot: BuildSnapshot | None = None
+
+    mount_sources: list[MountSource] = field(default_factory=list)
 
     @property
     def deployment_image(self) -> str:
@@ -127,6 +136,79 @@ def execute_host(
         # stdout/stderr may contain resolved environment credentials.
         raise RuntimeError(f"command failed (exit {result.returncode})")
     return result
+
+
+# Run on the backend, including for SSH: source paths never refer to controller files.
+_MOUNT_RECEIPT = """import hashlib,json,os,stat,sys
+p=sys.argv[1]
+fd=os.open(p,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+with os.fdopen(fd,'rb') as f:
+ s=os.fstat(f.fileno())
+ if not stat.S_ISREG(s.st_mode): raise ValueError('mount source must be a regular file')
+ h=hashlib.sha256()
+ for chunk in iter(lambda:f.read(1024*1024),b''): h.update(chunk)
+ digest=h.hexdigest()
+ after=os.fstat(f.fileno())
+ if any(getattr(after,k)!=getattr(s,k) for k in ('st_dev','st_ino','st_size','st_mode','st_mtime_ns','st_ctime_ns')): raise ValueError('mount source changed while hashing')
+ print(json.dumps({'source':p,'sha256':digest,'mode':stat.S_IMODE(s.st_mode)}))
+"""
+
+
+def validate_source_ips(environment: Environment) -> None:
+    if not environment.source_ips:
+        return
+    interfaces = checked_record(
+        json.loads(execute_host(environment.generator, ["ip", "-j", "address", "show"]).stdout),
+        list[HostInterface],
+    )
+    assigned = {
+        address.get("local")
+        for interface in interfaces
+        for address in interface.get("addr_info", [])
+    }
+    if not set(environment.source_ips).issubset(assigned):
+        raise ValueError("generator source IP is not assigned on the generator host")
+
+
+def source_ip_arguments(environment: Environment) -> list[str]:
+    return ["--local-ips", ",".join(environment.source_ips)] if environment.source_ips else []
+
+
+def mount_source_receipts(target: Target, host: Host) -> list[MountSource]:
+    return [
+        checked_record(
+            json.loads(execute_host(host, ["python3", "-c", _MOUNT_RECEIPT, mount.source]).stdout),
+            MountSource,
+        )
+        for mount in target.mounts
+    ]
+
+
+def verify_mount_sources(target: Target, host: Host, expected: list[MountSource]) -> None:
+    if mount_source_receipts(target, host) != expected:
+        raise ValueError("mount source changed since preparation")
+
+
+def mount_arguments(target: Target) -> list[str]:
+    args: list[str] = []
+    for mount in target.mounts:
+        label = {"none": "", "shared": ",z", "private": ",Z"}[mount.selinux]
+        args.extend(["--volume", f"{mount.source}:{mount.destination}:ro{label}"])
+    return args
+
+
+def verify_mounts(target: Target, inspection: ContainerInfo) -> None:
+    for mount in target.mounts:
+        actual = [
+            m for m in inspection.get("Mounts", []) if m.get("Destination") == mount.destination
+        ]
+        if (
+            len(actual) != 1
+            or actual[0].get("Type") != "bind"
+            or actual[0].get("Source") != mount.source
+            or actual[0].get("RW") is not False
+        ):
+            raise ValueError("deployed read-only mount mismatch")
 
 
 def tree_checksums(root: Path) -> dict[str, str]:
@@ -247,6 +329,7 @@ def resolve_target(
     snapshot_directory: Path | None = None,
     validate_snapshot: Callable[[BuildSnapshot], None] | None = None,
 ) -> ResolvedTarget:
+    mount_sources = mount_source_receipts(target, environment.backend)
     host = environment.build or environment.backend
     snapshot = None
     image = target.image
@@ -322,7 +405,12 @@ def resolve_target(
         finally:
             shutil.rmtree(archive.parent)
     return ResolvedTarget(
-        target, target.image, image_id, tuple(info.get("RepoDigests") or ()), snapshot
+        target,
+        target.image,
+        image_id,
+        tuple(info.get("RepoDigests") or ()),
+        snapshot,
+        mount_sources,
     )
 
 
@@ -427,11 +515,17 @@ def prepared_execution_identity(
         raise ValueError("resolved environment binding required for prepared identity")
     if fixture_manifest is None and job.workload.fixture:
         fixture_manifest = job.workload.fixture.manifest
+    verify_mount_sources(job.target, job.environment.backend, resolved_target.mount_sources)
     return execution_identity(
         job,
         users,
         environment_binding=environment_binding,
         provenance={
+            **(
+                {"mount_sources": resolved_target.mount_sources}
+                if resolved_target.mount_sources
+                else {}
+            ),
             "image_id": resolved_target.image_id,
             "generator_image_id": generator_image_id,
             "generator_version": "grafana/k6:1.4.2",

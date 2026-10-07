@@ -9,7 +9,7 @@ from typing import Literal
 from pydantic import JsonValue
 from typing_extensions import NotRequired, TypedDict
 
-from tools.bench.engine.records import FixturePin
+from tools.bench.engine.records import FixturePin, MountSource
 
 
 class QueueRow(TypedDict):
@@ -71,6 +71,7 @@ FrozenInputs = dict[str, str | None | dict[str, str] | BuildInput]
 
 
 class TargetPin(TypedDict):
+    mount_sources: NotRequired[list[MountSource]]
     image: str
     requested_image: str | None
     repo_digests: list[str]

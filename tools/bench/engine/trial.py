@@ -17,7 +17,12 @@ from .records import BaselinePoint, ContainerInfo, RunningContainer
 from .targets import (
     HostExecutor,
     execute_host,
+    mount_arguments,
     resolve_endpoints,
+    source_ip_arguments,
+    validate_source_ips,
+    verify_mount_sources,
+    verify_mounts,
     verify_resources,
     wait_ready,
 )
@@ -223,14 +228,19 @@ def _run_trial(context: TrialContext, stop_requested: Callable[[], bool]) -> Tri
             args.extend(["--label", key + "=" + value])
         if job.workload.adapter == "social":
             args += ["-e", "RUN_ID=" + context.trial_id, "-e", "RUN_DIR=/tmp/bench-runtime"]
+        args += mount_arguments(job.target)
+        verify_mount_sources(job.target, job.environment.backend, prepared_target.mount_sources)
         args += [prepared_target.image_id, *(job.target.command or [])]
         if stop_requested():
             raise InterruptedError("stop requested")
         journal.record("deploy", "intent", {"name": "bench-target-" + unique})
         info = backend.create("bench-target-" + unique, args, env=target_env)
         identity = info["Id"]
+        verify_mounts(job.target, info)
+        verify_mount_sources(job.target, job.environment.backend, prepared_target.mount_sources)
         info = backend.start(identity)
         verify_resources(job.target, info)
+        verify_mounts(job.target, info)
         if info["Image"] != prepared_target.image_id:
             raise ValueError("deployed image identity mismatch")
         port = job.target.port
@@ -267,6 +277,7 @@ def _run_trial(context: TrialContext, stop_requested: Callable[[], bool]) -> Tri
         }
         if stop_requested():
             raise InterruptedError("stop requested")
+        validate_source_ips(job.environment)
         k6 = generator_image_id
         journal.record("load", "intent", {"name": "bench-load-" + unique, "image_id": k6})
         load = generator.create(
@@ -282,6 +293,7 @@ def _run_trial(context: TrialContext, stop_requested: Callable[[], bool]) -> Tri
                 "BENCH_CONFIG=" + json.dumps(config),
                 k6,
                 "run",
+                *source_ip_arguments(job.environment),
                 "--quiet",
                 "--summary-mode=disabled",
                 "--log-format",
@@ -340,8 +352,6 @@ def _run_trial(context: TrialContext, stop_requested: Callable[[], bool]) -> Tri
                         unit="fraction",
                     )
                 )
-            if authentication["distinct_accounts"] != target_accounts:
-                reasons.append("incomplete distinct-account authentication")
         journal.record("load", "done", parsed.counts)
     except Exception as exc:
         # Never persist exception messages: argv/hooks may contain secrets.

@@ -19,6 +19,7 @@ from .targets import (
     owner_labels,
     prepared_execution_identity,
     resolve_target,
+    validate_source_ips,
 )
 from .trial_context import TrialContext
 from .types import ResolvedStage
@@ -61,6 +62,7 @@ def prepare_trial(context: TrialContext, *, execute: HostExecutor) -> Preparatio
     ):
         raise ValueError("trial already exists: reconcile and use a new trial identity")
     job = context.job
+    validate_source_ips(job.environment)
     bound = context.bound_environment
     bound = bind_environment(
         job,
@@ -129,6 +131,8 @@ def prepare_trial(context: TrialContext, *, execute: HostExecutor) -> Preparatio
         },
         "colocated_generator": job.environment.backend == job.environment.generator,
     }
+    if prepared_target.mount_sources:
+        manifest["mount_sources"] = prepared_target.mount_sources
     if bound is not None:
         manifest["environment_binding"] = bound.digest
         manifest["environment_key"] = str(bound.key_path.resolve())

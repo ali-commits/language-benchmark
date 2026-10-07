@@ -9,3 +9,24 @@ Each stage has an ID, `from`, `to`, positive duration and `evaluate` selection. 
 Fixed tests accept user populations, a sweep or absolute stages. `stress` requires an explicit `strategy: search` or `strategy: sweep` and normalizes to search or fixed respectively. `staged` normalizes to fixed and does not accept a users field. Search uses `users: {min: 1, start: 100, max: auto}` plus finite `limits.max_trials`, `limits.max_elapsed` and a hard user ceiling. Objectives add criteria to the shared job criteria; bounds are separate per objective. The trial/time budget is shared across objectives and target expansions, including preparation and downtime.
 
 Criteria declare metric, scope, statistic, operator and value; stages optionally override the evaluated windows. Percent, time and byte units are normalized. Host/container scopes are never interchangeable. Missing required evidence is invalid even if an unrelated criterion passes.
+
+Targets may declare existing backend-host certificate files using additive version-1 `mounts`:
+
+```yaml
+targets:
+  api:
+    image: example/api:release
+    mounts:
+      - source: /srv/benchmark/certs/rds-ca.pem
+        destination: /certs/rds-ca.pem
+        read_only: true
+        selinux: private
+```
+
+`mounts` defaults to an empty list. Both paths must be canonical absolute POSIX file paths; spaces are supported, while colons are rejected. `source` names a regular file on the backend Docker host, including for SSH environments. It is not resolved relative to the YAML or checked on the controller. Symlink files and directories are rejected. `read_only: true` is required. `selinux` defaults to `none`; `shared` requests Docker `z` labeling and `private` requests `Z` labeling. Choose labeling appropriate for the backend host and any other containers sharing the file.
+
+Preparation records the file's SHA-256 and POSIX mode, and execution identity includes that receipt. Changed source bytes or mode block retained preparation/resume and deployment. Docker inspection must report the declared source and destination with write access disabled. Engine cleanup removes its containers, leaving the host source file in place. Empty mount lists preserve pre-existing execution identities.
+
+Environments may set `source_ips: [10.0.0.10, 10.0.0.11]` to bind k6 connections to specific generator addresses. Each entry must be a unique canonical IP address assigned on the generator host; preparation and load preflight check `ip -j address show` through that host's transport. The ordered list is passed as `k6 run --local-ips 10.0.0.10,10.0.0.11` and participates in execution identity. The default empty list uses k6's normal address selection and preserves older execution identities.
+
+For social workloads, distinct authenticated accounts produce the `authentication` rate. Configure its criterion (for example `>= 0.90`) to classify performance. Partial or zero authentication does not itself invalidate an otherwise valid trial; schedule, actual user occupancy, runtime, generator and fixture validity checks still apply.

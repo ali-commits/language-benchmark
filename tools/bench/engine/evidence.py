@@ -31,6 +31,10 @@ def execution_identity(
     environment_binding: str | None = None,
 ) -> str:
     payload = job.model_dump(mode="json", by_alias=True)
+    if not job.environment.source_ips:
+        payload["environment"].pop("source_ips", None)
+    if not job.target.mounts:
+        payload["target"].pop("mounts", None)
     for field in ("criteria", "objectives", "test", "id"):
         payload.pop(field, None)
     payload["stages"] = [

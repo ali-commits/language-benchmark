@@ -1,6 +1,7 @@
 """Validated public configuration objects. Quantities are normalized at loading."""
 
-from pathlib import Path
+from ipaddress import ip_address
+from pathlib import Path, PurePosixPath
 from typing import Literal
 
 from pydantic import (
@@ -70,11 +71,21 @@ class Baseline(Model):
 class Environment(Model):
     backend: Host
     generator: Host
+    source_ips: list[str] = Field(default_factory=list)
     build: Host | None = None
     network: Network = Field(default_factory=Network)
     telemetry: Telemetry = Field(default_factory=Telemetry)
     database: dict[str, JsonValue] | None = None
     baseline: Baseline = Field(default_factory=Baseline)
+
+    @model_validator(mode="after")
+    def assigned_source_ips(self) -> Self:
+        if len(set(self.source_ips)) != len(self.source_ips):
+            raise ValueError("duplicate generator source IP")
+        for value in self.source_ips:
+            if str(ip_address(value)) != value or "%" in value:
+                raise ValueError("generator source IP must be a canonical IP address")
+        return self
 
 
 class Readiness(Model):
@@ -97,6 +108,30 @@ class Build(Model):
     args: dict[str, str] = Field(default_factory=dict)
 
 
+class TargetMount(Model):
+    """A pre-existing regular file on the backend Docker host."""
+
+    source: str
+    destination: str
+    read_only: Literal[True]
+    selinux: Literal["none", "shared", "private"] = "none"
+
+    @model_validator(mode="after")
+    def paths(self) -> Self:
+        for value in (self.source, self.destination):
+            if (
+                not PurePosixPath(value).is_absolute()
+                or value == "/"
+                or any(c in value for c in (":", "\0", "\n"))
+                or ".." in PurePosixPath(value).parts
+                or str(PurePosixPath(value)) != value
+            ):
+                raise ValueError(
+                    "mount paths must be canonical absolute POSIX file paths without colons"
+                )
+        return self
+
+
 class Target(Model):
     image: str | None = None
     build: Build | None = None
@@ -106,11 +141,14 @@ class Target(Model):
     env: dict[str, SecretRef] = Field(default_factory=dict)
     labels: dict[str, str] = Field(default_factory=dict)
     command: list[str] | None = None
+    mounts: list[TargetMount] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def source(self) -> Self:
         if (self.image is None) == (self.build is None):
             raise ValueError("target requires exactly one of image or build")
+        if len({m.destination for m in self.mounts}) != len(self.mounts):
+            raise ValueError("duplicate mount destination")
         if not 1 <= self.port <= 65535:
             raise ValueError("invalid target port")
         return self

@@ -1229,3 +1229,48 @@ def test_checked_values_used_for_target_and_fixture_hooks(harness, monkeypatch):
 
     monkeypatch.setattr(controller, "run_trial", run)
     assert controller.run_queue(other, "test")["queues"][0]["state"] == "completed"
+
+
+def test_mount_receipt_survives_queued_preparation_and_blocks_resume(
+    harness, tmp_path, monkeypatch
+):
+    from tools.bench.engine.targets import mount_source_receipts
+    from tools.bench.engine.types import TargetMount
+
+    store, cfg, launches = harness
+    source = tmp_path / "CA file.pem"
+    source.write_text("certificate")
+    target = cfg.targets["app"].model_copy(
+        update={
+            "mounts": [TargetMount(source=str(source), destination="/certs/ca.pem", read_only=True)]
+        }
+    )
+    mounted = QueueStore(store.path.parent / "mounted.db")
+    mounted.register(cfg.model_copy(update={"targets": {"app": target}}))
+    monkeypatch.setattr(
+        controller,
+        "resolve_target",
+        lambda target, env, **kw: ResolvedTarget(
+            target,
+            target.image,
+            "sha256:app",
+            (),
+            mount_sources=mount_source_receipts(target, env.backend),
+        ),
+    )
+    original = controller.run_trial
+
+    def stop(ctx, callback):
+        assert ctx.prepared_target.mount_sources[0]["source"] == str(source)
+        value = original(ctx, callback)
+        mounted.request_stop("test")
+        return value.model_copy(update={"valid": False, "invalid_reasons": ("stop requested",)})
+
+    monkeypatch.setattr(controller, "run_trial", stop)
+    assert controller.run_queue(mounted, "test")["queues"][0]["state"] == "interrupted"
+    source.write_text("mutated certificate")
+    mounted.clear_stop("test")
+    monkeypatch.setattr(controller, "run_trial", original)
+    result = controller.run_queue(mounted, "test")
+    assert result["queues"][0]["state"] != "completed"
+    assert len(launches) == 1

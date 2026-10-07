@@ -1,6 +1,6 @@
 """Checked wire records at the engine's process and artifact boundaries."""
 
-from typing_extensions import TypedDict
+from typing_extensions import NotRequired, TypedDict
 
 from ..records import Ulimit
 
@@ -50,6 +50,27 @@ class NetworkSettings(TypedDict):
     Ports: dict[str, list[PortBinding] | None]
 
 
+class InterfaceAddress(TypedDict, total=False):
+    local: str
+
+
+class HostInterface(TypedDict, total=False):
+    addr_info: list[InterfaceAddress]
+
+
+class MountSource(TypedDict):
+    source: str
+    sha256: str
+    mode: int
+
+
+class ContainerMount(TypedDict, total=False):
+    Type: str
+    Source: str
+    Destination: str
+    RW: bool
+
+
 class ContainerInfo(TypedDict, total=False):
     Id: str
     Name: str
@@ -58,6 +79,7 @@ class ContainerInfo(TypedDict, total=False):
     State: ContainerState
     HostConfig: HostConfig
     NetworkSettings: NetworkSettings
+    Mounts: list[ContainerMount]
 
 
 class NetworkInfo(TypedDict, total=False):
@@ -208,6 +230,7 @@ class BaselinePoint(TypedDict):
 
 
 class TrialManifest(Manifest):
+    mount_sources: NotRequired[list[MountSource]]
     execution_id: str
     image_id: str
     generator_image_id: str
@@ -217,6 +240,7 @@ class TrialManifest(Manifest):
 
 
 class PreparedProvenance(TypedDict, total=False):
+    mount_sources: list[MountSource]
     image_id: str
     generator_image_id: str | None
     generator_version: str
