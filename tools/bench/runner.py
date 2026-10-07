@@ -30,6 +30,7 @@ from .profiles import methodology
 from .reset import restore_fixture
 from .runtime import validate_dependency_inventory, validate_worker_snapshots
 from .schedule import schedule_trials
+from .stop_load import stop_owned_load
 from .telemetry import Collector, rds_metrics, validate_rds_evidence
 from .transport import CommandFailure, copy_from, copy_to, execute
 
@@ -109,6 +110,9 @@ def run_trial(campaign: dict, trial: dict, output_dir: Path) -> dict:
         compose = ["docker", "compose", "-f", "compose.aws.yaml"]
 
     def stop():
+        load_cleanup = stop_owned_load(load, load_project, execute_command=execute)
+        with (output_dir / "load-cleanup.jsonl").open("a") as log:
+            log.write(json.dumps({"epoch": time.time(), **load_cleanup}) + "\n")
         execute(
             load,
             ["docker", "compose", "-f", "compose.load.yaml", "down"],
