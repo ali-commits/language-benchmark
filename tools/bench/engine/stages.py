@@ -1,5 +1,5 @@
 """Bind a continuous stage timeline once per load session, without fixture resets."""
-import math
+from fractions import Fraction as Rational
 
 from .types import Criterion, Fraction, ResolvedJob, ResolvedStage
 
@@ -25,7 +25,7 @@ def resolve_stages(job: ResolvedJob, users: int | None) -> tuple[ResolvedStage, 
             return value
         if users is None:
             raise ValueError('target references require a population')
-        return users if value == 'target' else math.floor(users * value.fraction_of_target)
+        return users if value == 'target' else _bind(value, users)
     result = []
     elapsed = 0.
     ids = set()
@@ -59,6 +59,58 @@ def criterion_windows(stages: tuple[ResolvedStage, ...], criterion: Criterion) -
     return tuple((s.start_seconds, s.end_seconds) for s in selected)
 
 
+def _ratio(endpoint):
+    return Rational(1) if endpoint == 'target' else Rational(str(endpoint.fraction_of_target))
+
+
+def _bind(endpoint, users):
+    if type(endpoint) is int:
+        return endpoint
+    fraction = _ratio(endpoint)
+    return users * fraction.numerator // fraction.denominator
+
+
+def _floor_sum(n, denominator, numerator, offset):
+    """Sum floor((numerator*i + offset)/denominator), i in [0,n).
+
+    Euclidean reduction takes logarithmic time even for enormous user ceilings.
+    """
+    total = 0
+    while True:
+        whole, numerator = divmod(numerator, denominator)
+        total += n * (n - 1) // 2 * whole
+        whole, offset = divmod(offset, denominator)
+        total += n * whole
+        extent = numerator * n + offset
+        if extent < denominator:
+            return total
+        n, offset = divmod(extent, denominator)
+        denominator, numerator = numerator, denominator
+
+
+def _agree(left, right, minimum, maximum):
+    if type(left) is int and type(right) is int:
+        return left == right
+    if type(left) is int or type(right) is int:
+        absolute, reference = (left, right) if type(left) is int else (right, left)
+        if maximum is None:
+            return absolute == 0 and _ratio(reference) == 0
+        # A nondecreasing reference is constant across the interval iff its
+        # values at both extremes equal the absolute endpoint.
+        return _bind(reference, minimum) == absolute == _bind(reference, maximum)
+    a, b = _ratio(left), _ratio(right)
+    if a == b:
+        return True
+    if maximum is None:
+        return False
+    n = maximum - minimum + 1
+    def total(fraction):
+        return _floor_sum(n, fraction.denominator, fraction.numerator, minimum * fraction.numerator)
+    # Floors preserve fractional ordering, so differences never change sign;
+    # equal interval sums prove equality at every candidate, not only extremes.
+    return total(a) == total(b)
+
+
 def validate_stages(job: ResolvedJob) -> None:
     """Reject infeasible templates before any runner or search is started."""
     if job.test.type == 'search':
@@ -67,16 +119,11 @@ def validate_stages(job: ResolvedJob) -> None:
         if not any(s.evaluate and at_target(s.from_users) and at_target(s.to_users) for s in job.stages):
             raise ValueError('search requires an evaluated hold at target')
         populations = (job.test.users.min, job.test.users.start)
-        # Continuity must hold for all candidates: distinct expressions which happen
-        # to round identically at min/start are not a continuous search template.
+        ceilings = [v for v in (job.test.users.max, job.test.limits.hard_users) if isinstance(v, int)]
+        maximum = min(ceilings) if ceilings else None
         for previous, following in zip(job.stages, job.stages[1:]):
-            def expression(v):
-                if v == 'target': return ('fraction', 1.)
-                if isinstance(v, Fraction): return ('fraction', v.fraction_of_target)
-                if v == 0: return ('fraction', 0.)
-                return ('absolute', v)
-            if expression(previous.to_users) != expression(following.from_users):
-                raise ValueError('adjacent search endpoint expressions disagree')
+            if not _agree(previous.to_users, following.from_users, job.test.users.min, maximum):
+                raise ValueError('adjacent search endpoints disagree within candidate bounds')
     else:
         populations = fixed_populations(job)
     for population in populations:

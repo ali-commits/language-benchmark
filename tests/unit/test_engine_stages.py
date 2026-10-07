@@ -106,3 +106,45 @@ def test_search_equivalent_target_and_zero_expressions(tmp_path):
     zero={'fraction_of_target':0.}
     j=job(tmp_path,[stage('up',zero,'target'),stage('hold',one,one,evaluate=True),stage('down','target',0),stage('idle',zero,0)],test={'type':'search','users':{'min':1,'start':10,'max':100},'limits':{'max_trials':2,'max_elapsed':10}})
     assert resolve_stages(j,10)[1].to_users == 10
+
+
+def search_policy(minimum, maximum, hard=None):
+    limits={'max_trials':2,'max_elapsed':10}
+    if hard is not None: limits['hard_users']=hard
+    return {'type':'search','users':{'min':minimum,'start':minimum,'max':maximum},'limits':limits}
+
+
+def test_singleton_mixed_expression(tmp_path):
+    j=job(tmp_path,[stage('up',0,10),stage('hold','target','target',evaluate=True)],test=search_policy(10,10))
+    assert resolve_stages(j,10)[0].to_users==10
+
+
+def test_bounded_distinct_fractions(tmp_path):
+    a={'fraction_of_target':.49}; b={'fraction_of_target':.5}
+    j=job(tmp_path,[stage('up',0,a),stage('more',b,'target'),stage('hold','target','target',evaluate=True)],test=search_policy(7,7))
+    assert resolve_stages(j,7)[0].to_users==3
+
+
+def test_fraction_disagreement_inside_matching_extremes(tmp_path):
+    a={'fraction_of_target':.4}; b={'fraction_of_target':.45}
+    with pytest.raises(ConfigError):
+        job(tmp_path,[stage('up',0,a),stage('more',b,'target'),stage('hold','target','target',evaluate=True)],test=search_policy(1,10))
+
+
+@pytest.mark.parametrize('maximum,hard,candidate',[(10,None,11),(100,10,11),('auto',10,11)])
+def test_search_upper_ceilings(tmp_path,maximum,hard,candidate):
+    j=job(tmp_path,test=search_policy(1,maximum,hard))
+    with pytest.raises(ValueError,match='ceiling'): resolve_stages(j,candidate)
+
+
+def test_distinct_fractions_equal_over_huge_interval(tmp_path):
+    a={'fraction_of_target':.000000000000000001}
+    b={'fraction_of_target':.000000000000000002}
+    j=job(tmp_path,[stage('quiet',0,a),stage('up',b,'target'),stage('hold','target','target',evaluate=True)],test=search_policy(1,100000000000000000))
+    assert resolve_stages(j,100000000000000000)[0].to_users == 0
+
+
+def test_fraction_binding_is_decimal_exact(tmp_path):
+    fraction={'fraction_of_target':.58}
+    j=job(tmp_path,[stage('hold',fraction,fraction)])
+    assert resolve_stages(j,100)[0].from_users == 58
