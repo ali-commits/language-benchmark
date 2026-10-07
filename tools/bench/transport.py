@@ -1,5 +1,8 @@
 """Local or SSH subprocess transport. Environment secrets travel via encrypted stdin."""
 
+from collections.abc import Mapping
+from typing import Protocol
+
 import json
 import os
 import shlex
@@ -10,7 +13,7 @@ REMOTE = "import sys,json,subprocess,os; d=json.load(sys.stdin); r=subprocess.ru
 
 
 class CommandFailure(RuntimeError):
-    def __init__(self, result):
+    def __init__(self, result: subprocess.CompletedProcess[str]) -> None:
         self.returncode = result.returncode
         self.stdout = result.stdout
         self.stderr = result.stderr
@@ -18,8 +21,8 @@ class CommandFailure(RuntimeError):
 
 
 def execute(
-    host: dict, argv: list[str], env: dict | None = None, timeout: int = 1800
-) -> subprocess.CompletedProcess:
+    host: Mapping[str, str], argv: list[str], env: Mapping[str, object] | None = None, timeout: int = 1800
+) -> subprocess.CompletedProcess[str]:
     cwd = host.get("project", str(Path.cwd()))
     supplied = {str(k): str(v) for k, v in (env or {}).items()}
     if host.get("ssh"):
@@ -44,7 +47,7 @@ def execute(
     return result
 
 
-def copy_to(host: dict, source: Path, destination: str):
+def copy_to(host: Mapping[str, str], source: Path, destination: str) -> None:
     if host.get("ssh"):
         # Paths are restricted to absolute alphanumeric project artifact paths for scp.
         import re
@@ -62,7 +65,7 @@ def copy_to(host: dict, source: Path, destination: str):
             shutil.copy2(source, dest)
 
 
-def copy_from(host: dict, source: str, destination: Path):
+def copy_from(host: Mapping[str, str], source: str, destination: Path) -> None:
     if host.get("ssh"):
         subprocess.run(
             ["scp", "-q", "-r", host["ssh"] + ":" + source, str(destination)],
@@ -74,3 +77,12 @@ def copy_from(host: dict, source: str, destination: Path):
 
         if Path(source).resolve() != destination.resolve():
             shutil.copytree(source, destination, dirs_exist_ok=True)
+
+
+class ExecuteCommand(Protocol):
+    """Injectable transport; callers preserve environment and timeout semantics."""
+
+    def __call__(
+        self, host: Mapping[str, str], argv: list[str],
+        env: Mapping[str, object] | None = None, timeout: int = 1800,
+    ) -> subprocess.CompletedProcess[str]: ...

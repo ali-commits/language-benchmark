@@ -1,3 +1,5 @@
+from collections.abc import Mapping
+
 import hashlib
 import json
 import os
@@ -9,10 +11,10 @@ from pathlib import Path
 SECRET_KEYS = ("password", "secret", "token", "credentials", "database_url", "dsn")
 
 
-def redact(value):
+def redact(value: object) -> object:
     if isinstance(value, dict):
         return {
-            k: ("[redacted]" if any(s in k.lower() for s in SECRET_KEYS) else redact(v))
+            k: ("[redacted]" if any(s in str(k).lower() for s in SECRET_KEYS) else redact(v))
             for k, v in value.items()
         }
     if isinstance(value, list):
@@ -30,27 +32,26 @@ def redact(value):
     return value
 
 
-def collect_manifest(campaign: dict, trial: dict) -> dict:
+def collect_manifest(campaign: Mapping[str, object], trial: Mapping[str, object]) -> dict[str, object]:
     rev = subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip()
     dirty = bool(subprocess.check_output(["git", "status", "--porcelain"], text=True).strip())
-    return redact(
-        {
+    payload = {
             "campaign": campaign,
             "trial": trial,
             "git_revision": rev,
             "dirty": dirty,
             "orchestrator": platform.platform(),
-            "label": (campaign["mode"].upper() + " SMOKE")
+            "label": (str(campaign["mode"]).upper() + " SMOKE")
             if campaign.get("smoke")
-            else campaign["mode"].upper(),
+            else str(campaign["mode"]).upper(),
             "lock_checksum": hashlib.sha256(
                 Path("runtimes/python/lock.json").read_bytes()
             ).hexdigest(),
         }
-    )
+    return {key: redact(value) for key, value in payload.items()}
 
 
-def atomic_json(path: Path, data: dict):
+def atomic_json(path: Path, data: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     p = path.with_suffix(".tmp")
     p.write_text(json.dumps(redact(data), indent=2, default=str) + "\n")

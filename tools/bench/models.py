@@ -20,7 +20,7 @@ class RuntimeCell:
     dependency_lock: str = ""
     image: str = ""
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if self.app not in ("baseline", "modern") or self.build not in (
             "standard",
             "jit",
@@ -47,7 +47,7 @@ class FixtureSpec:
     seed: int = 20261004
     time_origin: str = "2026-01-01T00:00:00+00:00"
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         if (
             self.users < 2
             or self.posts < 1
@@ -64,10 +64,10 @@ class FixtureManifest:
     checksum: str
     dump: str
     identity: str
-    counts: dict
-    fingerprints: dict
+    counts: dict[str, int]
+    fingerprints: dict[str, str]
     generator_version: str = "1"
-    spec: dict = field(default_factory=dict)
+    spec: dict[str, int | str] = field(default_factory=dict)
 
 
 @dataclass
@@ -89,7 +89,7 @@ class NativeCell:
     supported: bool = True
     reasons: list[str] = field(default_factory=list)
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         expected = {
             "java": ("spring-boot", 1, 20),
             "php": ("laravel", 20, 1),

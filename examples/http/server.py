@@ -8,7 +8,7 @@ from urllib.parse import parse_qs, urlsplit
 
 
 class Handler(BaseHTTPRequestHandler):
-    def do_GET(self):
+    def do_GET(self) -> None:
         query = parse_qs(urlsplit(self.path).query)
         delay = min(max(float(query.get("delay", ["0"])[0]), 0), 10)
         time.sleep(delay)
@@ -22,7 +22,7 @@ class Handler(BaseHTTPRequestHandler):
         except (BrokenPipeError, ConnectionResetError):
             pass
 
-    def log_message(self, *args):
+    def log_message(self, format: str, *args: object) -> None:
         pass
 
 

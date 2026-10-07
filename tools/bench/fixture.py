@@ -10,11 +10,14 @@ import psycopg
 from psycopg.conninfo import conninfo_to_dict
 
 from .models import FixtureManifest
-from .seed import COLUMNS
+from .seed import COLUMNS, count_rows
 
 
-def client_command(tool: str, dsn: str, args: list[str]) -> tuple[list[str], dict]:
-    info = conninfo_to_dict(dsn)
+def client_command(tool: str, dsn: str, args: list[str]) -> tuple[list[str], dict[str, str]]:
+    raw_info = conninfo_to_dict(dsn)
+    if any(not isinstance(value, str) for value in raw_info.values()):
+        raise ValueError("PostgreSQL connection values must be strings")
+    info = {key: value for key, value in raw_info.items() if isinstance(value, str)}
     env = os.environ.copy()
     # Never put password or the connection URL in argv, output, or exceptions.
     env.update(
@@ -46,13 +49,13 @@ def client_command(tool: str, dsn: str, args: list[str]) -> tuple[list[str], dic
     return [tool, "-d", info["dbname"], *args], env
 
 
-def logical_fingerprints(dsn: str) -> tuple[dict, dict]:
+def logical_fingerprints(dsn: str) -> tuple[dict[str, int], dict[str, str]]:
     counts = {}
     digests = {}
     with psycopg.connect(dsn) as c:
         for table in COLUMNS:
-            counts[table] = c.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
-            keys = ",".join(COLUMNS[table][:2] if table in ("follows", "likes") else ["id"])
+            counts[table] = count_rows(c, table)
+            keys = ",".join(COLUMNS[table][:2] if table in ("follows", "likes") else ("id",))
             h = hashlib.sha256()
             with c.cursor().copy(f"COPY (SELECT * FROM {table} ORDER BY {keys}) TO STDOUT") as copy:
                 for row in copy:

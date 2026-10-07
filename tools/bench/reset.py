@@ -11,7 +11,7 @@ from .fixture import client_command, verify_fixture
 from .models import FixtureManifest
 
 
-def guard(dsn: str, allowed_database: str):
+def guard(dsn: str, allowed_database: str) -> None:
     name = conninfo_to_dict(dsn).get("dbname", "")
     if name != allowed_database or not name.startswith("language_benchmark"):
         raise ValueError("reset database must match explicit language_benchmark allowlist")
@@ -25,9 +25,12 @@ def mark_database(dsn: str, allowed_database: str) -> str:
             "INSERT INTO benchmark_identity(singleton,identity) VALUES (true,%s) ON CONFLICT DO NOTHING",
             (identity,),
         )
-        return c.execute(
+        row = c.execute(
             "SELECT identity::text FROM benchmark_identity WHERE singleton"
-        ).fetchone()[0]
+        ).fetchone()
+        if row is None or not isinstance(row[0], str):
+            raise ValueError("database identity is missing or invalid")
+        return row[0]
 
 
 def restore_fixture(dsn: str, manifest_path: Path, allowed_database: str) -> FixtureManifest:
@@ -47,8 +50,10 @@ def restore_fixture(dsn: str, manifest_path: Path, allowed_database: str) -> Fix
             raise ValueError("database identity mismatch")
         active = c.execute(
             "SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND pid<>pg_backend_pid() AND application_name='lb-backend'"
-        ).fetchone()[0]
-        if active:
+        ).fetchone()
+        if active is None:
+            raise ValueError("database session count is missing")
+        if active[0]:
             raise ValueError("backend sessions remain; stop backend before reset")
         argv, env = client_command(
             "pg_restore",
