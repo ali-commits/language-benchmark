@@ -162,7 +162,9 @@ def _reserve_hosts(
 
 def _release_hosts(store: QueueStore, queue: str, state: ControllerState) -> None:
     for identity, retained in list(state["leases"].items()):
-        lease = HostLease(Host.model_validate(retained["host"]), queue, state["owner"])
+        lease = HostLease(
+            Host.model_validate_json(json.dumps(retained["host"])), queue, state["owner"]
+        )
         receipt = LeaseReceipt(**retained["receipt"])
         retained["releasing"] = True
         _save(store, queue, state, "cleaning")
@@ -179,7 +181,9 @@ def _restore_hosts(
     store: QueueStore, queue: str, state: ControllerState, lock: ControllerLock
 ) -> None:
     for retained in state["leases"].values():
-        lease = HostLease(Host.model_validate(retained["host"]), queue, state["owner"])
+        lease = HostLease(
+            Host.model_validate_json(json.dumps(retained["host"])), queue, state["owner"]
+        )
         receipt = LeaseReceipt(**retained["receipt"])
         if retained["releasing"]:
             if lease.identity() != receipt.host_identity:

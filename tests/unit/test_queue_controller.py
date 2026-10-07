@@ -1274,3 +1274,93 @@ def test_mount_receipt_survives_queued_preparation_and_blocks_resume(
     result = controller.run_queue(mounted, "test")
     assert result["queues"][0]["state"] != "completed"
     assert len(launches) == 1
+
+
+@pytest.mark.parametrize("operation", ["release", "restore", "restore_releasing"])
+def test_retained_ssh_lease_paths_reconstructed_at_json_boundary(tmp_path, monkeypatch, operation):
+    import json
+    import subprocess
+
+    from tools.bench.engine.types import Host
+    from tools.bench.queue import leases
+
+    host = Host(
+        transport="ssh",
+        host="backend.test",
+        user="rocky",
+        port=2222,
+        workdir=Path("/remote workdir"),
+        identity_file=Path("/keys/ssh identity"),
+    )
+    container_id = "sha256:lease"
+    resources = {container_id}
+    received = []
+
+    def execute(actual_host, argv, **kwargs):
+        assert actual_host == host
+        assert isinstance(actual_host.workdir, Path)
+        assert isinstance(actual_host.identity_file, Path)
+        received.append(argv)
+        if argv[1] == "info":
+            output = "docker-daemon-id"
+        elif argv[1] == "ps":
+            output = "\n".join(resources)
+        elif argv[1] == "inspect":
+            assert container_id in resources
+            output = json.dumps(
+                [
+                    {
+                        "Id": container_id,
+                        "Name": "/bench-queue-lease",
+                        "Config": {
+                            "Labels": {
+                                "bench.queue": "queue",
+                                "bench.controller": "owner",
+                                "bench.role": "queue-lease",
+                            }
+                        },
+                    }
+                ]
+            )
+        elif argv[1] == "rm":
+            resources.remove(container_id)
+            output = ""
+        else:
+            raise AssertionError(argv)
+        return subprocess.CompletedProcess(argv, 0, output, "")
+
+    monkeypatch.setattr(leases, "execute_host", execute)
+    saved = []
+    monkeypatch.setattr(controller, "_save", lambda *args: saved.append(args))
+    state = {
+        "owner": "owner",
+        "leases": {
+            "docker-daemon-id": {
+                "host": host.model_dump(mode="json"),
+                "receipt": {
+                    "host_identity": "docker-daemon-id",
+                    "container_id": container_id,
+                    "queue_id": "queue",
+                    "owner": "owner",
+                },
+                "releasing": operation == "restore_releasing",
+            }
+        },
+    }
+    # Mirror the SQLite checkpoint JSON round-trip, including Path -> string.
+    state = json.loads(json.dumps(state))
+    assert isinstance(state["leases"]["docker-daemon-id"]["host"]["workdir"], str)
+    if operation == "release":
+        controller._release_hosts(None, "queue", state)
+    else:
+        with leases.ControllerLock(tmp_path / "controller.lock") as lock:
+            controller._restore_hosts(None, "queue", state, lock)
+    assert received
+    if operation == "restore":
+        assert resources == {container_id}
+        assert state["leases"]
+        assert not any(argv[1] == "rm" for argv in received)
+    else:
+        assert not resources
+        assert not state["leases"]
+        assert saved
