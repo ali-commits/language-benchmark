@@ -46,6 +46,7 @@ from .records import (
     Budget,
     ControllerState,
     Decision,
+    EvaluationRecord,
     FrozenInputs,
     JobCheckpoint,
     JobResult,
@@ -211,7 +212,7 @@ def _decide(store: QueueStore, queue: str, state: ControllerState, data: JobChec
             "trial_id": pending["id"],
             "target": data["target"],
             "objective": pending["objective"],
-            "evaluation": evaluation.model_dump(mode="json"),
+            "evaluation": checked_record(evaluation.model_dump(mode="json"), EvaluationRecord),
         }
     )
     retries = data.setdefault("invalid_retries", {})
@@ -287,7 +288,7 @@ def _reuse_probes(store: QueueStore, queue: str, data: JobCheckpoint, job: Resol
                 "trial_id": trial_id,
                 "target": data["target"],
                 "objective": objective,
-                "evaluation": search.observations[-1].evaluation.model_dump(mode="json"),
+                "evaluation": checked_record(search.observations[-1].evaluation.model_dump(mode="json"), EvaluationRecord),
                 "reused": True,
                 "source_objective": source["objective"],
             }

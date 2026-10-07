@@ -4,6 +4,7 @@ Checked reads retain the original mappings (including extension metadata), so
 mutating a nested checkpoint remains visible to the controller's atomic save.
 """
 from pydantic import JsonValue
+from typing import Literal
 from typing_extensions import NotRequired, TypedDict
 
 from tools.bench.engine.records import FixturePin
@@ -87,16 +88,55 @@ class PendingTrial(TypedDict):
     interrupted: NotRequired[bool]
     evidence: NotRequired[dict[str, JsonValue]]
 
+class CriterionRecord(TypedDict):
+    metric: str
+    scope: str
+    statistic: str
+    operator: str
+    value: float
+    unit: str | None
+    stages: list[str] | None
+    minimum_samples: int
+    minimum_coverage: float
+
+class CriterionResultRecord(TypedDict):
+    criterion: CriterionRecord
+    valid: bool
+    passed: bool
+    value: float | None
+    sample_count: int
+    coverage: float | None
+    reason: str | None
+
 class EvaluationRecord(TypedDict):
-    verdict: str
+    verdict: Literal["pass", "fail", "invalid"]
     reasons: list[str]
-    criteria: list[dict[str, JsonValue]]
+    results: list[CriterionResultRecord]
+    warnings: list[str]
+
+class ObservationRecord(TypedDict):
+    users: int
+    trial_id: str
+    evaluation: EvaluationRecord
+    reused: bool
+
+class SearchPolicyRecord(TypedDict):
+    min_users: int
+    start: int
+    max_users: int | None
+    max_trials: int
+    max_elapsed: float
+    expansion_factor: float
+    resolution: int
+    confirmation: str
+    limiting_reason: str
+
 
 class Decision(TypedDict):
     trial_id: str
     target: int
     objective: str
-    evaluation: dict[str, JsonValue]
+    evaluation: EvaluationRecord
     reused: NotRequired[bool]
     source_objective: NotRequired[str]
 
@@ -115,7 +155,7 @@ class JobResult(TypedDict):
     failing_users: int | None
     reason: str | None
     contradictions: list[list[int]]
-    observations: list[dict[str, JsonValue]]
+    observations: list[ObservationRecord]
     attempts: int
     confirmation: str
 
@@ -126,9 +166,9 @@ class Budget(TypedDict):
     now: float
 
 class SearchCheckpoint(TypedDict):
-    policy: dict[str, JsonValue]
+    policy: SearchPolicyRecord
     budget: Budget
-    observations: list[dict[str, JsonValue]]
+    observations: list[ObservationRecord]
     pending_trial_id: str | None
     pending_users: int | None
 
