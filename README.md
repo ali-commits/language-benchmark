@@ -26,6 +26,8 @@ Reports contain selected-window and per-stage metrics, objective decisions/bound
 
 Read [configuration](docs/configuration.md), [queues](docs/queues.md), [custom workloads](docs/custom-workloads.md), [environments](docs/environments.md) and [metrics](docs/metrics.md). The [October 2026 measured results](docs/results/2026-10/README.md) publish sanitized fixed/stress tables and immutable PDF copies. Those historical campaigns used their own timing and resource methodology; they do not establish performance of this reusable engine.
 
+The [confirmation campaign completed on October 8, 2026](docs/results/2026-10/confirmation/README.md) exercised this engine with nine backend configurations, fixed loads of 100 and 1,000 users, and separate p95/p99 capacity objectives. It includes the final passing/failing bounds, a compact data export, and the complete PDF report. New searches default to `upper_probe`; `hybrid` and `binary` remain selectable in the [search-method configuration](docs/configuration.md#search-method-and-saved-queues).
+
 ```sh
 uv run --locked pytest tests/unit -q
 ```

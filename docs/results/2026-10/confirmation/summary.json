@@ -1,0 +1,348 @@
+{
+  "campaign": "confirmation-20261008",
+  "completed": "2026-10-08",
+  "source_export_sha256": "804cf7e9a5bfb7febabfe72d6680306178e097949c9733c024a716ff39594d72",
+  "scope": "Latest confirmation campaign only; nine configurations;18 fixed trials;113 stress attempts including one invalid interrupted attempt.",
+  "fixed_timing_seconds": {
+    "ramp": 180,
+    "hold": 240
+  },
+  "search_timing_seconds": {
+    "ramp": 300,
+    "hold": 120
+  },
+  "criteria": {
+    "operation_success_min": 0.9,
+    "authenticated_fraction_min": 0.9,
+    "latency_cutoff_ms": 5000
+  },
+  "metric_window": "Sustained hold; CPU and memory means weighted by interval overlap. VM memory is MemTotal minus MemAvailable.",
+  "fixed": [
+    {
+      "configuration": "bun-express",
+      "users": 1000,
+      "success_fraction": 1.0,
+      "authenticated_fraction": 1.0,
+      "successful_ops_s": 163.8,
+      "latency_mean_ms": 4.033552096052307,
+      "latency_p99_ms": 10.99999999999568,
+      "vm_cpu_mean_percent": 19.276042373076724,
+      "vm_memory_mean_gib": 0.6563129884259031
+    },
+    {
+      "configuration": "bun-express",
+      "users": 100,
+      "success_fraction": 1.0,
+      "authenticated_fraction": 1.0,
+      "successful_ops_s": 16.383333333333333,
+      "latency_mean_ms": 4.939216683621732,
+      "latency_p99_ms": 11.000000000024102,
+      "vm_cpu_mean_percent": 14.944939740004331,
+      "vm_memory_mean_gib": 0.6298322076248876
+    },
+    {
+      "configuration": "csharp-aspnet-core",
+      "users": 100,
+      "success_fraction": 1.0,
+      "authenticated_fraction": 1.0,
+      "successful_ops_s": 16.354166666666668,
+      "latency_mean_ms": 4.191337579618615,
+      "latency_p99_ms": 9.000000000014552,
+      "vm_cpu_mean_percent": 14.627386368919895,
+      "vm_memory_mean_gib": 0.8084881231204918
+    },
+    {
+      "configuration": "csharp-aspnet-core",
+      "users": 1000,
+      "success_fraction": 0.08759090490656356,
+      "authenticated_fraction": 0.049,
+      "successful_ops_s": 7.929166666666666,
+      "latency_mean_ms": 4565.094909325232,
+      "latency_p99_ms": 5002.000000000009,
+      "vm_cpu_mean_percent": 99.82227578295667,
+      "vm_memory_mean_gib": 1.003548474424099
+    },
+    {
+      "configuration": "go-net-http",
+      "users": 1000,
+      "success_fraction": 1.0,
+      "authenticated_fraction": 1.0,
+      "successful_ops_s": 163.675,
+      "latency_mean_ms": 2.963774756886048,
+      "latency_p99_ms": 7.999999999981355,
+      "vm_cpu_mean_percent": 16.88253646188528,
+      "vm_memory_mean_gib": 0.6322149531092464
+    },
+    {
+      "configuration": "go-net-http",
+      "users": 100,
+      "success_fraction": 1.0,
+      "authenticated_fraction": 1.0,
+      "successful_ops_s": 16.366666666666667,
+      "latency_mean_ms": 3.3686354378817724,
+      "latency_p99_ms": 8.000000000002103,
+      "vm_cpu_mean_percent": 14.142024974936277,
+      "vm_memory_mean_gib": 0.657659852867505
+    },
+    {
+      "configuration": "java-spring-boot",
+      "users": 100,
+      "success_fraction": 1.0,
+      "authenticated_fraction": 1.0,
+      "successful_ops_s": 16.329166666666666,
+      "latency_mean_ms": 4.013779025261362,
+      "latency_p99_ms": 8.000000000038199,
+      "vm_cpu_mean_percent": 15.61263883550975,
+      "vm_memory_mean_gib": 1.2226791138668849
+    },
+    {
+      "configuration": "java-spring-boot",
+      "users": 1000,
+      "success_fraction": 1.0,
+      "authenticated_fraction": 1.0,
+      "successful_ops_s": 163.8375,
+      "latency_mean_ms": 3.0650542966862653,
+      "latency_p99_ms": 7.999999999981355,
+      "vm_cpu_mean_percent": 17.647200755007113,
+      "vm_memory_mean_gib": 1.5887003552654315
+    },
+    {
+      "configuration": "node-express",
+      "users": 1000,
+      "success_fraction": 0.9999745734699585,
+      "authenticated_fraction": 1.0,
+      "successful_ops_s": 163.86666666666667,
+      "latency_mean_ms": 4.404205548068873,
+      "latency_p99_ms": 11.000000000024102,
+      "vm_cpu_mean_percent": 22.174642358134278,
+      "vm_memory_mean_gib": 0.7875246445998414
+    },
+    {
+      "configuration": "node-express",
+      "users": 100,
+      "success_fraction": 1.0,
+      "authenticated_fraction": 1.0,
+      "successful_ops_s": 16.379166666666666,
+      "latency_mean_ms": 5.217756296107809,
+      "latency_p99_ms": 12.000000000000455,
+      "vm_cpu_mean_percent": 15.126423997570665,
+      "vm_memory_mean_gib": 0.6596580418686054
+    },
+    {
+      "configuration": "php-laravel",
+      "users": 100,
+      "success_fraction": 1.0,
+      "authenticated_fraction": 1.0,
+      "successful_ops_s": 16.183333333333334,
+      "latency_mean_ms": 61.65473738413975,
+      "latency_p99_ms": 197.17000000000363,
+      "vm_cpu_mean_percent": 42.64355804601146,
+      "vm_memory_mean_gib": 0.6547342712732871
+    },
+    {
+      "configuration": "php-laravel",
+      "users": 1000,
+      "success_fraction": 0.0,
+      "authenticated_fraction": 0.157,
+      "successful_ops_s": 0.0,
+      "latency_mean_ms": 5000.682345052208,
+      "latency_p99_ms": 5002.000000000009,
+      "vm_cpu_mean_percent": 99.993638476066,
+      "vm_memory_mean_gib": 0.8330756806739633
+    },
+    {
+      "configuration": "php-laravel-octane",
+      "users": 100,
+      "success_fraction": 1.0,
+      "authenticated_fraction": 1.0,
+      "successful_ops_s": 16.3,
+      "latency_mean_ms": 6.354805725970626,
+      "latency_p99_ms": 12.000000000000455,
+      "vm_cpu_mean_percent": 16.30541971438877,
+      "vm_memory_mean_gib": 1.390857071858189
+    },
+    {
+      "configuration": "php-laravel-octane",
+      "users": 1000,
+      "success_fraction": 1.0,
+      "authenticated_fraction": 1.0,
+      "successful_ops_s": 163.76666666666668,
+      "latency_mean_ms": 7.016181559128732,
+      "latency_p99_ms": 14.999999999986358,
+      "vm_cpu_mean_percent": 36.37465188846761,
+      "vm_memory_mean_gib": 1.424991062041363
+    },
+    {
+      "configuration": "python-modern-3.14.8-standard-jit0-gil1-async",
+      "users": 1000,
+      "success_fraction": 0.9999745443437532,
+      "authenticated_fraction": 1.0,
+      "successful_ops_s": 163.67916666666667,
+      "latency_mean_ms": 7.19707769066292,
+      "latency_p99_ms": 45.000000000015916,
+      "vm_cpu_mean_percent": 27.68493152447525,
+      "vm_memory_mean_gib": 0.7120184472828669
+    },
+    {
+      "configuration": "python-modern-3.14.8-standard-jit0-gil1-async",
+      "users": 100,
+      "success_fraction": 1.0,
+      "authenticated_fraction": 1.0,
+      "successful_ops_s": 16.304166666666667,
+      "latency_mean_ms": 7.623818042422263,
+      "latency_p99_ms": 45.000000000015916,
+      "vm_cpu_mean_percent": 15.869352477253832,
+      "vm_memory_mean_gib": 0.6872539734255156
+    },
+    {
+      "configuration": "rust-axum",
+      "users": 1000,
+      "success_fraction": 1.0,
+      "authenticated_fraction": 1.0,
+      "successful_ops_s": 163.88333333333333,
+      "latency_mean_ms": 3.23372826197509,
+      "latency_p99_ms": 8.000000000009777,
+      "vm_cpu_mean_percent": 16.36065524794148,
+      "vm_memory_mean_gib": 0.599962679705618
+    },
+    {
+      "configuration": "rust-axum",
+      "users": 100,
+      "success_fraction": 1.0,
+      "authenticated_fraction": 1.0,
+      "successful_ops_s": 16.4375,
+      "latency_mean_ms": 3.926235741445459,
+      "latency_p99_ms": 8.999999999957708,
+      "vm_cpu_mean_percent": 14.048851792348657,
+      "vm_memory_mean_gib": 0.5654682051969644
+    }
+  ],
+  "bounds": [
+    {
+      "target_name": "python-modern-3.14.8-standard-jit0-gil1-async",
+      "objective": "p95",
+      "passing_users": 2300,
+      "failing_users": 2337,
+      "status": "complete"
+    },
+    {
+      "target_name": "python-modern-3.14.8-standard-jit0-gil1-async",
+      "objective": "p99",
+      "passing_users": 2226,
+      "failing_users": 2263,
+      "status": "complete"
+    },
+    {
+      "target_name": "java-spring-boot",
+      "objective": "p95",
+      "passing_users": 2094,
+      "failing_users": 2126,
+      "status": "complete"
+    },
+    {
+      "target_name": "java-spring-boot",
+      "objective": "p99",
+      "passing_users": 2094,
+      "failing_users": 2126,
+      "status": "complete"
+    },
+    {
+      "target_name": "php-laravel",
+      "objective": "p95",
+      "passing_users": 300,
+      "failing_users": 337,
+      "status": "complete"
+    },
+    {
+      "target_name": "php-laravel",
+      "objective": "p99",
+      "passing_users": 262,
+      "failing_users": 300,
+      "status": "complete"
+    },
+    {
+      "target_name": "go-net-http",
+      "objective": "p95",
+      "passing_users": 2995,
+      "failing_users": 3020,
+      "status": "complete"
+    },
+    {
+      "target_name": "go-net-http",
+      "objective": "p99",
+      "passing_users": 2995,
+      "failing_users": 3020,
+      "status": "complete"
+    },
+    {
+      "target_name": "rust-axum",
+      "objective": "p95",
+      "passing_users": 3296,
+      "failing_users": 3311,
+      "status": "complete"
+    },
+    {
+      "target_name": "rust-axum",
+      "objective": "p99",
+      "passing_users": 3296,
+      "failing_users": 3311,
+      "status": "complete"
+    },
+    {
+      "target_name": "node-express",
+      "objective": "p95",
+      "passing_users": 2453,
+      "failing_users": 2472,
+      "status": "complete"
+    },
+    {
+      "target_name": "node-express",
+      "objective": "p99",
+      "passing_users": 2453,
+      "failing_users": 2472,
+      "status": "complete"
+    },
+    {
+      "target_name": "bun-express",
+      "objective": "p95",
+      "passing_users": 2630,
+      "failing_users": 2654,
+      "status": "complete"
+    },
+    {
+      "target_name": "bun-express",
+      "objective": "p99",
+      "passing_users": 2630,
+      "failing_users": 2654,
+      "status": "complete"
+    },
+    {
+      "target_name": "csharp-aspnet-core",
+      "objective": "p95",
+      "passing_users": 1166,
+      "failing_users": 1216,
+      "status": "complete"
+    },
+    {
+      "target_name": "csharp-aspnet-core",
+      "objective": "p99",
+      "passing_users": 1166,
+      "failing_users": 1216,
+      "status": "complete"
+    },
+    {
+      "target_name": "php-laravel-octane",
+      "objective": "p95",
+      "passing_users": 1632,
+      "failing_users": 1668,
+      "status": "complete"
+    },
+    {
+      "target_name": "php-laravel-octane",
+      "objective": "p99",
+      "passing_users": 1632,
+      "failing_users": 1668,
+      "status": "complete"
+    }
+  ]
+}
