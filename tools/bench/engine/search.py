@@ -4,6 +4,8 @@ Times are injected Unix epoch seconds, durable across process and host reboots. 
 all actual launches, including invalid trials and confirmations, cost one attempt.
 """
 
+import math
+from statistics import median
 from typing import Literal
 
 from pydantic import Field, model_validator
@@ -24,6 +26,8 @@ class SearchPolicy(Model):
         "majority_on_disagreement"
     )
     limiting_reason: str = "user_ceiling"
+    # Missing field in historical checkpoints retains their original algorithm.
+    search_method: Literal["hybrid", "binary"] = "binary"
 
     @model_validator(mode="after")
     def bounds(self) -> Self:
@@ -59,6 +63,7 @@ class SearchPolicy(Model):
             resolution=test.resolution,
             confirmation=test.confirmation,
             limiting_reason=reason,
+            search_method=test.search_method,
         )
 
 
@@ -179,6 +184,92 @@ def search_result(state: SearchState) -> SearchResult:
     )
 
 
+def _interpolated_probe(state: SearchState, lo: int, hi: int) -> int | None:
+    """Guarded secant on measured signed margins, never unmeasured bounds.
+
+    Majority endpoints use only votes supporting the decided verdict. The median
+    of their minimum criterion margins avoids averaging opposing votes. The
+    integer central interval guarantees progress even for nonlinear/noisy data.
+    Reduced evidence cannot identify a timeout-clipped latency distribution.
+    """
+    supporting = [
+        [
+            observation.evaluation
+            for observation in state.observations
+            if observation.users == users
+            and observation.evaluation.valid
+            and observation.evaluation.verdict == verdict
+        ]
+        for users, verdict in ((lo, "pass"), (hi, "fail"))
+    ]
+    if not all(supporting):
+        return None
+    groups = [evaluation.results for votes in supporting for evaluation in votes]
+    if not groups or not groups[0]:
+        return None
+    # Identity includes metric/statistic/scope/units/stage selectors and thresholds.
+    expected = tuple(result.criterion.model_dump_json() for result in groups[0])
+    if len(set(expected)) != len(expected):
+        return None
+    for group in groups:
+        if tuple(result.criterion.model_dump_json() for result in group) != expected:
+            return None
+        if any(
+            not result.valid
+            or result.value is None
+            or not math.isfinite(result.value)
+            or result.criterion.operator not in ("<=", "<", ">=", ">")
+            for result in group
+        ):
+            return None
+    scales = []
+    for index, result in enumerate(groups[0]):
+        observed = []
+        for group in groups:
+            value = group[index].value
+            assert value is not None
+            observed.append(abs(value))
+        scales.append(abs(result.criterion.value) or max(observed) or 1.0)
+    endpoints = []
+    for votes in supporting:
+        margins = []
+        for evaluation in votes:
+            values = []
+            for index, result in enumerate(evaluation.results):
+                scale = scales[index]
+                assert result.value is not None
+                value = result.criterion.value / scale - result.value / scale
+                if result.criterion.operator in (">=", ">"):
+                    value = -value
+                if not math.isfinite(value):
+                    return None
+                values.append(value)
+            margin = min(values)
+            if (evaluation.verdict == "pass" and margin < 0) or (
+                evaluation.verdict == "fail" and margin >= 0
+            ):
+                return None
+            margins.append(margin)
+        endpoints.append(median(margins))
+    passing, failing = endpoints
+    if passing < 0 or failing >= 0 or passing == failing:
+        return None
+    magnitude = max(abs(passing), abs(failing))
+    passing, failing = passing / magnitude, failing / magnitude
+    fraction = passing / (passing - failing)
+    if not math.isfinite(fraction) or not 0 <= fraction <= 1:
+        return None
+    numerator, denominator = fraction.as_integer_ratio()
+    width = hi - lo
+    # Round half upward with integer arithmetic, including arbitrarily large users.
+    offset = (2 * width * numerator + denominator) // (2 * denominator)
+    lower = max(1, (width + 4) // 5)
+    upper = min(width - 1, width * 4 // 5)
+    if lower > upper:
+        return None
+    return lo + min(upper, max(lower, offset))
+
+
 def next_probe(
     state: SearchState, policy: SearchPolicy | None = None, *, now: float | None = None
 ) -> int | None:
@@ -201,6 +292,10 @@ def next_probe(
         assert hi is not None
         return max(state.policy.min_users, min(hi - 1, hi * denominator // numerator))
     if hi is not None:
+        if state.policy.search_method == "hybrid":
+            candidate = _interpolated_probe(state, lo, hi)
+            if candidate is not None:
+                return candidate
         return (lo + hi) // 2
     candidate = max(lo + 1, (lo * numerator + denominator - 1) // denominator)
     return (

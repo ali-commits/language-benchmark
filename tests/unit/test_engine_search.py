@@ -190,3 +190,176 @@ def test_epoch_deadline_survives_reboot_and_rejects_bad_clock():
             record_probe(restored, 1000, "bad", Evaluation(verdict="pass"), now=bad)
     with pytest.raises(ValueError):
         JobBudget(started_at=5.0, now=4.0)
+
+
+def measured(s, users, values, verdict):
+    from tools.bench.engine.types import Criterion, CriterionResult
+
+    results = tuple(
+        CriterionResult(
+            criterion=Criterion(
+                metric=metric, statistic=statistic, operator=operator, value=threshold
+            ),
+            valid=True,
+            passed=(value <= threshold if operator == "<=" else value >= threshold),
+            value=value,
+        )
+        for metric, statistic, operator, threshold, value in values
+    )
+    return record_probe(
+        s, users, str(len(s.observations)), Evaluation(verdict=verdict, results=results)
+    )
+
+
+def hybrid_bracket(lower_values, upper_values):
+    s = state(search_method="hybrid", confirmation="single_observation")
+    s = measured(s, 2000, lower_values, "pass")
+    return measured(s, 3000, upper_values, "fail")
+
+
+def test_hybrid_secant_interpolates_latency():
+    s = hybrid_bracket([("latency", "p99", "<=", 5.0, 3.0)], [("latency", "p99", "<=", 5.0, 8.0)])
+    assert next_probe(s) == 2400
+    binary = s.model_copy(
+        update={"policy": s.policy.model_copy(update={"search_method": "binary"})}
+    )
+    assert next_probe(binary) == 2500
+
+
+def test_hybrid_lower_bound_and_all_criteria_limiting():
+    s = hybrid_bracket(
+        [("success", "rate", ">=", 0.99, 1.0)], [("success", "rate", ">=", 0.99, 0.96)]
+    )
+    assert next_probe(s) == 2250
+    s = hybrid_bracket(
+        [("latency", "p99", "<=", 5.0, 3.0), ("authenticated", "rate", ">=", 0.99, 1.0)],
+        [("latency", "p99", "<=", 5.0, 8.0), ("authenticated", "rate", ">=", 0.99, 0.95)],
+    )
+    # All criteria are aggregated by their minimum margin, not latency alone.
+    assert next_probe(s) == 2200
+
+
+@pytest.mark.parametrize("upper", [None, 5.0])
+def test_hybrid_missing_or_inconsistent_falls_back(upper):
+    s = hybrid_bracket([("latency", "p95", "<=", 5.0, 3.0)], [("latency", "p95", "<=", 5.0, 8.0)])
+    result = s.observations[-1].evaluation.results[0].model_copy(update={"value": upper})
+    observation = s.observations[-1].model_copy(
+        update={"evaluation": Evaluation(verdict="fail", results=(result,))}
+    )
+    s = s.model_copy(update={"observations": (s.observations[0], observation)})
+    assert next_probe(s) == 2500
+
+
+def test_hybrid_selector_mismatch_invalid_and_opposing_votes():
+    s = state(search_method="hybrid")
+    s = measured(s, 2000, [("latency", "p99", "<=", 5.0, 3.0)], "pass")
+    s = measured(s, 3000, [("latency", "p99", "<=", 5.0, 1.0)], "pass")
+    s = measured(s, 3000, [("latency", "p99", "<=", 5.0, 8.0)], "fail")
+    s = measured(s, 3000, [("latency", "p99", "<=", 5.0, 8.0)], "fail")
+    assert next_probe(s) == 2400
+    s = vote(s, 2500, "invalid")
+    assert next_probe(s) == 2400
+    with pytest.raises(ValueError):
+        record_probe(s, 2500, "0", Evaluation(verdict="invalid"))
+    upper = s.observations[2].evaluation.results[0]
+    changed = upper.model_copy(
+        update={"criterion": upper.criterion.model_copy(update={"statistic": "p95"})}
+    )
+    observations = list(s.observations)
+    for index in (2, 3):
+        observations[index] = observations[index].model_copy(
+            update={"evaluation": Evaluation(verdict="fail", results=(changed,))}
+        )
+    assert next_probe(s.model_copy(update={"observations": tuple(observations)})) == 2500
+
+
+def test_hybrid_zero_threshold_nonfinite_and_resolution_progress():
+    s = hybrid_bracket([("delta", "mean", "<=", 0.0, -2.0)], [("delta", "mean", "<=", 0.0, 3.0)])
+    assert next_probe(s) == 2400
+    result = s.observations[1].evaluation.results[0].model_copy(update={"value": float("inf")})
+    upper = s.observations[1].model_copy(
+        update={"evaluation": Evaluation(verdict="fail", results=(result,))}
+    )
+    assert next_probe(s.model_copy(update={"observations": (s.observations[0], upper)})) == 2500
+    s = state(search_method="hybrid", confirmation="single_observation", resolution=1)
+    for users, value, verdict in [(2000, 3.0, "pass"), (2002, 8.0, "fail")]:
+        s = measured(s, users, [("latency", "p99", "<=", 5.0, value)], verdict)
+    assert next_probe(s) == 2001
+    s = measured(s, 2001, [("latency", "p99", "<=", 5.0, 4.0)], "pass")
+    assert search_result(s).status == "complete"
+    assert next_probe(s) is None
+
+
+def test_legacy_search_policy_without_method_is_binary():
+    policy = SearchPolicy.model_validate_json('{"start":1000}')
+    assert policy.search_method == "binary"
+    assert (
+        SearchState.model_validate_json(
+            SearchState(policy=policy).model_dump_json()
+        ).policy.search_method
+        == "binary"
+    )
+
+
+def test_hybrid_timeout_like_value_is_guarded_without_inferring_censoring():
+    s = hybrid_bracket([("latency", "p95", "<=", 5.0, 3.0)], [("latency", "p95", "<=", 5.0, 5.001)])
+    # No timeout metadata exists: do not infer censorship from an arbitrary cutoff.
+    assert next_probe(s) == 2800
+
+
+def test_hybrid_near_lower_root_is_guarded():
+    s = hybrid_bracket([("latency", "p99", "<=", 5.0, 4.999)], [("latency", "p99", "<=", 5.0, 8.0)])
+    assert next_probe(s) == 2200
+
+
+@pytest.mark.parametrize("update", [{"unit": "s"}, {"scope": "container"}, {"stages": ["other"]}])
+def test_hybrid_mismatched_scope_units_or_selector_falls_back(update):
+    s = hybrid_bracket([("latency", "p99", "<=", 5.0, 3.0)], [("latency", "p99", "<=", 5.0, 8.0)])
+    result = s.observations[1].evaluation.results[0]
+    result = result.model_copy(update={"criterion": result.criterion.model_copy(update=update)})
+    upper = s.observations[1].model_copy(
+        update={"evaluation": Evaluation(verdict="fail", results=(result,))}
+    )
+    assert next_probe(s.model_copy(update={"observations": (s.observations[0], upper)})) == 2500
+
+
+def test_hybrid_invalid_reduction_and_equality_use_midpoint():
+    s = hybrid_bracket([("latency", "p99", "<=", 5.0, 3.0)], [("latency", "p99", "<=", 5.0, 8.0)])
+    result = s.observations[1].evaluation.results[0].model_copy(update={"valid": False})
+    upper = s.observations[1].model_copy(
+        update={"evaluation": Evaluation(verdict="fail", results=(result,))}
+    )
+    assert next_probe(s.model_copy(update={"observations": (s.observations[0], upper)})) == 2500
+    same = hybrid_bracket([("count", "mean", "==", 5.0, 5.0)], [("count", "mean", "==", 5.0, 8.0)])
+    assert next_probe(same) == 2500
+
+
+def test_hybrid_median_supporting_noise_and_no_repeated_decided_candidate():
+    s = state(search_method="hybrid")
+    s = measured(s, 2000, [("latency", "p99", "<=", 5.0, 3.0)], "pass")
+    s = measured(s, 3000, [("latency", "p99", "<=", 5.0, 7.0)], "fail")
+    s = measured(s, 3000, [("latency", "p99", "<=", 5.0, 9.0)], "fail")
+    assert next_probe(s) == 2400
+    s = measured(s, 2400, [("latency", "p99", "<=", 5.0, 4.0)], "pass")
+    candidate = next_probe(s)
+    assert 2400 < candidate < 3000
+    assert candidate not in {2000, 2400, 3000}
+
+
+def test_hybrid_no_bracket_keeps_geometric_expansion_and_halving():
+    s = state(search_method="hybrid", confirmation="single_observation")
+    assert next_probe(vote(s, 1000, "pass")) == 2000
+    assert next_probe(vote(s, 1000, "fail")) == 500
+
+
+def test_hybrid_serialized_policy_and_method_from_new_config():
+    from tools.bench.engine.types import Limits, SearchUsers, TestPolicy
+
+    test = TestPolicy(
+        type="search",
+        users=SearchUsers(start=1000, max="auto"),
+        limits=Limits(max_trials=10, max_elapsed=100.0),
+    )
+    assert SearchPolicy.from_test(test).search_method == "hybrid"
+    s = hybrid_bracket([("latency", "p99", "<=", 5.0, 3.0)], [("latency", "p99", "<=", 5.0, 8.0)])
+    assert next_probe(SearchState.model_validate_json(s.model_dump_json())) == 2400
