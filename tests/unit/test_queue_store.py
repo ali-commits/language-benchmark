@@ -445,3 +445,45 @@ def test_explicit_queue_update_freezes_new_search_method(tmp_path):
     assert json.loads(snapshot["jobs"][0]["resolved"])[0]["test"]["search_method"] == "hybrid"
     with pytest.raises(QueueConflict):
         store.update("test", "one", cfg.jobs[0], claimed.revision)
+
+
+def test_legacy_queue_decode_preserves_opaque_workload_parameters(tmp_path):
+    from tools.bench.engine.evidence import execution_identity
+
+    store = QueueStore(tmp_path / "queue.db")
+    cfg = search_config(tmp_path)
+    opaque = {"test": {"type": "search"}, "nested": [{"test": {"type": "search"}}]}
+    workload = cfg.workloads["load"].model_copy(update={"parameters": opaque})
+    cfg = cfg.model_copy(update={"workloads": {"load": workload}})
+    store.register(cfg)
+    remove_saved_search_method(store)
+    with store._connection() as conn:
+        restored = store._config(conn, "test")
+    assert restored.workloads["load"].parameters == opaque
+    claimed = store.claim_next("test", "owner")
+    assert claimed.resolved_jobs[0].workload.parameters == opaque
+    restart = store.active_job("test", "owner")
+    assert restart.resolved_jobs[0].workload.parameters == opaque
+    expected = store._prepare_definition(cfg, cfg.jobs[0]).resolved[0]
+    assert execution_identity(restart.resolved_jobs[0], 1) == execution_identity(expected, 1)
+
+
+def test_restored_trial_preserves_opaque_workload_parameters(tmp_path):
+    import json
+
+    from tools.bench.engine.config import resolve_jobs
+    from tools.bench.engine.trial_context import TrialContext
+
+    cfg = search_config(tmp_path)
+    opaque = {"test": {"type": "search"}}
+    workload = cfg.workloads["load"].model_copy(update={"parameters": opaque})
+    cfg = cfg.model_copy(update={"workloads": {"load": workload}})
+    job = resolve_jobs(cfg)[0].model_dump(mode="json", by_alias=True)
+    job["test"].pop("search_method")
+    path = tmp_path / "manifest.json"
+    path.write_text(json.dumps({"job": job, "users": 1, "queue_id": "test", "trial_id": "trial"}))
+    original = path.read_text()
+    restored = TrialContext.from_manifest(path)
+    assert restored.job.test.search_method == "binary"
+    assert restored.job.workload.parameters == opaque
+    assert path.read_text() == original

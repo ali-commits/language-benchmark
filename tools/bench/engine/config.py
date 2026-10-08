@@ -326,20 +326,27 @@ def _merge_group(target: dict[str, Definition], source: dict[str, Definition], g
 
 
 def legacy_search_snapshot(value: JsonValue) -> JsonValue:
-    """Decode saved version-one search jobs without changing their original policy.
+    """Decode only known saved config/job policy locations, preserving opaque data.
 
-    Use only at persisted JSON boundaries. New YAML uses the public hybrid default.
-    Return independent containers; never rewrite stored audit/evidence snapshots.
+    Callers pass a BenchmarkConfig, a Job/ResolvedJob, or a root list of jobs.
+    Never inspect workload parameters, fixture options or extension metadata.
+    New YAML keeps the public hybrid default; stored snapshots remain unchanged.
     """
-    if isinstance(value, list):
-        return [legacy_search_snapshot(item) for item in value]
-    if isinstance(value, dict):
-        copied = {key: legacy_search_snapshot(item) for key, item in value.items()}
-        policy = copied.get("test")
+    copied = deepcopy(value)
+    if isinstance(copied, list):
+        jobs = copied
+    elif isinstance(copied, dict):
+        configured_jobs = copied.get("jobs")
+        jobs = configured_jobs if isinstance(configured_jobs, list) else [copied]
+    else:
+        return copied
+    for job in jobs:
+        if not isinstance(job, dict):
+            continue
+        policy = job.get("test")
         if isinstance(policy, dict) and (
             policy.get("type") == "search"
             or (policy.get("type") == "stress" and policy.get("strategy") == "search")
         ):
             policy.setdefault("search_method", "binary")
-        return copied
-    return value
+    return copied
