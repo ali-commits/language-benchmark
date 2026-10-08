@@ -70,17 +70,19 @@ def execution_identity(
 def decision_identity(job: ResolvedJob, objective: str) -> str:
     if objective != "default" and objective not in job.objectives:
         raise ValueError(f"unknown objective: {objective}")
-    return _digest(
-        {
-            "objective": objective,
-            "criteria": [
-                c.model_dump(mode="json")
-                for c in [*job.criteria, *job.objectives.get(objective, [])]
-            ],
-            "evaluation_stages": [s.id for s in job.stages if s.evaluate],
-            "confirmation": job.test.confirmation,
-        }
-    )
+    payload: dict[str, object] = {
+        "objective": objective,
+        "criteria": [
+            c.model_dump(mode="json") for c in [*job.criteria, *job.objectives.get(objective, [])]
+        ],
+        "evaluation_stages": [s.id for s in job.stages if s.evaluate],
+        "confirmation": job.test.confirmation,
+    }
+    # Binary preserves existing classification hashes and saved majority votes.
+    # Hybrid changes decisions while compatible raw execution remains reusable.
+    if job.test.type == "search" and job.test.search_method != "binary":
+        payload["search_method"] = job.test.search_method
+    return _digest(payload)
 
 
 def immutable_json(path: Path, value: object) -> None:

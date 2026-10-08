@@ -373,3 +373,75 @@ def test_update_rechecks_pending_state_after_input_preparation(tmp_path, monkeyp
     with pytest.raises(QueueConflict, match="revision changed"):
         store.update("test", "one", cfg.jobs[0], 1)
     assert store.jobs("test")[0].state == "cancelled"
+
+
+def search_config(tmp_path):
+    from tools.bench.engine.types import TestPolicy
+
+    cfg = config(tmp_path)
+    policy = TestPolicy.model_validate(
+        {
+            "type": "search",
+            "users": {"start": 1, "max": 10},
+            "limits": {"max_trials": 10, "max_elapsed": 60},
+        }
+    )
+    return cfg.model_copy(update={"jobs": [cfg.jobs[0].model_copy(update={"test": policy})]})
+
+
+def remove_saved_search_method(store):
+    import json
+
+    with store._transaction() as conn:
+        row = conn.execute("SELECT config FROM queues").fetchone()
+        snapshot = json.loads(row[0])
+        for job in snapshot["jobs"]:
+            job["test"].pop("search_method", None)
+        conn.execute("UPDATE queues SET config=?", (json.dumps(snapshot),))
+        row = conn.execute("SELECT definition,resolved FROM jobs").fetchone()
+        definition = json.loads(row[0])
+        definition["test"].pop("search_method", None)
+        resolved = json.loads(row[1])
+        for job in resolved:
+            job["test"].pop("search_method", None)
+        conn.execute(
+            "UPDATE jobs SET definition=?,resolved=?",
+            (json.dumps(definition), json.dumps(resolved)),
+        )
+
+
+def test_legacy_queue_search_keeps_binary_on_claim_and_restart(tmp_path):
+    store = QueueStore(tmp_path / "queue.db")
+    store.register(search_config(tmp_path))
+    remove_saved_search_method(store)
+    with store._connection() as conn:
+        assert store._config(conn, "test").jobs[0].test.search_method == "binary"
+    saved = store.snapshot("test")
+    assert "search_method" not in saved["jobs"][0]["definition"]
+    claimed = store.claim_next("test", "owner")
+    assert claimed.definition.test.search_method == "binary"
+    assert claimed.resolved_jobs[0].test.search_method == "binary"
+    restarted = store.active_job("test", "owner")
+    assert restarted.definition.test.search_method == "binary"
+    assert restarted.resolved_jobs[0].test.search_method == "binary"
+    retained = store.snapshot("test")
+    assert retained["jobs"][0]["definition"] == saved["jobs"][0]["definition"]
+    assert retained["jobs"][0]["resolved"] == saved["jobs"][0]["resolved"]
+
+
+def test_explicit_queue_update_freezes_new_search_method(tmp_path):
+    import json
+
+    store = QueueStore(tmp_path / "queue.db")
+    cfg = search_config(tmp_path)
+    store.register(cfg)
+    remove_saved_search_method(store)
+    receipt = store.update("test", "one", cfg.jobs[0], 1)
+    assert receipt.revision == 2
+    claimed = store.claim_next("test", "owner")
+    assert claimed.definition.test.search_method == "hybrid"
+    assert claimed.resolved_jobs[0].test.search_method == "hybrid"
+    snapshot = store.snapshot("test")
+    assert json.loads(snapshot["jobs"][0]["resolved"])[0]["test"]["search_method"] == "hybrid"
+    with pytest.raises(QueueConflict):
+        store.update("test", "one", cfg.jobs[0], claimed.revision)

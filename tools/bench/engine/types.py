@@ -244,6 +244,7 @@ class Limits(Model):
 
 
 class TestPolicy(Model):
+    search_method: Literal["hybrid", "binary"] = "hybrid"
     type: Literal["fixed", "search", "stress", "staged"]
     strategy: Literal["search", "sweep"] | None = None
     users: StrictInt | list[StrictInt] | SearchUsers | SweepUsers | None = None

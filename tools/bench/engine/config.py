@@ -323,3 +323,23 @@ def _merge_group(target: dict[str, Definition], source: dict[str, Definition], g
         if name in target:
             raise ConfigError(f"conflicting imported definition: {group}.{name}")
         target[name] = definition
+
+
+def legacy_search_snapshot(value: JsonValue) -> JsonValue:
+    """Decode saved version-one search jobs without changing their original policy.
+
+    Use only at persisted JSON boundaries. New YAML uses the public hybrid default.
+    Return independent containers; never rewrite stored audit/evidence snapshots.
+    """
+    if isinstance(value, list):
+        return [legacy_search_snapshot(item) for item in value]
+    if isinstance(value, dict):
+        copied = {key: legacy_search_snapshot(item) for key, item in value.items()}
+        policy = copied.get("test")
+        if isinstance(policy, dict) and (
+            policy.get("type") == "search"
+            or (policy.get("type") == "stress" and policy.get("strategy") == "search")
+        ):
+            policy.setdefault("search_method", "binary")
+        return copied
+    return value

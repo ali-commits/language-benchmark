@@ -12,7 +12,7 @@ from uuid import uuid4
 
 from pydantic import JsonValue
 
-from tools.bench.engine.config import resolve_jobs
+from tools.bench.engine.config import legacy_search_snapshot, resolve_jobs
 from tools.bench.engine.targets import snapshot_build, tree_checksums
 from tools.bench.engine.types import BenchmarkConfig, Job, ResolvedJob
 from tools.bench.records import checked_record
@@ -248,7 +248,9 @@ class QueueStore:
         row = conn.execute("SELECT config FROM queues WHERE id=?", (queue,)).fetchone()
         if not row:
             raise QueueConflict("unknown queue")
-        return BenchmarkConfig.model_validate_json(row[0])
+        return BenchmarkConfig.model_validate_json(
+            _json(legacy_search_snapshot(json.loads(row[0])))
+        )
 
     def append(self, queue: str, job: Job) -> JobReceipt:
         with self._connection() as conn:
@@ -344,7 +346,7 @@ class QueueStore:
             failure: Exception | None = None
             if row is not None:
                 resolved = tuple(
-                    ResolvedJob.model_validate_json(_json(j))
+                    ResolvedJob.model_validate_json(_json(legacy_search_snapshot(j)))
                     for j in checked_record(json.loads(row["resolved"]), list[dict[str, JsonValue]])
                 )
                 expected = checked_record(json.loads(row["inputs"]), FrozenInputs)
@@ -380,7 +382,9 @@ class QueueStore:
                     revision,
                     "active",
                     owner,
-                    Job.model_validate_json(row["definition"]),
+                    Job.model_validate_json(
+                        _json(legacy_search_snapshot(json.loads(row["definition"])))
+                    ),
                     resolved,
                     expected,
                 )
@@ -508,9 +512,11 @@ class QueueStore:
                 row["revision"],
                 row["state"],
                 owner,
-                Job.model_validate_json(row["definition"]),
+                Job.model_validate_json(
+                    _json(legacy_search_snapshot(json.loads(row["definition"])))
+                ),
                 tuple(
-                    ResolvedJob.model_validate_json(_json(j))
+                    ResolvedJob.model_validate_json(_json(legacy_search_snapshot(j)))
                     for j in checked_record(json.loads(row["resolved"]), list[dict[str, JsonValue]])
                 ),
                 checked_record(json.loads(row["inputs"]), FrozenInputs),

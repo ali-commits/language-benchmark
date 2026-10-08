@@ -4,7 +4,10 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+from pydantic import JsonValue
+
 from ..records import checked_record
+from .config import legacy_search_snapshot
 from .environment_binding import BoundEnvironment, bind_environment, reference_names
 from .records import Manifest
 from .targets import ResolvedTarget, tree_checksums
@@ -70,7 +73,9 @@ class TrialContext:
         data = checked_record(json.loads(path.read_text()), Manifest)
         pin = data.get("prepared_fixture")
         prepared_fixture = PreparedFixture(Path(pin["manifest"]), pin["checksums"]) if pin else None
-        job = ResolvedJob.model_validate_json(json.dumps(data["job"]))
+        job = ResolvedJob.model_validate_json(
+            json.dumps(legacy_search_snapshot(checked_record(data["job"], dict[str, JsonValue])))
+        )
         bound = None
         if reference_names(job):
             if not data.get("environment_binding") or not data.get("environment_key"):

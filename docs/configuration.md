@@ -30,3 +30,17 @@ Preparation records the file's SHA-256 and POSIX mode, and execution identity in
 Environments may set `source_ips: [10.0.0.10, 10.0.0.11]` to bind k6 connections to specific generator addresses. Each entry must be a unique canonical IP address assigned on the generator host; preparation and load preflight check `ip -j address show` through that host's transport. The ordered list is passed as `k6 run --local-ips 10.0.0.10,10.0.0.11` and participates in execution identity. The default empty list uses k6's normal address selection and preserves older execution identities.
 
 For social workloads, distinct authenticated accounts produce the `authentication` rate. Configure its criterion (for example `>= 0.90`) to classify performance. Partial or zero authentication does not itself invalidate an otherwise valid trial; schedule, actual user occupancy, runtime, generator and fixture validity checks still apply.
+
+### Search method and saved queues
+
+New search jobs default to `search_method: hybrid`. The hybrid method uses numerical
+criterion measurements to select probes within a measured passing/failing bracket,
+with binary fallback when interpolation is unsuitable. Select `search_method: binary`
+inside `test` to use midpoint bisection throughout. Both methods keep the configured
+resolution, trial/time budgets and confirmation policy. Unknown methods are rejected.
+
+Saved queues, frozen job definitions, trial manifests and search checkpoints created
+before this field existed keep their original binary policy. Reading or resuming those
+records does not change their search method or completed evidence. An explicit pending
+job update using a new definition may select hybrid; active jobs remain frozen. The
+method is part of decision identity, while raw execution identity remains compatible.

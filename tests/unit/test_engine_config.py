@@ -325,3 +325,58 @@ def test_metric_unit_may_be_omitted_or_explicitly_null(tmp_path, unit_fields):
     metric = load_config(path).workloads["http"].metrics["requests"]
     assert metric.unit is None
     assert metric.model_dump(mode="json")["unit"] is None
+
+
+@pytest.mark.parametrize("method", [None, "binary", "hybrid"])
+def test_search_method_new_yaml(tmp_path, method):
+    test = {
+        "type": "search",
+        "users": {"min": 1, "start": 10, "max": 100},
+        "limits": {"max_trials": 10, "max_elapsed": "1h"},
+    }
+    if method is not None:
+        test["search_method"] = method
+    cfg = load_config(document(tmp_path, jobs=[{"id": "search", "targets": ["api"], "test": test}]))
+    assert cfg.jobs[0].test.search_method == (method or "hybrid")
+
+
+def test_unknown_search_method_rejected(tmp_path):
+    test = {
+        "type": "search",
+        "search_method": "magic",
+        "users": {"start": 1, "max": 10},
+        "limits": {"max_trials": 10, "max_elapsed": "1h"},
+    }
+    with pytest.raises(ConfigError):
+        load_config(document(tmp_path, jobs=[{"id": "search", "targets": ["api"], "test": test}]))
+
+
+def test_search_method_binds_decision_preserving_legacy_binary_hash(tmp_path):
+    import hashlib
+
+    from tools.bench.engine.evidence import decision_identity, execution_identity
+
+    test = {
+        "type": "search",
+        "search_method": "binary",
+        "users": {"start": 1, "max": 100},
+        "limits": {"max_trials": 10, "max_elapsed": "1h"},
+    }
+    binary = resolve_jobs(
+        load_config(document(tmp_path, jobs=[{"id": "search", "targets": ["api"], "test": test}]))
+    )[0]
+    hybrid = binary.model_copy(
+        update={"test": binary.test.model_copy(update={"search_method": "hybrid"})}
+    )
+    legacy_payload = {
+        "objective": "default",
+        "criteria": [],
+        "evaluation_stages": ["hold"],
+        "confirmation": binary.test.confirmation,
+    }
+    legacy_hash = hashlib.sha256(
+        json.dumps(legacy_payload, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+    ).hexdigest()
+    assert decision_identity(binary, "default") == legacy_hash
+    assert decision_identity(hybrid, "default") != legacy_hash
+    assert execution_identity(binary, 1) == execution_identity(hybrid, 1)
