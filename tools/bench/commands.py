@@ -400,11 +400,12 @@ def dispatch(args: Arguments) -> int:
             )
         return 0
     if action in ("append", "update"):
-        from .engine.config import _read
+        from .engine.config import _read, legacy_search_snapshot
         from .engine.types import BenchmarkConfig
 
         snapshot = store.snapshot(args.queue)
-        config = BenchmarkConfig.model_validate_json(snapshot["queues"][0]["config"])
+        saved = checked_record(json.loads(snapshot["queues"][0]["config"]), JsonValue)
+        config = BenchmarkConfig.model_validate_json(json.dumps(legacy_search_snapshot(saved)))
         job_data = _read(args.job if action == "append" else args.file)
         # Full single-job YAML is also accepted; shared definitions remain frozen.
         if "version" in job_data:
