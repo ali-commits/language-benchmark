@@ -327,7 +327,7 @@ def test_metric_unit_may_be_omitted_or_explicitly_null(tmp_path, unit_fields):
     assert metric.model_dump(mode="json")["unit"] is None
 
 
-@pytest.mark.parametrize("method", [None, "binary", "hybrid"])
+@pytest.mark.parametrize("method", [None, "binary", "hybrid", "upper_probe"])
 def test_search_method_new_yaml(tmp_path, method):
     test = {
         "type": "search",
@@ -337,7 +337,7 @@ def test_search_method_new_yaml(tmp_path, method):
     if method is not None:
         test["search_method"] = method
     cfg = load_config(document(tmp_path, jobs=[{"id": "search", "targets": ["api"], "test": test}]))
-    assert cfg.jobs[0].test.search_method == (method or "hybrid")
+    assert cfg.jobs[0].test.search_method == (method or "upper_probe")
 
 
 def test_unknown_search_method_rejected(tmp_path):
@@ -380,3 +380,11 @@ def test_search_method_binds_decision_preserving_legacy_binary_hash(tmp_path):
     assert decision_identity(binary, "default") == legacy_hash
     assert decision_identity(hybrid, "default") != legacy_hash
     assert execution_identity(binary, 1) == execution_identity(hybrid, 1)
+    upper = binary.model_copy(
+        update={"test": binary.test.model_copy(update={"search_method": "upper_probe"})}
+    )
+    assert decision_identity(upper, "default") not in {
+        legacy_hash,
+        decision_identity(hybrid, "default"),
+    }
+    assert execution_identity(upper, 1) == execution_identity(binary, 1)

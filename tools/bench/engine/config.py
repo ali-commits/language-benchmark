@@ -330,7 +330,7 @@ def legacy_search_snapshot(value: JsonValue) -> JsonValue:
 
     Callers pass a BenchmarkConfig, a Job/ResolvedJob, or a root list of jobs.
     Never inspect workload parameters, fixture options or extension metadata.
-    New YAML keeps the public hybrid default; stored snapshots remain unchanged.
+    New YAML keeps the public default; stored snapshots remain unchanged.
     """
     copied = deepcopy(value)
     if isinstance(copied, list):

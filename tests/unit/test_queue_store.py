@@ -429,20 +429,25 @@ def test_legacy_queue_search_keeps_binary_on_claim_and_restart(tmp_path):
     assert retained["jobs"][0]["resolved"] == saved["jobs"][0]["resolved"]
 
 
-def test_explicit_queue_update_freezes_new_search_method(tmp_path):
+@pytest.mark.parametrize("method", ["hybrid", "upper_probe"])
+def test_explicit_queue_update_freezes_new_search_method(tmp_path, method):
     import json
 
     store = QueueStore(tmp_path / "queue.db")
     cfg = search_config(tmp_path)
+    job = cfg.jobs[0].model_copy(
+        update={"test": cfg.jobs[0].test.model_copy(update={"search_method": method})}
+    )
+    cfg = cfg.model_copy(update={"jobs": [job]})
     store.register(cfg)
     remove_saved_search_method(store)
     receipt = store.update("test", "one", cfg.jobs[0], 1)
     assert receipt.revision == 2
     claimed = store.claim_next("test", "owner")
-    assert claimed.definition.test.search_method == "hybrid"
-    assert claimed.resolved_jobs[0].test.search_method == "hybrid"
+    assert claimed.definition.test.search_method == method
+    assert claimed.resolved_jobs[0].test.search_method == method
     snapshot = store.snapshot("test")
-    assert json.loads(snapshot["jobs"][0]["resolved"])[0]["test"]["search_method"] == "hybrid"
+    assert json.loads(snapshot["jobs"][0]["resolved"])[0]["test"]["search_method"] == method
     with pytest.raises(QueueConflict):
         store.update("test", "one", cfg.jobs[0], claimed.revision)
 

@@ -33,14 +33,39 @@ For social workloads, distinct authenticated accounts produce the `authenticatio
 
 ### Search method and saved queues
 
-New search jobs default to `search_method: hybrid`. The hybrid method uses numerical
-criterion measurements to select probes within a measured passing/failing bracket,
-with binary fallback when interpolation is unsuitable. Select `search_method: binary`
-inside `test` to use midpoint bisection throughout. Both methods keep the configured
-resolution, trial/time budgets and confirmation policy. Unknown methods are rejected.
+New search jobs default to `search_method: upper_probe`. Once a measured passing
+and failing bracket exists, it chooses the next count from decided observations:
+
+- After a pass: probe `failing - max(resolution, ceil(bracket_width / 10))`.
+- After a confirmed failure: probe the midpoint. Further failures continue midpoint
+  reduction; a subsequent pass returns to probing near the upper bound.
+- Pending confirmation votes repeat the same count; invalid evidence does not change
+  direction. Before both bounds exist, geometric expansion/halving is unchanged.
+
+For example, with resolution 50 and confirmation repeats omitted:
+`2000 fail → 1000 pass → 1900 fail → 1450 pass → 1850 pass` finishes with the
+measured bracket `[1850, 1900]`. Decisions survive resume through saved observations.
+This strategy favors boundaries near the upper bound; it is not guaranteed to need
+fewer trials than binary search when the actual boundary is much lower.
+
+Select another method inside `test`:
+
+```yaml
+test:
+  type: search
+  search_method: upper_probe # alternatives: hybrid, binary
+  users: {min: 1, start: 2000, max: auto}
+  limits: {max_trials: 40, max_elapsed: 12h, hard_users: 50000}
+  resolution: 50
+```
+
+`hybrid` uses numerical criterion measurements for safeguarded secant interpolation,
+with midpoint fallback when interpolation is unsuitable. `binary` always uses the
+midpoint inside the bracket. All methods retain the configured resolution, finite
+trial/time budgets and confirmation policy. Unknown methods are rejected.
 
 Saved queues, frozen job definitions, trial manifests and search checkpoints created
 before this field existed keep their original binary policy. Reading or resuming those
 records does not change their search method or completed evidence. An explicit pending
-job update using a new definition may select hybrid; active jobs remain frozen. The
+job update using a new definition may select another method; active jobs remain frozen. The
 method is part of decision identity, while raw execution identity remains compatible.

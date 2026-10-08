@@ -1364,3 +1364,46 @@ def test_retained_ssh_lease_paths_reconstructed_at_json_boundary(tmp_path, monke
         assert not resources
         assert not state["leases"]
         assert saved
+
+
+def test_upper_probe_controller_resume_keeps_direction_and_evidence(harness, monkeypatch):
+    from tools.bench.engine.types import TestPolicy
+
+    original_store, cfg, launches = harness
+    policy = TestPolicy.model_validate(
+        {
+            "type": "search",
+            "users": {"min": 1, "start": 2000, "max": 2000},
+            "limits": {"max_trials": 20, "max_elapsed": 3600},
+            "resolution": 50,
+        }
+    )
+    assert policy.search_method == "upper_probe"
+    store = QueueStore(original_store.path.parent / "upper.db")
+    store.register(
+        cfg.model_copy(update={"jobs": [cfg.jobs[0].model_copy(update={"test": policy})]})
+    )
+    monkeypatch.setattr(
+        controller,
+        "evaluate",
+        lambda evidence, criteria: Evaluation(verdict="pass" if evidence.users <= 1850 else "fail"),
+    )
+    original_decide = controller._decide
+
+    def interrupt_upper(*args):
+        pending = store.controller_state("test")["jobs"]["one"]["pending"]
+        if pending and pending["users"] == 1900:
+            raise KeyboardInterrupt()
+        return original_decide(*args)
+
+    monkeypatch.setattr(controller, "_decide", interrupt_upper)
+    with pytest.raises(KeyboardInterrupt):
+        controller.run_queue(store, "test")
+    saved = store.controller_state("test")["jobs"]["one"]
+    assert saved["search"]["policy"]["search_method"] == "upper_probe"
+    assert saved["pending"]["users"] == 1900
+    monkeypatch.setattr(controller, "_decide", original_decide)
+    assert controller.run_queue(store, "test")["queues"][0]["state"] == "completed"
+    assert [ctx.users for ctx in launches] == [2000, 2000, 1000, 1900, 1900, 1450, 1850]
+    result = store.controller_state("test")["jobs"]["one"]["results"][0]
+    assert (result["passing_users"], result["failing_users"]) == (1850, 1900)

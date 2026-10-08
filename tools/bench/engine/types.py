@@ -16,6 +16,8 @@ from pydantic import (
 )
 from typing_extensions import Self
 
+SearchMethod = Literal["upper_probe", "hybrid", "binary"]
+
 
 class Model(BaseModel):
     model_config = ConfigDict(
@@ -244,7 +246,7 @@ class Limits(Model):
 
 
 class TestPolicy(Model):
-    search_method: Literal["hybrid", "binary"] = "hybrid"
+    search_method: SearchMethod = "upper_probe"
     type: Literal["fixed", "search", "stress", "staged"]
     strategy: Literal["search", "sweep"] | None = None
     users: StrictInt | list[StrictInt] | SearchUsers | SweepUsers | None = None

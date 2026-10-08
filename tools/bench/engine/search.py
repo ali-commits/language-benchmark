@@ -11,7 +11,15 @@ from typing import Literal
 from pydantic import Field, model_validator
 from typing_extensions import Self
 
-from .types import Criterion, Evaluation, Model, SearchUsers, TestPolicy, TrialEvidence
+from .types import (
+    Criterion,
+    Evaluation,
+    Model,
+    SearchMethod,
+    SearchUsers,
+    TestPolicy,
+    TrialEvidence,
+)
 
 
 class SearchPolicy(Model):
@@ -27,7 +35,7 @@ class SearchPolicy(Model):
     )
     limiting_reason: str = "user_ceiling"
     # Missing field in historical checkpoints retains their original algorithm.
-    search_method: Literal["hybrid", "binary"] = "binary"
+    search_method: SearchMethod = "binary"
 
     @model_validator(mode="after")
     def bounds(self) -> Self:
@@ -292,6 +300,15 @@ def next_probe(
         assert hi is not None
         return max(state.policy.min_users, min(hi - 1, hi * denominator // numerator))
     if hi is not None:
+        if state.policy.search_method == "upper_probe":
+            # Reconstruct direction from durable, decided observations. Invalid
+            # probes and unfinished confirmation votes never move the bracket.
+            for observation in reversed(state.observations):
+                if observation.evaluation.valid and observation.users in decisions:
+                    if decisions[observation.users] == "fail":
+                        return (lo + hi) // 2
+                    gap = max(state.policy.resolution, (hi - lo + 9) // 10)
+                    return hi - gap
         if state.policy.search_method == "hybrid":
             candidate = _interpolated_probe(state, lo, hi)
             if candidate is not None:

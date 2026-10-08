@@ -10,6 +10,7 @@ from pydantic import JsonValue
 from typing_extensions import NotRequired, TypedDict
 
 from tools.bench.engine.records import FixturePin, MountSource
+from tools.bench.engine.types import SearchMethod
 
 
 class QueueRow(TypedDict):
@@ -140,7 +141,7 @@ class ObservationRecord(TypedDict):
 
 
 class SearchPolicyRecord(TypedDict):
-    search_method: NotRequired[Literal["hybrid", "binary"]]
+    search_method: NotRequired[SearchMethod]
     min_users: int
     start: int
     max_users: int | None

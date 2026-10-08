@@ -360,6 +360,88 @@ def test_hybrid_serialized_policy_and_method_from_new_config():
         users=SearchUsers(start=1000, max="auto"),
         limits=Limits(max_trials=10, max_elapsed=100.0),
     )
-    assert SearchPolicy.from_test(test).search_method == "hybrid"
+    assert SearchPolicy.from_test(test).search_method == "upper_probe"
     s = hybrid_bracket([("latency", "p99", "<=", 5.0, 3.0)], [("latency", "p99", "<=", 5.0, 8.0)])
     assert next_probe(SearchState.model_validate_json(s.model_dump_json())) == 2400
+
+
+def test_upper_probe_example_and_confirmation():
+    s = SearchState(policy=SearchPolicy(start=2000, resolution=50, search_method="upper_probe"))
+    assert next_probe(s) == 2000
+    s = vote(s, 2000, "fail")
+    assert next_probe(s) == 2000
+    s = vote(s, 2000, "fail")
+    assert next_probe(s) == 1000
+    s = vote(s, 1000, "pass")
+    assert next_probe(s) == 1900
+    s = vote(s, 1900, "fail")
+    assert next_probe(s) == 1900
+    s = vote(s, 1900, "fail")
+    assert next_probe(s) == 1450
+    s = vote(s, 1450, "pass")
+    assert next_probe(s) == 1850
+    s = vote(s, 1850, "pass")
+    assert next_probe(s) is None
+    assert search_result(s).passing_users == 1850
+    assert search_result(s).failing_users == 1900
+
+
+def test_upper_probe_invalid_and_disagreement_do_not_skip_confirmation():
+    s = state(search_method="upper_probe", resolution=50)
+    s = vote(s, 2000, "fail")
+    s = vote(s, 2000, "fail")
+    s = vote(s, 1000, "pass")
+    s = vote(s, 1900, "invalid")
+    assert next_probe(s) == 1900
+    s = vote(s, 1900, "fail")
+    assert next_probe(s) == 1900
+    s = vote(s, 1900, "pass")
+    assert next_probe(s) == 1900
+    s = vote(s, 1900, "fail")
+    assert next_probe(s) == 1450
+    assert next_probe(SearchState.model_validate_json(s.model_dump_json())) == 1450
+
+
+@pytest.mark.parametrize("resolution", [1, 2, 50])
+def test_upper_probe_integer_progress_and_resolution(resolution):
+    huge = 10**100
+    s = SearchState(
+        policy=SearchPolicy(
+            start=huge,
+            search_method="upper_probe",
+            resolution=resolution,
+            confirmation="single_observation",
+        )
+    )
+    s = vote(s, huge + resolution + 1, "fail")
+    s = vote(s, huge, "pass")
+    candidate = next_probe(s)
+    assert huge < candidate < huge + resolution + 1
+    assert candidate == huge + 1
+    s = vote(s, candidate, "pass")
+    assert next_probe(s) is None
+
+
+def test_upper_probe_midpoint_failure_and_unbracketed_expansion():
+    s = state(search_method="upper_probe", confirmation="single_observation")
+    assert next_probe(vote(s, 1000, "pass")) == 2000
+    assert next_probe(vote(s, 1000, "fail")) == 500
+    s = vote(s, 2000, "fail")
+    s = vote(s, 1000, "pass")
+    s = vote(s, 1900, "fail")
+    s = vote(s, 1450, "fail")
+    assert next_probe(s) == 1225
+
+
+def test_upper_probe_budget_and_reservation_remain_durable():
+    from tools.bench.engine.search import reserve_attempt
+
+    s = state(search_method="upper_probe", max_trials=4)
+    s = vote(s, 2000, "fail")
+    s = vote(s, 2000, "fail")
+    s = vote(s, 1000, "pass")
+    s = reserve_attempt(s, 1900, "upper-reserved", now=0)
+    assert next_probe(SearchState.model_validate_json(s.model_dump_json())) is None
+    s = record_probe(s, 1900, "upper-reserved", Evaluation(verdict="pass"), now=0)
+    assert search_result(s).status == "incomplete"
+    assert next_probe(s) is None
