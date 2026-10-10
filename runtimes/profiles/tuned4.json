@@ -1,0 +1,137 @@
+{
+  "schema_version": 1,
+  "resources": {
+    "cpus": 4,
+    "memory": 6442450944,
+    "swap": 0,
+    "nofile": 250000
+  },
+  "cells": [
+    {
+      "base_cell": "python-modern-3.14.8-standard-jit0-gil1-async",
+      "id": "python-modern-3.14.8-standard-jit0-gil1-async-tuned4",
+      "image": "lb-python-modern:3.14.8-standard-tuned4",
+      "environment": {
+        "APP_VARIANT": "modern",
+        "ADAPTER": "async",
+        "WORKERS": "4",
+        "HASH_CONCURRENCY": "1"
+      },
+      "build_args": {
+        "APP": "modern",
+        "WORKERS": "4",
+        "HASH_CONCURRENCY": "1",
+        "CONNECTIONS_PER_WORKER": "5"
+      }
+    },
+    {
+      "base_cell": "go-net-http",
+      "id": "go-net-http-tuned4",
+      "image": "lb-go:1.27.1-tuned4",
+      "environment": {
+        "HASH_CONCURRENCY": "4",
+        "GOMAXPROCS": "4",
+        "GOMEMLIMIT": "4GiB"
+      },
+      "build_args": {
+        "HASH_CONCURRENCY": "4"
+      }
+    },
+    {
+      "base_cell": "rust-axum",
+      "id": "rust-axum-tuned4",
+      "image": "lb-rust:1.99.0-tuned4",
+      "environment": {
+        "HASH_CONCURRENCY": "4",
+        "CPU_PARALLELISM": "4"
+      },
+      "build_args": {
+        "HASH_CONCURRENCY": "4",
+        "CPU_PARALLELISM": "4"
+      }
+    },
+    {
+      "base_cell": "java-spring-boot",
+      "id": "java-spring-boot-tuned4",
+      "image": "lb-java-spring:27-tuned4",
+      "environment": {
+        "HASH_CONCURRENCY": "4",
+        "JAVA_TOOL_OPTIONS": "-XX:MaxRAMPercentage=65 -XX:ActiveProcessorCount=4"
+      },
+      "build_args": {
+        "HASH_CONCURRENCY": "4"
+      }
+    },
+    {
+      "base_cell": "csharp-aspnet-core",
+      "id": "csharp-aspnet-core-tuned4",
+      "image": "lb-csharp-aspnet:10.0.12-tuned4",
+      "environment": {
+        "HASH_CONCURRENCY": "4",
+        "DOTNET_PROCESSOR_COUNT": "4",
+        "DOTNET_GCHeapHardLimitPercent": "0x41"
+      },
+      "build_args": {
+        "HASH_CONCURRENCY": "4"
+      }
+    },
+    {
+      "base_cell": "node-express",
+      "id": "node-express-tuned4",
+      "image": "lb-node-express:26.10.0-tuned4",
+      "environment": {
+        "WORKERS": "4",
+        "NODE_OPTIONS": "--max-old-space-size=1024"
+      },
+      "build_args": {
+        "WORKERS": "4",
+        "CONNECTIONS_PER_WORKER": "5"
+      }
+    },
+    {
+      "base_cell": "bun-express",
+      "id": "bun-express-tuned4",
+      "image": "lb-bun-express:1.4.2-tuned4",
+      "environment": {
+        "WORKERS": "4"
+      },
+      "build_args": {
+        "WORKERS": "4",
+        "CONNECTIONS_PER_WORKER": "5"
+      }
+    },
+    {
+      "base_cell": "php-laravel",
+      "id": "php-laravel-tuned4",
+      "image": "lb-php-laravel:8.5.11-tuned4",
+      "environment": {
+        "HASH_CONCURRENCY": "4"
+      },
+      "build_args": {
+        "HASH_CONCURRENCY": "4"
+      }
+    },
+    {
+      "base_cell": "php-laravel-octane",
+      "id": "php-laravel-octane-tuned4",
+      "image": "lb-php-laravel-octane:8.5.11-tuned4",
+      "environment": {
+        "HASH_CONCURRENCY": "4"
+      },
+      "build_args": {
+        "HASH_CONCURRENCY": "4"
+      }
+    }
+  ],
+  "source_locks": {
+    "bun/lock.json": "16343b641c80415941e23a5addcbb63bdcc1a7739ba482a3c64be1f7cc581eef",
+    "csharp/lock.json": "ab843be2ef3bf975a0cf4e81d251922fb02455aed2566d0246755bd0cd626c6c",
+    "go/lock.json": "255bc081f2c0dd7ee474e7c7e3e8a237ca64f16f33130255fe6a585d0b283348",
+    "java/lock.json": "d8f99f91ba45d533c0087e4ea6abf2f89b9e8e58f55f9220aa0ac10cea0fde36",
+    "node/lock.json": "79841fadd7fb00d988670048aee023aa730770f28163ba83fbfc8e3072bd041b",
+    "php/lock.json": "c7860e450971ca13fb2e54915f6201a9ba5725b2f5b178ed1f6f8d2b71830133",
+    "php-octane/lock.json": "04917ed9751612eb2e91f67f727a09980c2290860cdce87f6683216ee66efb5f",
+    "python/lock.json": "8e329ef06f1c5a3f592a1c8d02d18f789d98985885a2528e4639705bdb75f899",
+    "rust/lock.json": "bc85e41f8a77abded1efc61c106d471f08cccd7049721595dc4d0b3b3dbfffeb"
+  }
+}

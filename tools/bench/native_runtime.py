@@ -109,6 +109,15 @@ def load_runtime_cell(
 ) -> RuntimeCell | NativeCell:
     """Python selection is deliberately independent of unselected native registries."""
     root = Path(registry_root)
+    if cell_id.endswith("-tuned4"):
+        from .tuning import load_tuned_profiles
+
+        matches = [
+            profile.cell for profile in load_tuned_profiles(root) if profile.cell.id == cell_id
+        ]
+        if len(matches) != 1:
+            raise ValueError("unknown or ambiguous tuned cell: " + cell_id)
+        return matches[0]
     python = _read_registry(root / "python/lock.json", python=True)
     for python_cell in python["cells"]:
         if python_cell["id"] == cell_id:
@@ -130,6 +139,8 @@ def load_runtime_cell(
 
 def load_runtime_cells(
     registry_root: str | Path = Path("runtimes"),
+    *,
+    include_profiles: bool = False,
 ) -> list[RuntimeCell | NativeCell]:
     root = Path(registry_root)
     cells: list[RuntimeCell | NativeCell] = [
@@ -142,6 +153,10 @@ def load_runtime_cells(
             continue
         for data in _read_registry(path)["cells"]:
             cells.append(validate_native_registry_cell(data, language))
+    if include_profiles:
+        from .tuning import load_tuned_profiles
+
+        cells.extend(profile.cell for profile in load_tuned_profiles(root))
     if len({cell.id for cell in cells}) != len(cells):
         raise ValueError("runtime cell identifiers must be unique")
     return cells
@@ -153,7 +168,11 @@ def registry_metadata(cell: NativeCell) -> dict[str, str]:
         if cell.language == "php" and cell.framework == "laravel-octane"
         else cell.language
     )
-    path = Path("runtimes") / directory / "lock.json"
+    path = (
+        Path("runtimes/profiles/tuned4.json")
+        if cell.profile
+        else Path("runtimes") / directory / "lock.json"
+    )
     return {"path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
 
 
@@ -174,12 +193,15 @@ def validate_native_container(
         or data.get("cell_id") != cell.id
     ):
         raise ValueError("native container image/run identity is stale or invalid")
+    cpus, memory = (4, 6442450944) if cell.profile == "tuned4" else (2, 3221225472)
     if [data.get(k) for k in ("nano_cpus", "memory", "memory_swap")] != [
-        2000000000,
-        3221225472,
-        3221225472,
+        cpus * 1000000000,
+        memory,
+        memory,
     ] or data.get("network_mode") != "host":
-        raise ValueError("native backend must enforce 2 CPUs, 3 GiB, no swap and host networking")
+        raise ValueError(
+            f"native backend must enforce {cpus} CPUs, {memory} bytes, no swap and host networking"
+        )
     limits = [limit for limit in data.get("ulimits", []) if limit.get("Name") == "nofile"]
     if (
         len(limits) != 1
@@ -292,6 +314,8 @@ def native_preflight(
     run_id: str,
     expected: str,
 ) -> NativeAttestation:
+    if cell.profile:
+        raise ValueError("tuned profiles require generic social live receipt attestation")
     wait_native_ready(base_url)
     ids = execute(backend, compose + ["ps", "--quiet"], env, timeout=30).stdout.split()
     if len(ids) != 1:

@@ -19,6 +19,7 @@ class RuntimeCell:
     reasons: list[str] = field(default_factory=list)
     dependency_lock: str = ""
     image: str = ""
+    profile: str = ""
 
     def __post_init__(self) -> None:
         if self.app not in ("baseline", "modern") or self.build not in (
@@ -27,7 +28,25 @@ class RuntimeCell:
             "free-threaded",
         ):
             raise ValueError("unknown application/build")
-        if self.workers not in (1, 2) or self.pool_budget != 20 or self.threads != 16:
+        tuned = self.profile == "tuned4"
+        if self.profile not in ("", "tuned4") or (
+            tuned
+            and (
+                self.app != "modern"
+                or self.adapter != "async"
+                or self.id != "python-modern-3.14.8-standard-jit0-gil1-async-tuned4"
+                or self.python != "3.14.8"
+                or self.build != "standard"
+                or self.jit
+                or not self.gil
+            )
+        ):
+            raise ValueError("uncontrolled runtime profile")
+        if (
+            self.workers not in ((4,) if tuned else (1, 2))
+            or self.pool_budget != 20
+            or self.threads != 16
+        ):
             raise ValueError("uncontrolled resource settings")
         if self.adapter not in ("async", "threaded"):
             raise ValueError("unknown adapter")
@@ -85,6 +104,7 @@ class NativeCell:
     connections_per_worker: int
     topology: str
     upstream: str = ""
+    profile: str = ""
     pool_budget: int = 20
     supported: bool = True
     reasons: list[str] = field(default_factory=list)
@@ -101,9 +121,15 @@ class NativeCell:
         }
         if self.language not in expected:
             raise ValueError("unknown native language")
+        if self.profile not in ("", "tuned4") or (self.profile and not self.id.endswith("-tuned4")):
+            raise ValueError("uncontrolled native profile")
         framework, workers, connections = expected[self.language]
+        if self.profile and self.id != self.language + "-" + self.framework + "-tuned4":
+            raise ValueError("uncontrolled tuned native identity")
+        if self.profile and self.language in ("node", "bun"):
+            workers, connections = 4, 5
         if self.language == "php" and self.framework == "laravel-octane":
-            if self.id != "php-laravel-octane":
+            if self.id != "php-laravel-octane" + ("-tuned4" if self.profile else ""):
                 raise ValueError("uncontrolled native Octane identity")
             framework = "laravel-octane"
         if (

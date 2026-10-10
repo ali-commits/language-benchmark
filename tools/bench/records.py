@@ -50,6 +50,7 @@ class RuntimeCellRecord(TypedDict, total=False):
     reasons: list[str]
     dependency_lock: str
     image: str
+    profile: str
 
 
 class NativeCellRecord(TypedDict, total=False):
@@ -59,6 +60,7 @@ class NativeCellRecord(TypedDict, total=False):
     framework: str
     framework_version: str
     image: str
+    profile: str
     dockerfile: str
     workers: int
     connections_per_worker: int

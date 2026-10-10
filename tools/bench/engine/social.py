@@ -5,13 +5,14 @@ import os
 import time
 from collections.abc import Sequence
 from dataclasses import replace
+from datetime import datetime
 from typing import TYPE_CHECKING
 
 from typing_extensions import TypedDict
 
 from ..records import Credential, FixtureRecord, WorkerSnapshot, checked_record
 from .records import Authentication, ContainerInfo, DockerImage
-from .types import Sample, Workload
+from .types import Host, Sample, Workload
 
 if TYPE_CHECKING:
     from .trial import TrialContext
@@ -21,9 +22,18 @@ from ..models import FixtureManifest, NativeCell
 from ..native_runtime import load_runtime_cell, native_image_metadata, validate_process_nofile
 from ..reset import guard, restore_fixture
 from ..runtime import validate_dependency_inventory, validate_worker_snapshots
+from ..tuning import (
+    PROCESS_PROBE,
+    TunedProfile,
+    parse_process_probe,
+    profile_for_cell,
+    validate_profile_configuration,
+    validate_tuned_container,
+    validate_tuning_receipts,
+)
 from .evidence import immutable_json
 from .resources import dependency_lock_path, runtime_root
-from .targets import execute_host
+from .targets import execute_host, resolve_endpoints
 
 
 class SocialAdapter:
@@ -69,7 +79,22 @@ class SocialAdapter:
         peak = max(max(s.from_users, s.to_users) for s in stages)
         if manifest.counts.get("users", 0) < peak:
             raise ValueError("social fixture contains fewer accounts than target")
-        load_runtime_cell(self.runtime_cell, runtime_root())
+        cell = load_runtime_cell(self.runtime_cell, runtime_root())
+        profile = profile_for_cell(cell, runtime_root())
+        if profile:
+            values = context.bound_environment.values if context.bound_environment else os.environ
+            environment = {key: values[ref.env] for key, ref in context.job.target.env.items()}
+            resources = context.job.target.resources
+            validate_profile_configuration(
+                profile,
+                {
+                    "cpus": resources.cpus,
+                    "memory": resources.memory,
+                    "swap": resources.swap,
+                    "nofile": resources.nofile,
+                },
+                environment,
+            )
 
     def reset(self, context: "TrialContext") -> FixtureManifest:
         return restore_fixture(self._dsn(context), self.manifest_path, self.allowed_database)
@@ -92,6 +117,7 @@ class SocialAdapter:
             json.loads(execute_host(host, ["docker", "image", "inspect", info["Image"]]).stdout),
             list[DockerImage],
         )[0]
+        profile = profile_for_cell(cell, runtime_root())
         receipt: dict[str, object] = {"cell": cell.id, "image_id": image["Id"]}
         if isinstance(cell, NativeCell):
             receipt["runtime"] = native_image_metadata(
@@ -132,6 +158,8 @@ class SocialAdapter:
             if reasons:
                 raise ValueError("social runtime attestation failed")
             receipt["workers"] = snapshots
+        if profile:
+            receipt["tuning"] = attest_tuned_runtime(context, container_id, info, profile)
         limits = execute_host(
             host,
             [
@@ -254,3 +282,76 @@ class SocialPreflight(TypedDict):
     account_capacity: int
     required_peak: int | None
     runtime_cell: str
+
+
+def warm_tuned_php(host: "Host", readiness_url: str, timeout: float) -> None:
+    """Boot lazy FPM/Octane workers before baseline and evaluated stages."""
+    code = """import sys,time,urllib.request
+deadline=time.monotonic()+float(sys.argv[2])
+for _ in range(100):
+ remaining=deadline-time.monotonic()
+ if remaining<=0: raise RuntimeError('tuned readiness warm-up timed out')
+ with urllib.request.urlopen(sys.argv[1],timeout=min(remaining,2)) as response:
+  if response.status!=200: raise RuntimeError('tuned readiness warm-up failed')
+"""
+    execute_host(host, ["python3", "-c", code, readiness_url, str(timeout)], timeout=timeout)
+
+
+def attest_tuned_runtime(
+    context: "TrialContext", container_id: str, info: ContainerInfo, profile: TunedProfile
+) -> dict[str, object]:
+    if info["Id"] != container_id or (
+        context.prepared_target and info["Image"] != context.prepared_target.image_id
+    ):
+        raise ValueError("tuned inspected container/image provenance mismatch")
+    config = info["HostConfig"]
+    validate_tuned_container(
+        {
+            "id": info["Id"],
+            "image": info["Image"],
+            "running": info["State"]["Running"],
+            "run_id": (info["Config"].get("Labels") or {}).get("bench.trial", ""),
+            "nano_cpus": config["NanoCpus"],
+            "memory": config["Memory"],
+            "memory_swap": config["MemorySwap"],
+            "ulimits": config.get("Ulimits") or [],
+        },
+        profile,
+        context.trial_id,
+    )
+    started_at = datetime.fromisoformat(
+        info["State"]["StartedAt"].replace("Z", "+00:00")
+    ).timestamp()
+    host = context.environment.backend
+    target = context.job.target
+    deadline = time.monotonic() + target.readiness.timeout
+    if profile.base_cell.startswith("php-"):
+        port = target.port
+        if context.environment.network.mode != "host":
+            bindings = info["NetworkSettings"]["Ports"][f"{target.port}/tcp"]
+            if not bindings:
+                raise ValueError("tuned PHP has no readiness port")
+            port = int(bindings[0]["HostPort"])
+        url = resolve_endpoints(target, context.environment, host_port=port).readiness_url
+        warm_tuned_php(host, url, min(30, max(0.001, deadline - time.monotonic())))
+    while time.monotonic() < deadline:
+        raw = execute_host(
+            host,
+            ["docker", "exec", container_id, "sh", "-c", PROCESS_PROBE],
+            timeout=min(10, max(0.001, deadline - time.monotonic())),
+        ).stdout
+        rows, processes = parse_process_probe(raw, profile)
+        # Publication follows listening/worker boot; allow the finite readiness
+        # budget for it. Configuration/provenance violations fail immediately.
+        if len(rows) < profile.cell.workers:
+            time.sleep(min(0.1, max(0, deadline - time.monotonic())))
+            continue
+        receipts = validate_tuning_receipts(profile, rows, processes, context.trial_id, started_at)
+        return {
+            "profile": "tuned4",
+            "resources": profile.resources,
+            "receipts": receipts,
+            "serving_processes": [p for p in processes if p["pid"] in {r["pid"] for r in receipts}],
+            "provenance": "fresh nonce, live container PID/start times, actual cgroup-v2 quota/memory/swap",
+        }
+    raise ValueError("tuned runtime receipts did not become complete before readiness deadline")

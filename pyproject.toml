@@ -61,6 +61,7 @@ dev = [
 ]
 
 [tool.hatch.build.targets.wheel.force-include]
+"runtimes/profiles/tuned4.json" = "tools/bench/engine/attestation/runtimes/profiles/tuned4.json"
 "benchmarks/k6/engine" = "tools/bench/engine/k6"
 "runtimes/python/lock.json" = "tools/bench/engine/attestation/runtimes/python/lock.json"
 "runtimes/java/lock.json" = "tools/bench/engine/attestation/runtimes/java/lock.json"
