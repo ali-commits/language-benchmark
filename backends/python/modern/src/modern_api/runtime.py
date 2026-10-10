@@ -30,8 +30,22 @@ def runtime_snapshot() -> dict:
     )
 
 
-def publish(cfg) -> dict:
+def publish(cfg, pool) -> dict:
+    from .security import HASH_CONCURRENCY
+
     snapshot = runtime_snapshot()
+    snapshot["tuning"] = {
+        "schema_version": 1,
+        "run_id": cfg.run_id,
+        "pid": snapshot["pid"],
+        "language": "python",
+        "workers_total": cfg.workers,
+        "connections_per_worker": pool.max_size,
+        "pool_budget": 20,
+        "cpu_parallelism": None,
+        "hash_concurrency": HASH_CONCURRENCY,
+        "hash_scope": "worker",
+    }
     if snapshot["gil"] != cfg.expected_gil or snapshot["jit"] != cfg.expected_jit:
         raise RuntimeError("post-import GIL/JIT mode does not match configuration")
     if cfg.run_dir:

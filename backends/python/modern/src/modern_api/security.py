@@ -5,10 +5,11 @@ import jwt
 from argon2 import PasswordHasher
 from argon2.exceptions import VerificationError
 
-from .settings import Settings
+from .settings import HashSettings, Settings
 
 HASHER = PasswordHasher(time_cost=3, memory_cost=65536, parallelism=1, hash_len=32, salt_len=16)
-HASH_LIMIT = BoundedSemaphore(2)
+HASH_CONCURRENCY = HashSettings().hash_concurrency
+HASH_LIMIT = BoundedSemaphore(HASH_CONCURRENCY)
 # Unknown-user verification does the same expensive work as a wrong password.
 DUMMY_HASH = HASHER.hash("dummy-only-not-a-valid-user-password")
 

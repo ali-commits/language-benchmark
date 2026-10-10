@@ -29,7 +29,7 @@ export function createDatabase(cfg) {
   const pool = new pg.Pool({
     connectionString: url.toString(),
     ssl,
-    max: 10,
+    max: cfg.connectionsPerWorker ?? 10,
     connectionTimeoutMillis: 5000,
     idleTimeoutMillis: 30000,
     application_name: "lb-backend",
@@ -69,6 +69,7 @@ export function createDatabase(cfg) {
     }
   }
   return {
+    poolMax: pool.options.max,
     query: (sql, params = [], signal) =>
       connection((client) => execute(client, signal, sql, params), signal),
     transaction: (work, signal) =>

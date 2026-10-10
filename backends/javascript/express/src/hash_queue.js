@@ -7,6 +7,9 @@ export class HashQueue {
   constructor(maxPending = 64) {
     this.maxPending = maxPending;
   }
+  get concurrency() {
+    return 1;
+  }
   run(work, signal) {
     return new Promise((resolve, reject) => {
       if (signal?.aborted) {

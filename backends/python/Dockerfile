@@ -14,6 +14,14 @@ COPY backends/python/${APP}/requirements.lock /tmp/requirements.lock
 RUN --mount=type=cache,target=/root/.cache/uv uv pip install --python /opt/venv/bin/python --no-build-isolation --require-hashes -r /tmp/requirements.lock && uv pip freeze --python /opt/venv/bin/python > /opt/venv/installed-packages.txt
 FROM ${RUNTIME_IMAGE}
 ARG APP=baseline
+ARG WORKERS=2
+ARG HASH_CONCURRENCY=2
+ARG CONNECTIONS_PER_WORKER=10
+RUN case "$APP:$WORKERS:$HASH_CONCURRENCY:$CONNECTIONS_PER_WORKER" in baseline:2:2:10|modern:2:2:10|modern:4:1:5) ;; *) exit 1 ;; esac
+LABEL org.language-benchmark.workers="${WORKERS}" \
+    org.language-benchmark.connections-per-worker="${CONNECTIONS_PER_WORKER}" \
+    org.language-benchmark.hash-concurrency="${HASH_CONCURRENCY}" \
+    org.language-benchmark.pool-budget="20"
 WORKDIR /app
 COPY --from=uv /uv /usr/local/bin/uv
 COPY --from=wheels /opt/venv /opt/venv
@@ -22,6 +30,6 @@ ENV PATH=/opt/venv/bin:$PATH
 COPY backends/python/${APP}/src /app/src
 COPY backends/python/entrypoint.py /app/entrypoint.py
 RUN groupadd -g 10001 app && useradd -u 10001 -g app -M app
-ENV PYTHONPATH=/app/src APP_VARIANT=${APP}
+ENV PYTHONPATH=/app/src APP_VARIANT=${APP} WORKERS=${WORKERS} HASH_CONCURRENCY=${HASH_CONCURRENCY}
 USER 10001:10001
 ENTRYPOINT ["python3","/app/entrypoint.py"]

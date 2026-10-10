@@ -21,7 +21,12 @@ export function readConfig(env = process.env) {
       !url.searchParams.get("sslrootcert"))
   )
     throw Error("AWS requires sslmode=verify-full and sslrootcert");
+  const workerValue = env.WORKERS ?? "2";
+  if (!["2", "4"].includes(workerValue)) throw Error("WORKERS must be 2 or 4");
+  const workers = Number(workerValue);
   return {
+    workers,
+    connectionsPerWorker: 20 / workers,
     databaseUrl,
     jwtSecret: env.JWT_SECRET,
     jwtTtl,

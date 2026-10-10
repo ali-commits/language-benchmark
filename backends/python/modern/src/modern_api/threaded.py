@@ -24,7 +24,7 @@ def create_app() -> FastAPI:
         try:
             app.state.pool.open()
             app.state.pool.wait()
-            app.state.runtime = publish(cfg)
+            app.state.runtime = publish(cfg, app.state.pool)
             async with anyio.create_task_group() as tasks:
                 tasks.start_soon(emit_metrics, app, cfg)
                 try:

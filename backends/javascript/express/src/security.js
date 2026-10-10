@@ -24,6 +24,7 @@ export async function createSecurity(cfg) {
   const unauthorized = () =>
     new HttpError(401, "invalid credentials", { "WWW-Authenticate": "Bearer" });
   return {
+    hashConcurrency: queue.concurrency,
     hash,
     verify: (password, encoded = dummy, signal) =>
       queue.run(async () => {

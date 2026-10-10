@@ -28,11 +28,22 @@ server.once("listening", async () => {
     run_id: cfg.runId,
     language: globalThis.Bun ? "bun" : "node",
     version: globalThis.Bun?.version || process.versions.node,
-    workers: 2,
+    workers: cfg.workers,
     worker_index: Number(process.env.WORKER_INDEX),
-    pool_max: 10,
+    pool_max: db.poolMax,
     dependencies: { express: "5.2.1", pg: "8.23.1", argon2: "0.45.1" },
   });
+  if (cfg.runDir) {
+    const path = join(cfg.runDir, `tuning-${process.pid}.json`);
+    await writeFile(path + ".tmp", JSON.stringify({
+      schema_version: 1, run_id: cfg.runId, pid: process.pid,
+      language: globalThis.Bun ? "bun" : "node",
+      workers_total: cfg.workers, connections_per_worker: db.poolMax,
+      pool_budget: 20, cpu_parallelism: null,
+      hash_concurrency: security.hashConcurrency, hash_scope: "worker",
+    }));
+    await rename(path + ".tmp", path);
+  }
   console.log(`worker ${process.pid} ready on ${cfg.bindIp}:${cfg.port}`);
 });
 let publishing = false;

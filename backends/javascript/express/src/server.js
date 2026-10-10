@@ -1,7 +1,7 @@
 import cluster from "node:cluster";
 import { fileURLToPath } from "node:url";
 import { readConfig } from "./config.js";
-readConfig();
+const cfg = readConfig();
 cluster.setupPrimary({
   exec: fileURLToPath(new URL("./worker.js", import.meta.url)),
 });
@@ -13,7 +13,7 @@ function stop(signal = "SIGTERM", code = 0) {
   process.exitCode = code;
   for (const child of children) child.process.kill(signal);
 }
-for (let i = 0; i < 2; i++) {
+for (let i = 0; i < cfg.workers; i++) {
   const child = cluster.fork({
     WORKER_INDEX: String(i),
     UV_THREADPOOL_SIZE: "2",

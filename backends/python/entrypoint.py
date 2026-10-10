@@ -19,7 +19,7 @@ if __name__ == "__main__":
     workers = int(os.environ.get("WORKERS", "2"))
     if (
         app not in ("baseline", "modern")
-        or workers not in (1, 2)
+        or workers not in ((1, 2, 4) if app == "modern" else (1, 2))
         or adapter not in ("async", "threaded")
     ):
         raise ValueError("invalid topology")

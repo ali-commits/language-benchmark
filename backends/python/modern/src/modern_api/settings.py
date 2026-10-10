@@ -1,19 +1,40 @@
-from pydantic import Field, model_validator
+from typing import Literal
+
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-class Settings(BaseSettings):
+class HashSettings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=None, extra="ignore")
+    hash_concurrency: Literal[1, 2] = 2
+
+    @field_validator("hash_concurrency", mode="before")
+    @classmethod
+    def parse_hash_concurrency(cls, value):
+        if isinstance(value, str) and value in ("1", "2"):
+            return int(value)
+        return value
+
+
+class Settings(HashSettings):
     model_config = SettingsConfigDict(env_file=None, extra="ignore")
     database_url: str
     jwt_secret: str = Field(min_length=32)
     jwt_ttl_seconds: int = Field(default=3600, ge=600, le=86400)
-    workers: int = Field(default=2, ge=1, le=2)
+    workers: Literal[1, 2, 4] = 2
     mode: str = "local"
     run_dir: str = ""
     run_id: str = ""
     expected_gil: bool = True
     expected_jit: bool = False
     thread_limit: int = 16
+
+    @field_validator("workers", mode="before")
+    @classmethod
+    def parse_workers(cls, value):
+        if isinstance(value, str) and value in ("1", "2", "4"):
+            return int(value)
+        return value
 
     @model_validator(mode="after")
     def validate_db(self):
