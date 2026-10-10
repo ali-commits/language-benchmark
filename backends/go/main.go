@@ -7,6 +7,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -83,6 +84,11 @@ func (a *app) handler() http.Handler {
 	})
 }
 func main() {
+	capacity, e := hashConcurrency()
+	if e != nil {
+		log.Fatal(e)
+	}
+	hashSlots = make(chan struct{}, capacity)
 	secret := env("JWT_SECRET", "")
 	if len(secret) < 32 {
 		log.Fatal("JWT_SECRET must have at least 32 bytes")
@@ -115,7 +121,15 @@ func main() {
 		_ = server.Shutdown(stop)
 	}()
 	log.Printf("Go social API listening on %s mode=%s", server.Addr, strings.TrimSpace(env("MODE", "standard")))
-	if e = server.ListenAndServe(); e != nil && e != http.ErrServerClosed {
+	listener, e := net.Listen("tcp", server.Addr)
+	if e != nil {
+		log.Fatal(e)
+	}
+	if e = writeTuningReceipt(pool.Config().MaxConns); e != nil {
+		listener.Close()
+		log.Fatal(e)
+	}
+	if e = server.Serve(listener); e != nil && e != http.ErrServerClosed {
 		log.Fatal(e)
 	}
 }

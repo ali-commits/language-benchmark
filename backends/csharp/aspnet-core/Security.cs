@@ -8,7 +8,15 @@ namespace BenchmarkApi;
 
 public sealed class PasswordService
 {
-    private readonly SemaphoreSlim slots = new(2, 2);
+    private readonly SemaphoreSlim slots;
+    public int HashConcurrency { get; }
+    public PasswordService() : this(Settings.HashConcurrency(Environment.GetEnvironmentVariable("HASH_CONCURRENCY"))) { }
+    public PasswordService(int hashConcurrency)
+    {
+        if (hashConcurrency is < 1 or > 4) throw new ArgumentException("invalid hash concurrency");
+        HashConcurrency = hashConcurrency;
+        slots = new(hashConcurrency, hashConcurrency);
+    }
     private static readonly string Dummy = "$argon2id$v=19$m=65536,t=3,p=1$MDEyMzQ1Njc4OWFiY2RlZg$6LZzQxzV/D4kfEE2uvT2MhHRKaCWGjBE36GO9JsDk3k";
     private async Task<byte[]> Derive(string password, byte[] salt, CancellationToken token)
     {

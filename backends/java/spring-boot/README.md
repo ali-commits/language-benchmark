@@ -24,3 +24,9 @@ Version sources: [Java27 GA](https://jdk.java.net/27/), [Temurin official image 
 Verified locally: all **62 external contract/interoperability tests** passed, including the captured Python validation-response oracle. Wait for `/health/ready` before starting verification or measurement. The shared harness emits one existing Starlette/httpx deprecation warning.
 
 All database sessions identify as `lb-backend` for the shared restore guard and use a10-second PostgreSQL statement timeout. AWS TLS settings reject duplicate or ambiguous parameters. JWT validation includes optional `nbf` and audience arrays.
+
+`HASH_CONCURRENCY` accepts integers 1–4 and defaults to 2. It controls the process-wide Argon2 admission capacity without changing Argon2 parameters or the 20-connection database pool. The Docker build argument of the same name preserves the default and can bake an explicit tuned capacity of 4. Invalid or empty supplied values fail startup.
+
+When `RUN_DIR` is set, startup atomically publishes a credential-free `tuning-<serving PID>.json` receipt using `RUN_ID`, observed runtime CPU parallelism, effective hash slots, and pool capacity. The receipt is readable by the host-side verifier.
+
+Tuned deployments override `JAVA_TOOL_OPTIONS` with `-XX:MaxRAMPercentage=65 -XX:ActiveProcessorCount=4` under the 6GiB container limit. The historical image default remains two processors; receipts observe `Runtime.availableProcessors()`.

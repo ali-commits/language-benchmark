@@ -26,3 +26,9 @@ uv run -m pytest tests/contract tests/multilanguage -q
 Use `JWT_SECRET=test-secret-that-has-at-least-32-bytes` for this test command. Tests drop/recreate the public schema, so only use a dedicated database whose name ends in `_test`. Production database preparation uses the repository's existing schema/fixture tooling; the API never mutates the schema.
 
 Set `GO_TEST_DATABASE_URL` to a dedicated local `_test` PostgreSQL database when running native tests to verify the actual session application name and statement timeout. Without it that integration check is skipped.
+
+`HASH_CONCURRENCY` accepts integers 1–4 and defaults to 2. It controls the process-wide Argon2 admission capacity without changing Argon2 parameters or the 20-connection database pool. The Docker build argument of the same name preserves the default and can bake an explicit tuned capacity of 4. Invalid or empty supplied values fail startup.
+
+When `RUN_DIR` is set, startup atomically publishes a credential-free `tuning-<serving PID>.json` receipt using `RUN_ID`, observed runtime CPU parallelism, effective hash slots, and pool capacity. The receipt is readable by the host-side verifier.
+
+Tuned deployments set native `GOMAXPROCS=4` and `GOMEMLIMIT=4GiB`; image defaults remain `2` and `2GiB`. Receipts observe `runtime.GOMAXPROCS(0)`.

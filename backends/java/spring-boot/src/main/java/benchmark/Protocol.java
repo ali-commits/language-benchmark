@@ -14,7 +14,8 @@ import tools.jackson.databind.ObjectMapper;
 public final class Protocol {
   static final ObjectMapper JSON = new ObjectMapper();
   static final Base64.Encoder B64 = Base64.getUrlEncoder().withoutPadding();
-  static final Semaphore HASH = new Semaphore(2, true);
+  static final int HASH_CONCURRENCY = Tuning.parse(System.getenv("HASH_CONCURRENCY"));
+  static final Semaphore HASH = Tuning.hashSlots(System.getenv("HASH_CONCURRENCY"));
   final String secret;
   final int ttl;
 

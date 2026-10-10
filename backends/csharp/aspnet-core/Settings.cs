@@ -4,6 +4,26 @@ namespace BenchmarkApi;
 
 public static class Settings
 {
+    public static int HashConcurrency(string? value)
+    {
+        if (value is null) return 2;
+        if (value.Length != 1 || value[0] < '1' || value[0] > '4')
+            throw new ArgumentException("HASH_CONCURRENCY must be an integer between 1 and 4");
+        return value[0] - '0';
+    }
+    public static void WriteTuningReceipt(string? directory, string? runId, int hashes, int poolSize)
+    {
+        if (string.IsNullOrEmpty(directory)) return;
+        var payload = new { schema_version = 1, run_id = runId ?? "", pid = Environment.ProcessId, language = "csharp", workers_total = 1, connections_per_worker = poolSize, pool_budget = 20, cpu_parallelism = Environment.ProcessorCount, hash_concurrency = hashes, hash_scope = "process" };
+        var temporary = Path.Combine(directory, $".tuning-{Environment.ProcessId}-{Guid.NewGuid()}.tmp");
+        try
+        {
+            File.WriteAllText(temporary, System.Text.Json.JsonSerializer.Serialize(payload));
+            File.Move(temporary, Path.Combine(directory, $"tuning-{Environment.ProcessId}.json"), true);
+        }
+        finally { File.Delete(temporary); }
+    }
+
     public static NpgsqlConnectionStringBuilder Database(string value, string mode)
     {
         if (!Uri.TryCreate(value.Replace("postgresql+psycopg://", "postgresql://"), UriKind.Absolute, out var uri) || uri.Scheme != "postgresql" || string.IsNullOrEmpty(uri.Host) || uri.AbsolutePath.Length < 2)

@@ -18,7 +18,15 @@ public class Application {
   static final LongAdder NANOS = new LongAdder();
 
   public static void main(String[] args) {
-    SpringApplication.run(Application.class, args);
+    var context = SpringApplication.run(Application.class, args);
+    try {
+      var source = (DelegatingDataSource) context.getBean(DataSource.class);
+      var pool = (HikariDataSource) source.getTargetDataSource();
+      Tuning.writeReceipt(System.getenv("RUN_DIR"), System.getenv("RUN_ID"), Protocol.HASH_CONCURRENCY, pool.getMaximumPoolSize());
+    } catch (Exception e) {
+      context.close();
+      throw new IllegalStateException("unable to publish runtime tuning receipt", e);
+    }
   }
 
   @Bean

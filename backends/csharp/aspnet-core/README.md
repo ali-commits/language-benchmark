@@ -47,3 +47,9 @@ Local disposable checks use 55644/58064; TLS harness uses 55645/58065. Never poi
 Version sources: [.NET 10 releases](https://github.com/dotnet/core/blob/main/release-notes/10.0/README.md), [official release JSON](https://dotnetcli.blob.core.windows.net/dotnet/release-metadata/10.0/releases.json), [MCR containers](https://github.com/dotnet/dotnet-docker), [Npgsql](https://www.nuget.org/packages/Npgsql/10.0.3), [Argon2](https://www.nuget.org/packages/Konscious.Security.Cryptography.Argon2/1.3.1), [JWT](https://www.nuget.org/packages/Microsoft.IdentityModel.JsonWebTokens/8.23.0), [Npgsql security](https://www.npgsql.org/doc/security). .NET 11 release candidates are excluded.
 
 Verified locally:15 native tests (including real database/HTTP integration) and62 external HTTP contract cases passed. The same62 cases passed with verified TLS; a wrong hostname was rejected. Explicit application/json or application/*+json is required; absent/text/plain returns the canonical422 model-validation body without mutations.
+
+`HASH_CONCURRENCY` accepts integers 1–4 and defaults to 2. It controls the process-wide Argon2 admission capacity without changing Argon2 parameters or the 20-connection database pool. The Docker build argument of the same name preserves the default and can bake an explicit tuned capacity of 4. Invalid or empty supplied values fail startup.
+
+When `RUN_DIR` is set, startup atomically publishes a credential-free `tuning-<serving PID>.json` receipt using `RUN_ID`, observed runtime CPU parallelism, effective hash slots, and pool capacity. The receipt is readable by the host-side verifier.
+
+Tuned deployments set `DOTNET_PROCESSOR_COUNT=4` under the 6GiB container limit, retaining `DOTNET_GCHeapHardLimitPercent=0x41` (65%). The historical image default remains two processors; receipts observe `Environment.ProcessorCount`.

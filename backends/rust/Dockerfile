@@ -14,5 +14,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 COPY --from=build /app/target/release/language-benchmark-rust /usr/local/bin/social-api
 USER 10001
 ENV BIND_IP=0.0.0.0 PORT=8000
+ARG HASH_CONCURRENCY=2
+RUN case "$HASH_CONCURRENCY" in 1|2|3|4) ;; *) echo "invalid HASH_CONCURRENCY" >&2; exit 1 ;; esac
+ENV HASH_CONCURRENCY=$HASH_CONCURRENCY
+ARG CPU_PARALLELISM=2
+RUN case "$CPU_PARALLELISM" in 1|2|3|4) ;; *) echo "invalid CPU_PARALLELISM" >&2; exit 1 ;; esac
+ENV CPU_PARALLELISM=$CPU_PARALLELISM
 EXPOSE 8000
 ENTRYPOINT ["social-api"]

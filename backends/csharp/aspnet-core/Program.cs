@@ -9,9 +9,9 @@ var database = Settings.Database(Environment.GetEnvironmentVariable("DATABASE_UR
 var secret = Environment.GetEnvironmentVariable("JWT_SECRET") ?? "";
 int ttl = int.Parse(Environment.GetEnvironmentVariable("JWT_TTL_SECONDS") ?? "3600");
 builder.Services.AddSingleton(new Database(database));
-builder.Services.AddSingleton<PasswordService>();
+builder.Services.AddSingleton(new PasswordService());
 builder.Services.AddSingleton(new TokenService(secret, ttl));
-var app = builder.Build();
+await using var app = builder.Build();
 app.Urls.Add($"http://{Environment.GetEnvironmentVariable("BIND_IP") ?? "0.0.0.0"}:{Environment.GetEnvironmentVariable("PORT") ?? "8000"}");
 app.Use(async (context, next) =>
 {
@@ -48,4 +48,6 @@ app.Use(async (context, next) =>
     catch (Exception e) { app.Logger.LogError("Request failed: {ExceptionType}", e.GetType().Name); if (!context.Response.HasStarted) { context.Response.StatusCode = 500; await context.Response.WriteAsJsonAsync(new { detail = "Internal Server Error" }); } }
 });
 new SocialApi(app.Services.GetRequiredService<Database>(), app.Services.GetRequiredService<PasswordService>(), app.Services.GetRequiredService<TokenService>(), ttl).Routes(app);
-await app.RunAsync();
+await app.StartAsync();
+Settings.WriteTuningReceipt(Environment.GetEnvironmentVariable("RUN_DIR"), Environment.GetEnvironmentVariable("RUN_ID"), app.Services.GetRequiredService<PasswordService>().HashConcurrency, database.MaxPoolSize);
+await app.WaitForShutdownAsync();

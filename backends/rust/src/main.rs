@@ -1,4 +1,5 @@
 mod security;
+mod tuning;
 mod validation;
 use axum::{
     Json, Router,
@@ -28,6 +29,7 @@ use std::{
     time::Instant,
 };
 use tokio::sync::Semaphore;
+use tuning::*;
 use validation::*;
 #[derive(Clone)]
 struct App {
@@ -112,8 +114,16 @@ fn database_options(dsn: &str, mode: &str) -> Result<PgConnectOptions, Box<dyn s
         .application_name("lb-backend")
         .options([("statement_timeout", "10000")]))
 }
-#[tokio::main(worker_threads = 2)]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let cpu = setting("CPU_PARALLELISM")?;
+    let hashes = setting("HASH_CONCURRENCY")?;
+    tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(cpu)
+        .enable_all()
+        .build()?
+        .block_on(serve(hashes))
+}
+async fn serve(hashes: usize) -> Result<(), Box<dyn std::error::Error>> {
     let secret = env("JWT_SECRET", "");
     if secret.len() < 32 {
         return Err("JWT_SECRET must have at least 32 bytes".into());
@@ -135,7 +145,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         pool,
         secret: Arc::new(secret),
         ttl,
-        hashes: Arc::new(Semaphore::new(2)),
+        hashes: Arc::new(Semaphore::new(hashes)),
         dummy: Arc::new(hash_password("dummy-only-not-a-valid-user-password")?),
         acquires: Arc::new(AtomicU64::new(0)),
         acquire_ns: Arc::new(AtomicU64::new(0)),
@@ -143,6 +153,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app = routes(state.clone());
     let address = format!("{}:{}", env("BIND_IP", "0.0.0.0"), env("PORT", "8000"));
     let listener = tokio::net::TcpListener::bind(&address).await?;
+    write_receipt(
+        std::env::var("RUN_DIR").ok().as_deref(),
+        &env("RUN_ID", ""),
+        state.hashes.available_permits(),
+        state.pool.options().get_max_connections(),
+    )?;
     eprintln!("Rust social API listening on {address}");
     axum::serve(listener, app)
         .with_graceful_shutdown(shutdown())
@@ -736,3 +752,7 @@ mod tests {
         assert!(decode_cursor(&cursor).is_err());
     }
 }
+
+#[cfg(test)]
+#[path = "tuning_test.rs"]
+mod tuning_tests;

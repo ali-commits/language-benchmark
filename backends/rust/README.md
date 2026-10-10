@@ -28,3 +28,9 @@ uv run -m pytest tests/contract tests/multilanguage -q
 Use `JWT_SECRET=test-secret-that-has-at-least-32-bytes` for this test command. Tests drop/recreate public schema, so only use a dedicated database whose name ends in `_test`. Shared tests verify Python PHC/JWT compatibility, microsecond cursors above JavaScript's safe integer range, following-feed semantics, committed writes, idempotence and strict body validation.
 
 Set `RUST_TEST_DATABASE_URL` to a dedicated local `_test` PostgreSQL database when running native tests to verify actual session application name and statement timeout. Other native tests do not require a database.
+
+`HASH_CONCURRENCY` accepts integers 1–4 and defaults to 2. It controls the process-wide Argon2 admission capacity without changing Argon2 parameters or the 20-connection database pool. The Docker build argument of the same name preserves the default and can bake an explicit tuned capacity of 4. Invalid or empty supplied values fail startup.
+
+When `RUN_DIR` is set, startup atomically publishes a credential-free `tuning-<serving PID>.json` receipt using `RUN_ID`, observed runtime CPU parallelism, effective hash slots, and pool capacity. The receipt is readable by the host-side verifier.
+
+`CPU_PARALLELISM` (environment or Docker build argument) accepts integers 1–4, defaults to 2, and selects Tokio runtime worker threads. Receipts observe Tokio runtime worker metrics rather than echoing the environment.

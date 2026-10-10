@@ -20,5 +20,8 @@ COPY --from=build /build/target/social-api-1.0.0.jar /app/api.jar
 RUN useradd --uid 10001 --no-create-home benchmark
 USER 10001
 ENV JAVA_TOOL_OPTIONS="-XX:MaxRAMPercentage=65 -XX:ActiveProcessorCount=2"
+ARG HASH_CONCURRENCY=2
+RUN case "$HASH_CONCURRENCY" in 1|2|3|4) ;; *) echo "invalid HASH_CONCURRENCY" >&2; exit 1 ;; esac
+ENV HASH_CONCURRENCY=$HASH_CONCURRENCY
 EXPOSE 8000
 ENTRYPOINT ["java","-jar","/app/api.jar"]
