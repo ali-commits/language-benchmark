@@ -18,6 +18,13 @@ fn receipt_observes_runtime() {
     std::fs::create_dir_all(&dir).unwrap();
     rt.block_on(async {
         write_receipt(Some(dir.to_str().unwrap()), "test-run", 4, 20).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        let receipt = dir.join(format!("tuning-{}.json", std::process::id()));
+        assert_eq!(
+            std::fs::metadata(&receipt).unwrap().permissions().mode() & 0o777,
+            0o644,
+            "receipt must remain host readable under a restrictive umask"
+        );
         let value: serde_json::Value = serde_json::from_slice(
             &std::fs::read(dir.join(format!("tuning-{}.json", std::process::id()))).unwrap(),
         )

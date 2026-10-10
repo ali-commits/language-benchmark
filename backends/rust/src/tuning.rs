@@ -39,6 +39,8 @@ pub fn write_receipt(
             .create_new(true)
             .open(&temporary)?;
         file.write_all(&serde_json::to_vec(&payload)?)?;
+        use std::os::unix::fs::PermissionsExt;
+        file.set_permissions(std::fs::Permissions::from_mode(0o644))?;
         drop(file);
         std::fs::rename(&temporary, directory.join(format!("tuning-{pid}.json")))?;
         Ok::<(), Box<dyn std::error::Error>>(())

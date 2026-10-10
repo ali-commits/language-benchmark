@@ -19,6 +19,8 @@ public static class Settings
         try
         {
             File.WriteAllText(temporary, System.Text.Json.JsonSerializer.Serialize(payload));
+            if (!OperatingSystem.IsWindows())
+                File.SetUnixFileMode(temporary, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead | UnixFileMode.OtherRead);
             File.Move(temporary, Path.Combine(directory, $"tuning-{Environment.ProcessId}.json"), true);
         }
         finally { File.Delete(temporary); }
