@@ -40,3 +40,21 @@ Required runtime variables: `DATABASE_URL`, `JWT_SECRET` (at least 32 bytes). Op
 `/health/metrics` counts actual logical connection checkouts (including reconnects) and checkout milliseconds, aggregated with a locked shared file; it does not fabricate acquisition counts or represent connection creation count. `/health/live` and `/health/ready` follow the shared contract.
 
 All Composer packages and base image digests are locked. `runtimes/php-octane/source-proof.json` records upstream sources, exact image identity and local test evidence. New capacity tests use 300 seconds ramp, no settle, 120 seconds hold and a 90% gate; fixed comparisons use 180/0/240 at 100, 500 and 1,000 users. Existing FPM results and protocols remain separate.
+
+`HASH_CONCURRENCY` accepts integers 1–4 and defaults to 2. The four-CPU
+profile builds with `--build-arg HASH_CONCURRENCY=4`; runtime overrides are
+validated before the server starts. Admission uses shared file locks across
+all 20 workers, with one database connection per worker. Argon2 parameters,
+worker recycling, OPcache/JIT and connection lifetime are unchanged.
+
+When `RUN_DIR` is set, `RUN_ID` is required. Initialized serving workers
+atomically publish `tuning-<PID>.json` in that existing writable directory.
+Receipts contain safe topology and effective global hash capacity;
+`cpu_parallelism` is null because PHP has no scheduler control. FPM emits on
+application initialization, and Octane on its WorkerStarting event (Laravel
+initialization happens as requests reach each RoadRunner worker).
+
+Run `php tests/tuning.php` and `php tests/hash_slots.php` in a dedicated
+container in addition to the existing protocol tests. Hash tests exercise real
+cross-process flock admission and canonical Argon2id hashing; a deterministic
+test-only hashing barrier proves four holders and a blocked fifth process.

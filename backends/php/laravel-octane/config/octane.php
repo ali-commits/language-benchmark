@@ -67,6 +67,7 @@ return [
 
     'listeners' => [
         WorkerStarting::class => [
+            \App\Support\InitializeTuning::class,
             EnsureUploadedFilesAreValid::class,
             EnsureUploadedFilesCanBeMoved::class,
         ],

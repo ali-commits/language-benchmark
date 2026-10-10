@@ -11,6 +11,8 @@ COPY --from=composer:2.10.3@sha256:af98f42dfff7c68ba8d53c2164fd9fde1087b7d449514
 WORKDIR /app
 COPY backends/php/laravel-octane/composer.json backends/php/laravel-octane/composer.lock ./
 RUN composer install --no-dev --no-interaction --prefer-dist --no-scripts --no-autoloader
+ARG HASH_CONCURRENCY=2
+ENV HASH_CONCURRENCY=${HASH_CONCURRENCY}
 COPY backends/php/laravel-octane/app ./app
 COPY backends/php/laravel-octane/bootstrap ./bootstrap
 COPY backends/php/laravel-octane/config ./config
@@ -19,7 +21,7 @@ COPY backends/php/laravel-octane/tests ./tests
 COPY backends/php/laravel-octane/artisan backends/php/laravel-octane/start.sh backends/php/laravel-octane/.rr.yaml ./
 COPY --from=engine /usr/bin/rr /app/rr
 COPY backends/php/laravel-octane/php.ini /usr/local/etc/php/conf.d/benchmark.ini
-RUN mkdir -p public bootstrap/cache storage/logs storage/framework/cache && composer dump-autoload --classmap-authoritative --no-dev && php tests/run.php && php artisan config:cache && php artisan route:cache && chmod +x start.sh && chown -R www-data:www-data /app/storage /app/bootstrap/cache
+RUN mkdir -p public bootstrap/cache storage/logs storage/framework/cache && composer dump-autoload --classmap-authoritative --no-dev && php tests/run.php && php tests/tuning.php && php artisan config:cache && php artisan route:cache && chmod +x start.sh && chown -R www-data:www-data /app/storage /app/bootstrap/cache
 USER www-data
 ENV BIND_IP=0.0.0.0 PORT=8000
 EXPOSE 8000

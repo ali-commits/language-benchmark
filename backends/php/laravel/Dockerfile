@@ -10,8 +10,10 @@ COPY --from=composer:2.10.3@sha256:af98f42dfff7c68ba8d53c2164fd9fde1087b7d449514
 WORKDIR /app
 COPY backends/php/laravel/composer.json backends/php/laravel/composer.lock ./
 RUN composer install --no-dev --no-interaction --prefer-dist --no-scripts --no-autoloader
+ARG HASH_CONCURRENCY=2
+ENV HASH_CONCURRENCY=${HASH_CONCURRENCY}
 COPY backends/php/laravel/ ./
-RUN composer dump-autoload --classmap-authoritative --no-dev && mkdir -p bootstrap/cache storage/framework/cache storage/logs && chown -R www-data:www-data bootstrap/cache storage && chmod +x start.sh && php tests/run.php && php artisan config:cache && php artisan route:cache
+RUN composer dump-autoload --classmap-authoritative --no-dev && mkdir -p bootstrap/cache storage/framework/cache storage/logs && chown -R www-data:www-data bootstrap/cache storage && chmod +x start.sh && php tests/run.php && php tests/tuning.php && php artisan config:cache && php artisan route:cache
 COPY backends/php/laravel/php.ini /usr/local/etc/php/conf.d/benchmark.ini
 EXPOSE 8000
 CMD ["/app/start.sh"]

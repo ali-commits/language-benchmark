@@ -156,12 +156,76 @@ final class Protocol
         return $input;
     }
 
+    public static function hashConcurrency(): int
+    {
+        $value = getenv('HASH_CONCURRENCY');
+        if ($value === false) {
+            return 2;
+        }
+        if (! preg_match('/^[1-4]$/D', $value)) {
+            throw new InvalidArgumentException('HASH_CONCURRENCY must be an integer from 1 to 4');
+        }
+
+        return (int) $value;
+    }
+
+    public static function publishTuningReceipt(): void
+    {
+        $capacity = self::hashConcurrency();
+        $directory = getenv('RUN_DIR');
+        if ($directory === false || $directory === '') {
+            return;
+        }
+        $runId = getenv('RUN_ID');
+        if ($runId === false || $runId === '') {
+            throw new InvalidArgumentException('RUN_ID is required for tuning receipts');
+        }
+        if (! is_dir($directory) || ! is_writable($directory)) {
+            throw new \RuntimeException('Tuning receipt directory is unavailable');
+        }
+        $pid = getmypid();
+        $payload = json_encode([
+            'schema_version' => 1,
+            'run_id' => $runId,
+            'pid' => $pid,
+            'language' => 'php',
+            'workers_total' => 20,
+            'connections_per_worker' => 1,
+            'pool_budget' => 20,
+            'cpu_parallelism' => null,
+            'hash_concurrency' => $capacity,
+            'hash_scope' => 'global',
+        ], JSON_THROW_ON_ERROR);
+        $destination = $directory.'/tuning-'.$pid.'.json';
+        // FPM initializes Laravel per request; retain the same process receipt.
+        if (is_file($destination) && file_get_contents($destination) === $payload) {
+            return;
+        }
+        $temporary = tempnam($directory, '.tuning-');
+        if ($temporary === false) {
+            throw new \RuntimeException('Cannot create tuning receipt');
+        }
+        try {
+            if (file_put_contents($temporary, $payload) !== strlen($payload) || ! rename($temporary, $destination)) {
+                throw new \RuntimeException('Cannot publish tuning receipt');
+            }
+        } finally {
+            if (is_file($temporary)) {
+                unlink($temporary);
+            }
+        }
+    }
+
     public static function password(string $password, ?string $hash = null): string|bool
     {
-        // Across all Octane workers, at most two memory-expensive Argon2 jobs run.
+        // File locks coordinate memory-expensive Argon2 work across all workers.
+        $capacity = self::hashConcurrency();
         while (true) {
-            foreach ([0, 1] as $slot) {
+            for ($slot = 0; $slot < $capacity; $slot++) {
                 $f = fopen('/tmp/language-benchmark-hash-'.$slot, 'c');
+                if ($f === false) {
+                    throw new \RuntimeException('Cannot open global hash slot');
+                }
                 if (flock($f, LOCK_EX | LOCK_NB)) {
                     try {
                         return $hash === null ? password_hash($password, PASSWORD_ARGON2ID, ['memory_cost' => 65536, 'time_cost' => 3, 'threads' => 1]) : password_verify($password, $hash);
@@ -169,8 +233,10 @@ final class Protocol
                         flock($f, LOCK_UN);
                         fclose($f);
                     }
-                }fclose($f);
-            }usleep(1000);
+                }
+                fclose($f);
+            }
+            usleep(1000);
         }
     }
 }

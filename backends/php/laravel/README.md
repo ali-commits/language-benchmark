@@ -26,3 +26,21 @@ Version sources: [PHP8.5.11](https://www.php.net/releases/8_5_11.php), [Laravel 
 Verified locally: all **62 external contract/interoperability tests** passed, including the captured Python validation-response oracle. Wait for `/health/ready` before starting verification or measurement. The shared harness emits one existing Starlette/httpx deprecation warning.
 
 All database sessions identify as `lb-backend` for the shared restore guard and use a10-second PostgreSQL statement timeout. AWS TLS settings reject duplicate or ambiguous parameters. JWT validation includes optional `nbf` and audience arrays.
+
+`HASH_CONCURRENCY` accepts integers 1–4 and defaults to 2. The four-CPU
+profile builds with `--build-arg HASH_CONCURRENCY=4`; runtime overrides are
+validated before the server starts. Admission uses shared file locks across
+all 20 workers, with one database connection per worker. Argon2 parameters,
+worker recycling, OPcache/JIT and connection lifetime are unchanged.
+
+When `RUN_DIR` is set, `RUN_ID` is required. Initialized serving workers
+atomically publish `tuning-<PID>.json` in that existing writable directory.
+Receipts contain safe topology and effective global hash capacity;
+`cpu_parallelism` is null because PHP has no scheduler control. FPM emits on
+application initialization, and Octane on its WorkerStarting event (Laravel
+initialization happens as requests reach each RoadRunner worker).
+
+Run `php tests/tuning.php` and `php tests/hash_slots.php` in a dedicated
+container in addition to the existing protocol tests. Hash tests exercise real
+cross-process flock admission and canonical Argon2id hashing; a deterministic
+test-only hashing barrier proves four holders and a blocked fifth process.
