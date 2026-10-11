@@ -67,7 +67,7 @@ final class SocialController
         }
         $method = $request->method();
         $path = '/'.$request->path();
-        $db = new Database;
+        $db = app(Database::class);
         if (in_array($method, ['POST', 'PUT', 'PATCH']) && strlen($request->getContent()) > 16384) {
             $this->error(413, 'request body too large');
         }

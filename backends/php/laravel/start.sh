@@ -1,8 +1,9 @@
 #!/bin/sh
 set -eu
-php -r 'require "/app/app/Support/Protocol.php"; App\Support\Protocol::hashConcurrency();'
+php -r 'require "/app/app/Support/Protocol.php"; require "/app/app/Support/RuntimeSettings.php"; App\Support\RuntimeSettings::validate();'
 sed "s/listen 0.0.0.0:8000;/listen ${BIND_IP:-0.0.0.0}:${PORT:-8000};/" /app/nginx.conf > /tmp/nginx.conf
-php-fpm --fpm-config /app/fpm.conf &
+sed "s/pm.max_children = 20/pm.max_children = ${PHP_WORKERS}/" /app/fpm.conf > /tmp/fpm.conf
+php-fpm --fpm-config /tmp/fpm.conf &
 fpm=$!
 nginx -c /tmp/nginx.conf -g 'daemon off;' &
 nginx=$!

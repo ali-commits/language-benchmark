@@ -169,6 +169,16 @@ final class Protocol
         return (int) $value;
     }
 
+    public static function workers(): int
+    {
+        $value = getenv('PHP_WORKERS');
+        if ($value === false) return 20;
+        if (! preg_match('/^(?:[1-9]|[1-5][0-9]|6[0-4])$/D', $value)) {
+            throw new InvalidArgumentException('PHP_WORKERS must be an integer from 1 to 64');
+        }
+        return (int) $value;
+    }
+
     public static function publishTuningReceipt(): void
     {
         $capacity = self::hashConcurrency();
@@ -184,18 +194,29 @@ final class Protocol
             throw new \RuntimeException('Tuning receipt directory is unavailable');
         }
         $pid = getmypid();
-        $payload = json_encode([
-            'schema_version' => 1,
+        $production = getenv('BENCH_PROFILE') === 'production4';
+        $receipt = [
+            'schema_version' => $production ? 2 : 1,
             'run_id' => $runId,
             'pid' => $pid,
             'language' => 'php',
-            'workers_total' => 20,
+            'workers_total' => self::workers(),
             'connections_per_worker' => 1,
-            'pool_budget' => 20,
+            'pool_budget' => self::workers(),
             'cpu_parallelism' => null,
             'hash_concurrency' => $capacity,
             'hash_scope' => 'global',
-        ], JSON_THROW_ON_ERROR);
+        ];
+        if ($production) {
+            $receipt += [
+                'db_connection_reuse' => 'worker-retained',
+                'db_session_reset' => getenv('DB_SESSION_RESET') === '1',
+                'memory_limit' => ini_get('memory_limit'),
+                'opcache_memory' => (int) ini_get('opcache.memory_consumption'),
+                'opcache_interned_strings' => (int) ini_get('opcache.interned_strings_buffer'),
+            ];
+        }
+        $payload = json_encode($receipt, JSON_THROW_ON_ERROR);
         $destination = $directory.'/tuning-'.$pid.'.json';
         // FPM initializes Laravel per request; retain the same process receipt.
         if (is_file($destination) && file_get_contents($destination) === $payload) {

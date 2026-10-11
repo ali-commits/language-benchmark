@@ -102,6 +102,14 @@ final class Database
             if ($this->connection?->inTransaction()) {
                 $this->connection->rollBack();
             }
+            $reset = getenv('DB_SESSION_RESET');
+            if ($reset !== false && !in_array($reset, ['0', '1'], true)) {
+                throw new \InvalidArgumentException('DB_SESSION_RESET must be 0 or 1');
+            }
+            if ($reset === '1' && $this->connection !== null) {
+                $this->connection->exec('DISCARD ALL');
+                $this->connection->exec("SET application_name = 'lb-backend'; SET statement_timeout = '10000'");
+            }
         } catch (\Throwable) {
             $this->connection = null;
         } finally {

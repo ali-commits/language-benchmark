@@ -12,11 +12,19 @@ function expect($test, $message)
 if (! str_contains(getenv('DATABASE_URL') ?: '', 'octane_test')) {
     throw new RuntimeException('dedicated disposable Octane database required');
 }
+putenv('DB_SESSION_RESET=1');
 $db = new Database;
 $before = (int) $db->query('SELECT pg_backend_pid() AS pid')[0]['pid'];
+$db->query("SET application_name='previous-user'");
+$db->query("SET statement_timeout='1234'");
+$db->query('CREATE TEMP TABLE octane_request_secret(id int)');
 $db->release();
 $after = (int) $db->query('SELECT pg_backend_pid() AS pid')[0]['pid'];
 expect($before === $after, 'request release must reuse the same worker connection');
+expect($db->query('SHOW application_name')[0]['application_name'] === 'lb-backend', 'application defaults restored');
+expect($db->query('SHOW statement_timeout')[0]['statement_timeout'] === '10s', 'timeout restored');
+expect($db->query("SELECT to_regclass('octane_request_secret') AS t")[0]['t'] === null, 'previous-user temporary data removed');
+expect($db->query('SELECT ?::int AS v', [42])[0]['v'] === 42, 'prepared query after DISCARD');
 echo "connection reused across logical requests\n";
 $db->query('CREATE TABLE IF NOT EXISTS octane_transaction_guard(id bigint PRIMARY KEY)');
 $db->query('TRUNCATE octane_transaction_guard');

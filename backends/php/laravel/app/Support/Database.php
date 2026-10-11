@@ -17,7 +17,10 @@ final class Database
         }
         $config = self::configuration(getenv('DATABASE_URL'), getenv('MODE') ?: 'local');
         $start = hrtime(true);
-        $this->connection = new \PDO($config['dsn'], $config['user'], $config['password'], [\PDO::ATTR_ERRMODE => \PDO::ERRMODE_EXCEPTION, \PDO::ATTR_EMULATE_PREPARES => false]);
+        $this->connection = new \PDO($config['dsn'], $config['user'], $config['password'], [\PDO::ATTR_ERRMODE => \PDO::ERRMODE_EXCEPTION, \PDO::ATTR_EMULATE_PREPARES => false, \PDO::ATTR_PERSISTENT => self::persistent()]);
+        if (self::persistent()) {
+            $this->resetSession();
+        }
         self::$acquires++;
         $elapsed = (hrtime(true) - $start) / 1e6;
         self::$acquireMs += $elapsed;
@@ -84,10 +87,39 @@ final class Database
         return ['connection_acquires' => $v[0], 'connection_acquire_ms' => $v[1]];
     }
 
+    public static function persistent(): bool
+    {
+        $value = getenv('DB_PERSISTENT');
+        if ($value === false || $value === '0') return false;
+        if ($value !== '1') throw new \InvalidArgumentException('DB_PERSISTENT must be 0 or 1');
+        return true;
+    }
+
+    private function resetSession(): void
+    {
+        if ($this->connection === null) return;
+        if ($this->connection->inTransaction()) $this->connection->rollBack();
+        // DISCARD restores temporary objects, roles, settings, listeners and locks.
+        // No PDOStatement survives a query, so native prepared handles are not reused.
+        $this->connection->exec('DISCARD ALL');
+        $this->connection->exec("SET application_name = 'lb-backend'; SET statement_timeout = '10000'");
+    }
+
     public function release(): void
     {
-        $this->connection = null;
+        try {
+            if (self::persistent()) $this->resetSession();
+        } catch (\PDOException $error) {
+            // A disconnected session cannot contaminate the next request. New PDO
+            // performs the driver's persistent-connection liveness check.
+            if (!str_starts_with((string)($error->errorInfo[0] ?? $error->getCode()), '08')
+                && !in_array($error->getCode(), ['57P01', '57P02', '57P03'], true)
+                && preg_match('/server closed the connection|no connection to the server|connection not open/i', $error->getMessage()) !== 1) throw $error;
+        } finally {
+            $this->connection = null;
+        }
     }
+
 
     public function query(string $sql, array $params = []): array
     {
