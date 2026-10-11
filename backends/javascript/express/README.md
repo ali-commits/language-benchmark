@@ -30,3 +30,19 @@ EXPRESS_TEST_DATABASE_URL=postgresql://postgres:express_test_password@127.0.0.1:
 ```
 
 Integration tests refuse database names not ending in `_test`. Provision the canonical `database/schema.sql` first on a disposable local database. The tests exercise registration/login, following feed, idempotent likes, comments, validation, body limits, readiness, checkout metrics and both two-worker and four-worker production configurations. They also cover big IDs, microsecond cursors, invalid calendar dates/JSON ID tokens/UTF8, Unicode, PHC policy, JWT rejection, bounded queue overflow and cancellation, HTTP disconnects, real SQL deadlines and rollback/discard before reuse. Runtime Dockerfiles and run commands are in the sibling Node and Bun READMEs.
+
+### Production four-CPU profile
+
+`WORKERS=4`, `DB_POOL_MAX_SIZE=10` allocates four independent pg pools with
+40 aggregate maximum connections; absent `DB_POOL_MAX_SIZE`, the historical
+20-connection allocation remains. `UV_THREADPOOL_SIZE=4` applies to each worker
+at process creation; the legacy default remains two. Node uses its supported
+cluster launcher. Bun's supported Linux cluster-worker listen path gives each
+worker an independent SO_REUSEPORT listener.
+Pinned Bun 1.4.2 ignores a direct node:http `listen({reusePort:true})` argument
+outside the cluster-worker path; therefore standalone spawn is deliberately
+not used. Express routes and middleware are unchanged. Any worker exit stops
+the whole process group, and graceful termination closes all worker pools.
+
+[Bun's documented cluster implementation](https://bun.sh/blog/release-notes/bun-v1.2.0#nodecluster)
+uses kernel load distribution on Linux.

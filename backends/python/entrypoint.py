@@ -5,6 +5,14 @@ import pathlib
 import sys
 import sysconfig
 
+def server_options(env):
+    loop = env.get("UVICORN_LOOP", "asyncio")
+    http = env.get("UVICORN_HTTP", "h11")
+    if loop not in ("asyncio", "uvloop") or http not in ("h11", "httptools"):
+        raise ValueError("invalid Uvicorn loop or HTTP parser")
+    return {"loop": loop, "http": http}
+
+
 if __name__ == "__main__":
     if (
         sysconfig.get_config_var("Py_GIL_DISABLED")
@@ -37,8 +45,7 @@ if __name__ == "__main__":
         host=os.environ.get("BIND_IP", "0.0.0.0"),
         port=8000,
         workers=workers,
-        loop="asyncio",
-        http="h11",
+        **server_options(os.environ),
         access_log=False,
         timeout_keep_alive=5,
     )

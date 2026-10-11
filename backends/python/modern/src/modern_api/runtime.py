@@ -1,5 +1,6 @@
 """Worker identity emitted after imports and pool initialization, never in hot paths."""
 
+import asyncio
 import importlib.metadata
 import json
 import os
@@ -41,11 +42,24 @@ def publish(cfg, pool) -> dict:
         "language": "python",
         "workers_total": cfg.workers,
         "connections_per_worker": pool.max_size,
-        "pool_budget": 20,
+        "pool_budget": cfg.workers * pool.max_size,
         "cpu_parallelism": None,
         "hash_concurrency": HASH_CONCURRENCY,
         "hash_scope": "worker",
     }
+    if os.environ.get("BENCH_PROFILE") == "production4":
+        loop = asyncio.get_running_loop()
+        if type(loop).__module__ != "uvloop":
+            raise RuntimeError("production4 requires actual uvloop")
+        protocol_module = sys.modules.get("uvicorn.protocols.http.httptools_impl")
+        if protocol_module is None or not hasattr(protocol_module, "HttpToolsProtocol"):
+            raise RuntimeError("production4 requires loaded httptools protocol")
+        snapshot["tuning"].update(
+            schema_version=2,
+            pool_min_size=pool.min_size,
+            event_loop="uvloop",
+            http_parser="httptools",
+        )
     if snapshot["gil"] != cfg.expected_gil or snapshot["jit"] != cfg.expected_jit:
         raise RuntimeError("post-import GIL/JIT mode does not match configuration")
     if cfg.run_dir:

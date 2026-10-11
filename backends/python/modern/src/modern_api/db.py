@@ -19,8 +19,8 @@ def make_pool(cfg: Settings, threaded: bool = False):
     cls = ConnectionPool if threaded else AsyncConnectionPool
     return cls(
         cfg.database_url,
-        min_size=2,
-        max_size=20 // cfg.workers,
+        min_size=cfg.db_pool_min_size,
+        max_size=cfg.db_pool_max_size or 20 // cfg.workers,
         timeout=5,
         kwargs=KWARGS,
         open=False,

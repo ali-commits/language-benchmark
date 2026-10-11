@@ -24,9 +24,16 @@ export function readConfig(env = process.env) {
   const workerValue = env.WORKERS ?? "2";
   if (!["2", "4"].includes(workerValue)) throw Error("WORKERS must be 2 or 4");
   const workers = Number(workerValue);
+  function integer(name, fallback, maximum) {
+    const value = env[name] ?? String(fallback);
+    if (!/^[1-9][0-9]*$/.test(value) || Number(value) > maximum)
+      throw Error(`${name} must be 1..${maximum}`);
+    return Number(value);
+  }
   return {
     workers,
-    connectionsPerWorker: 20 / workers,
+    uvThreadpoolSize: integer("UV_THREADPOOL_SIZE", 2, 128),
+    connectionsPerWorker: integer("DB_POOL_MAX_SIZE", 20 / workers, 100),
     databaseUrl,
     jwtSecret: env.JWT_SECRET,
     jwtTtl,

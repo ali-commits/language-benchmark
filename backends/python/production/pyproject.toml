@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=80"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "modern-api-production"
+version = "0.1.0"
+requires-python = ">=3.14,<3.16"
+
+dependencies = [
+  "fastapi==0.142.2",
+  "pydantic==2.14.0b2",
+  "pydantic-settings==2.15.0",
+  "psycopg[c,pool]==3.3.6",
+  "uvicorn==0.54.0",
+  "argon2-cffi==25.1.0",
+  "PyJWT==2.15.1",
+  "uvloop==0.22.1",
+  "httptools==0.7.1"
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+extend = "../../../pyproject.toml"
+target-version = "py314"

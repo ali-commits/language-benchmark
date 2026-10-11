@@ -10,18 +10,21 @@ ENV PATH=/opt/rust/bin:$PATH
 COPY backends/python/build-requirements.lock /tmp/build-requirements.lock
 RUN uv venv --python /opt/python/bin/python3 /opt/venv && uv pip install --python /opt/venv/bin/python --require-hashes -r /tmp/build-requirements.lock
 ARG APP=baseline
-COPY backends/python/${APP}/requirements.lock /tmp/requirements.lock
+ARG DEPENDENCY_PROFILE=${APP}
+COPY backends/python/${DEPENDENCY_PROFILE}/requirements.lock /tmp/requirements.lock
 RUN --mount=type=cache,target=/root/.cache/uv uv pip install --python /opt/venv/bin/python --no-build-isolation --require-hashes -r /tmp/requirements.lock && uv pip freeze --python /opt/venv/bin/python > /opt/venv/installed-packages.txt
 FROM ${RUNTIME_IMAGE}
 ARG APP=baseline
 ARG WORKERS=2
 ARG HASH_CONCURRENCY=2
 ARG CONNECTIONS_PER_WORKER=10
-RUN case "$APP:$WORKERS:$HASH_CONCURRENCY:$CONNECTIONS_PER_WORKER" in baseline:2:2:10|modern:2:2:10|modern:4:1:5) ;; *) exit 1 ;; esac
+ARG POOL_BUDGET=20
+RUN test "$((WORKERS * CONNECTIONS_PER_WORKER))" = "$POOL_BUDGET"
+RUN case "$APP:$WORKERS:$HASH_CONCURRENCY:$CONNECTIONS_PER_WORKER" in baseline:2:2:10|modern:2:2:10|modern:4:1:5|modern:4:1:10) ;; *) exit 1 ;; esac
 LABEL org.language-benchmark.workers="${WORKERS}" \
     org.language-benchmark.connections-per-worker="${CONNECTIONS_PER_WORKER}" \
     org.language-benchmark.hash-concurrency="${HASH_CONCURRENCY}" \
-    org.language-benchmark.pool-budget="20"
+    org.language-benchmark.pool-budget="${POOL_BUDGET}"
 WORKDIR /app
 COPY --from=uv /uv /usr/local/bin/uv
 COPY --from=wheels /opt/venv /opt/venv

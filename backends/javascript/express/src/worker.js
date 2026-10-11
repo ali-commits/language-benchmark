@@ -35,13 +35,19 @@ server.once("listening", async () => {
   });
   if (cfg.runDir) {
     const path = join(cfg.runDir, `tuning-${process.pid}.json`);
-    await writeFile(path + ".tmp", JSON.stringify({
+    const tuning = {
       schema_version: 1, run_id: cfg.runId, pid: process.pid,
       language: globalThis.Bun ? "bun" : "node",
       workers_total: cfg.workers, connections_per_worker: db.poolMax,
-      pool_budget: 20, cpu_parallelism: null,
+      pool_budget: cfg.workers * db.poolMax, cpu_parallelism: null,
       hash_concurrency: security.hashConcurrency, hash_scope: "worker",
-    }));
+    };
+    if (process.env.BENCH_PROFILE === "production4") {
+      tuning.schema_version = 2;
+      tuning.worker_mode = "cluster";
+      tuning.libuv_threads = Number(process.env.UV_THREADPOOL_SIZE);
+    }
+    await writeFile(path + ".tmp", JSON.stringify(tuning));
     await rename(path + ".tmp", path);
   }
   console.log(`worker ${process.pid} ready on ${cfg.bindIp}:${cfg.port}`);
