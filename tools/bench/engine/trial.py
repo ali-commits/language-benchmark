@@ -6,7 +6,7 @@ import json
 import time
 from contextlib import contextmanager
 from dataclasses import replace
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Callable, Iterator, Literal
 
 from ..records import checked_record
@@ -33,7 +33,7 @@ from .trial_events import parse_events as parse_events
 from .trial_events import verify_occupancy as verify_occupancy
 from .trial_preparation import prepare_trial
 from .trial_recovery import FixtureAction, FixtureReceipt, cleanup, fixture
-from .types import Host, Sample, TrialEvidence
+from .types import Host, Sample, Target, TrialEvidence
 from .workloads import transfer_tree
 
 
@@ -153,7 +153,33 @@ def run_trial(
         return _run_trial(context, stop_requested)
 
 
+def social_runtime_arguments(target: Target, trial_id: str) -> list[str]:
+    """Reserve bounded writable receipt storage without changing the image entrypoint."""
+    runtime = PurePosixPath("/tmp/bench-runtime")
+    for mount in target.mounts:
+        destination = PurePosixPath("/" + mount.destination.lstrip("/"))
+        if (
+            destination == runtime
+            or destination in runtime.parents
+            or runtime in destination.parents
+        ):
+            raise ValueError("target mount overlaps reserved social runtime directory")
+    return [
+        "--tmpfs",
+        str(runtime) + ":rw,noexec,nosuid,nodev,size=1m,mode=1777",
+        "-e",
+        "RUN_ID=" + trial_id,
+        "-e",
+        "RUN_DIR=" + str(runtime),
+    ]
+
+
 def _run_trial(context: TrialContext, stop_requested: Callable[[], bool]) -> TrialEvidence:
+    runtime_args = (
+        social_runtime_arguments(context.job.target, context.trial_id)
+        if context.job.workload.adapter == "social"
+        else []
+    )
     prepared = prepare_trial(context, execute=execute_host)
     context = replace(context, bound_environment=prepared.bound_environment)
     directory, job = prepared.directory, context.job
@@ -226,8 +252,7 @@ def _run_trial(context: TrialContext, stop_requested: Callable[[], bool]) -> Tri
                 journal.record("network", "done", {"id": network["Id"]})
         for key, value in job.target.labels.items():
             args.extend(["--label", key + "=" + value])
-        if job.workload.adapter == "social":
-            args += ["-e", "RUN_ID=" + context.trial_id, "-e", "RUN_DIR=/tmp/bench-runtime"]
+        args += runtime_args
         args += mount_arguments(job.target)
         verify_mount_sources(job.target, job.environment.backend, prepared_target.mount_sources)
         args += [prepared_target.image_id, *(job.target.command or [])]
