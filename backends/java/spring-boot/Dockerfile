@@ -9,12 +9,14 @@ RUN MAVEN_CMD=/opt/maven/bin/mvn ./verify-lock.sh
 COPY backends/java/spring-boot/src ./src
 RUN /opt/maven/bin/mvn -B -q verify
 FROM eclipse-temurin:27_35-jre-resolute@sha256:9274ccf4c2bb3dd950acee56da64c00a8333e847ebd6b7e031d1d15dec575020
+ARG DB_POOL_MAX_SIZE=20
+ARG DB_POOL_MIN_SIZE=2
 LABEL org.language-benchmark.language="java" \
     org.language-benchmark.runtime-version="27" \
     org.language-benchmark.framework="spring-boot" \
     org.language-benchmark.framework-version="4.1.1" \
     org.language-benchmark.workers="1" \
-    org.language-benchmark.connections-per-worker="20"
+    org.language-benchmark.connections-per-worker="$DB_POOL_MAX_SIZE"
 WORKDIR /app
 COPY --from=build /build/target/social-api-1.0.0.jar /app/api.jar
 RUN useradd --uid 10001 --no-create-home benchmark
@@ -23,5 +25,8 @@ ENV JAVA_TOOL_OPTIONS="-XX:MaxRAMPercentage=65 -XX:ActiveProcessorCount=2"
 ARG HASH_CONCURRENCY=2
 RUN case "$HASH_CONCURRENCY" in 1|2|3|4) ;; *) echo "invalid HASH_CONCURRENCY" >&2; exit 1 ;; esac
 ENV HASH_CONCURRENCY=$HASH_CONCURRENCY
+ENV DB_POOL_MAX_SIZE=$DB_POOL_MAX_SIZE DB_POOL_MIN_SIZE=$DB_POOL_MIN_SIZE
+ARG HASH_EXECUTOR_MODE=direct
+ENV HASH_EXECUTOR_MODE=$HASH_EXECUTOR_MODE
 EXPOSE 8000
 ENTRYPOINT ["java","-jar","/app/api.jar"]

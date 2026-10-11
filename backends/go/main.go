@@ -125,7 +125,7 @@ func main() {
 	if e != nil {
 		log.Fatal(e)
 	}
-	if e = writeTuningReceipt(pool.Config().MaxConns); e != nil {
+	if e = writeTuningReceipt(pool.Config().MaxConns, pool.Config().MinConns); e != nil {
 		listener.Close()
 		log.Fatal(e)
 	}

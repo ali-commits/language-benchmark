@@ -22,12 +22,15 @@ public class Application {
     try {
       var source = (DelegatingDataSource) context.getBean(DataSource.class);
       var pool = (HikariDataSource) source.getTargetDataSource();
-      Tuning.writeReceipt(System.getenv("RUN_DIR"), System.getenv("RUN_ID"), Protocol.HASH_CONCURRENCY, pool.getMaximumPoolSize());
+      Tuning.writeReceipt(System.getenv("RUN_DIR"), System.getenv("RUN_ID"), Protocol.HASH_CONCURRENCY, pool.getMaximumPoolSize(),pool.getMinimumIdle());
     } catch (Exception e) {
       context.close();
       throw new IllegalStateException("unable to publish runtime tuning receipt", e);
     }
   }
+
+  @Bean
+  org.springframework.beans.factory.DisposableBean hashExecutorLifecycle() { return () -> {if(Protocol.HASH_EXECUTOR!=null) Protocol.HASH_EXECUTOR.close();}; }
 
   @Bean
   Protocol protocol() {
@@ -43,8 +46,9 @@ public class Application {
     cfg.setJdbcUrl(parsed.jdbcUrl());
     cfg.setUsername(parsed.username());
     cfg.setPassword(parsed.password());
-    cfg.setMaximumPoolSize(20);
-    cfg.setMinimumIdle(2);
+    var bounds=Tuning.poolBounds(System.getenv("DB_POOL_MAX_SIZE"),System.getenv("DB_POOL_MIN_SIZE"));
+    cfg.setMaximumPoolSize(bounds[0]);
+    cfg.setMinimumIdle(bounds[1]);
     cfg.setConnectionTimeout(5000);
     cfg.setPoolName("social-api");
     var hikari = new HikariDataSource(cfg);

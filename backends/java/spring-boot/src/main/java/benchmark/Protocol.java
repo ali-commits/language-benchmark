@@ -16,6 +16,13 @@ public final class Protocol {
   static final Base64.Encoder B64 = Base64.getUrlEncoder().withoutPadding();
   static final int HASH_CONCURRENCY = Tuning.parse(System.getenv("HASH_CONCURRENCY"));
   static final Semaphore HASH = Tuning.hashSlots(System.getenv("HASH_CONCURRENCY"));
+  static final HashExecutor HASH_EXECUTOR = selectHashExecutor(System.getenv("HASH_EXECUTOR_MODE"));
+  private static HashExecutor selectHashExecutor(String mode) {
+    if(mode==null || mode.equals("direct")) return null;
+    if(mode.equals("platform")) return new HashExecutor(HASH,HASH_CONCURRENCY);
+    throw new IllegalArgumentException("HASH_EXECUTOR_MODE must be direct or platform");
+  }
+
   final String secret;
   final int ttl;
 
@@ -131,9 +138,21 @@ public final class Protocol {
   }
 
   static byte[] argon(String password, byte[] salt) {
+    if(HASH_EXECUTOR!=null) return HASH_EXECUTOR.run(()->deriveArgon(password,salt));
     try {
       HASH.acquire();
       try {
+        return deriveArgon(password,salt);
+      } finally {
+        HASH.release();
+      }
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      throw new IllegalStateException(e);
+    }
+  }
+
+  private static byte[] deriveArgon(String password,byte[] salt) {
         var generator = new Argon2BytesGenerator();
         generator.init(
             new Argon2Parameters.Builder(Argon2Parameters.ARGON2_id)
@@ -146,13 +165,6 @@ public final class Protocol {
         byte[] output = new byte[32];
         generator.generateBytes(password.toCharArray(), output);
         return output;
-      } finally {
-        HASH.release();
-      }
-    } catch (InterruptedException e) {
-      Thread.currentThread().interrupt();
-      throw new IllegalStateException(e);
-    }
   }
 
   public static String hash(String password) {

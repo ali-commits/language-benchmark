@@ -20,12 +20,19 @@ func hashConcurrency() (int, error) {
 	return int(value[0] - '0'), nil
 }
 
-func writeTuningReceipt(poolSize int32) error {
+func writeTuningReceipt(poolSize int32, minimum ...int32) error {
 	dir := os.Getenv("RUN_DIR")
 	if dir == "" {
 		return nil
 	}
-	payload := map[string]any{"schema_version": 1, "run_id": os.Getenv("RUN_ID"), "pid": os.Getpid(), "language": "go", "workers_total": 1, "connections_per_worker": poolSize, "pool_budget": 20, "cpu_parallelism": runtime.GOMAXPROCS(0), "hash_concurrency": cap(hashSlots), "hash_scope": "process"}
+	payload := map[string]any{"schema_version": 1, "run_id": os.Getenv("RUN_ID"), "pid": os.Getpid(), "language": "go", "workers_total": 1, "connections_per_worker": poolSize, "pool_budget": poolSize, "cpu_parallelism": runtime.GOMAXPROCS(0), "hash_concurrency": cap(hashSlots), "hash_scope": "process"}
+	if os.Getenv("BENCH_PROFILE") == "production4" {
+		if len(minimum) != 1 {
+			return fmt.Errorf("production receipt requires actual pool minimum")
+		}
+		payload["schema_version"] = 2
+		payload["pool_min_size"] = minimum[0]
+	}
 	file, err := os.CreateTemp(dir, ".tuning-*.tmp")
 	if err != nil {
 		return err

@@ -132,9 +132,13 @@ async fn serve(hashes: usize) -> Result<(), Box<dyn std::error::Error>> {
     if !valid_ttl(ttl) {
         return Err("JWT_TTL_SECONDS must be between 600 and 86400".into());
     };
+    let (max_pool, min_pool) = parse_pool_bounds(
+        std::env::var("DB_POOL_MAX_SIZE").ok().as_deref(),
+        std::env::var("DB_POOL_MIN_SIZE").ok().as_deref(),
+    )?;
     let pool = PgPoolOptions::new()
-        .max_connections(20)
-        .min_connections(0)
+        .max_connections(max_pool)
+        .min_connections(min_pool)
         .idle_timeout(std::time::Duration::from_secs(300))
         .max_lifetime(std::time::Duration::from_secs(3600))
         .connect_lazy_with(database_options(
@@ -158,6 +162,7 @@ async fn serve(hashes: usize) -> Result<(), Box<dyn std::error::Error>> {
         &env("RUN_ID", ""),
         state.hashes.available_permits(),
         state.pool.options().get_max_connections(),
+        state.pool.options().get_min_connections(),
     )?;
     eprintln!("Rust social API listening on {address}");
     axum::serve(listener, app)

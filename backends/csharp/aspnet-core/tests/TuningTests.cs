@@ -20,11 +20,11 @@ public class TuningTests
  [Fact] public void Receipt() {
   var dir=Path.Combine(Path.GetTempPath(),Guid.NewGuid().ToString()); Directory.CreateDirectory(dir);
   try {
-   Settings.WriteTuningReceipt(dir,"test-run",4,20);
+   Settings.WriteTuningReceipt(dir,"test-run",4,20,Settings.Database("postgresql://u:p@localhost/db","local",null,null,null));
    if (!OperatingSystem.IsWindows()) Assert.Equal(UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead | UnixFileMode.OtherRead, File.GetUnixFileMode(Path.Combine(dir,$"tuning-{Environment.ProcessId}.json")));
    using var doc=JsonDocument.Parse(File.ReadAllText(Path.Combine(dir,$"tuning-{Environment.ProcessId}.json"))); var v=doc.RootElement;
    Assert.Equal(Environment.ProcessId,v.GetProperty("pid").GetInt32()); Assert.Equal(Environment.ProcessorCount,v.GetProperty("cpu_parallelism").GetInt32()); Assert.Equal(4,v.GetProperty("hash_concurrency").GetInt32()); Assert.Equal(20,v.GetProperty("pool_budget").GetInt32()); Assert.Equal("test-run",v.GetProperty("run_id").GetString()); Assert.Single(Directory.GetFiles(dir));
-   Settings.WriteTuningReceipt(null,"unused",4,20);
+   Settings.WriteTuningReceipt(null,"unused",4,20,Settings.Database("postgresql://u:p@localhost/db","local",null,null,null));
   } finally {Directory.Delete(dir,true);}
  }
 }

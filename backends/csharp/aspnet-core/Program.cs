@@ -49,5 +49,5 @@ app.Use(async (context, next) =>
 });
 new SocialApi(app.Services.GetRequiredService<Database>(), app.Services.GetRequiredService<PasswordService>(), app.Services.GetRequiredService<TokenService>(), ttl).Routes(app);
 await app.StartAsync();
-Settings.WriteTuningReceipt(Environment.GetEnvironmentVariable("RUN_DIR"), Environment.GetEnvironmentVariable("RUN_ID"), app.Services.GetRequiredService<PasswordService>().HashConcurrency, database.MaxPoolSize);
+Settings.WriteTuningReceipt(Environment.GetEnvironmentVariable("RUN_DIR"), Environment.GetEnvironmentVariable("RUN_ID"), app.Services.GetRequiredService<PasswordService>().HashConcurrency, database.MaxPoolSize,database);
 await app.WaitForShutdownAsync();

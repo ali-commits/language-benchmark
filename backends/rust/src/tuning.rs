@@ -24,12 +24,17 @@ pub fn write_receipt(
     run_id: &str,
     hashes: usize,
     pool_size: u32,
+    pool_min: u32,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let Some(directory) = directory.filter(|d| !d.is_empty()) else {
         return Ok(());
     };
     let pid = std::process::id();
-    let payload = json!({"schema_version":1,"run_id":run_id,"pid":pid,"language":"rust","workers_total":1,"connections_per_worker":pool_size,"pool_budget":20,"cpu_parallelism":tokio::runtime::Handle::current().metrics().num_workers(),"hash_concurrency":hashes,"hash_scope":"process"});
+    let mut payload = json!({"schema_version":1,"run_id":run_id,"pid":pid,"language":"rust","workers_total":1,"connections_per_worker":pool_size,"pool_budget":pool_size,"cpu_parallelism":tokio::runtime::Handle::current().metrics().num_workers(),"hash_concurrency":hashes,"hash_scope":"process"});
+    if std::env::var("BENCH_PROFILE").as_deref() == Ok("production4") {
+        payload["schema_version"] = json!(2);
+        payload["pool_min_size"] = json!(pool_min);
+    }
     let directory = Path::new(directory);
     let temporary = directory.join(format!(".tuning-{pid}.tmp"));
     let result = (|| {
@@ -47,4 +52,21 @@ pub fn write_receipt(
     })();
     let _ = std::fs::remove_file(temporary);
     result
+}
+
+pub fn parse_pool_bounds(max: Option<&str>, min: Option<&str>) -> Result<(u32, u32), &'static str> {
+    fn parse(v: Option<&str>, default: u32, minimum: u32) -> Result<u32, &'static str> {
+        let Some(v) = v else { return Ok(default) };
+        let n = v.parse::<u32>().map_err(|_| "invalid DB pool size")?;
+        if n < minimum || n > 256 || n.to_string() != v {
+            return Err("invalid DB pool size");
+        };
+        Ok(n)
+    }
+    let max = parse(max, 20, 1)?;
+    let min = parse(min, 0, 0)?;
+    if min > max {
+        return Err("DB pool minimum exceeds maximum");
+    };
+    Ok((max, min))
 }
