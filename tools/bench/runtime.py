@@ -11,6 +11,14 @@ def validate_worker_snapshots(cell: RuntimeCell, snapshots: list[WorkerSnapshot]
     ):
         reasons.append("stale or missing run identity")
     for s in snapshots:
+        if cell.profile == "production4":
+            tuning = s.get("tuning", {})
+            if (
+                tuning.get("schema_version") != 2
+                or tuning.get("event_loop") != "uvloop"
+                or tuning.get("http_parser") != "httptools"
+            ):
+                reasons.append("production Python requires actual uvloop/httptools receipt")
         import shlex
 
         flags = set(shlex.split(s.get("config_args") or ""))

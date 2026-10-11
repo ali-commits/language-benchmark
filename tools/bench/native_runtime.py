@@ -109,12 +109,13 @@ def load_runtime_cell(
 ) -> RuntimeCell | NativeCell:
     """Python selection is deliberately independent of unselected native registries."""
     root = Path(registry_root)
-    if cell_id.endswith("-tuned4"):
-        from .tuning import load_tuned_profiles
+    if cell_id.endswith(("-tuned4", "-production4")):
+        from .tuning import load_production_profiles, load_tuned_profiles
 
-        matches = [
-            profile.cell for profile in load_tuned_profiles(root) if profile.cell.id == cell_id
-        ]
+        loader = (
+            load_production_profiles if cell_id.endswith("-production4") else load_tuned_profiles
+        )
+        matches = [profile.cell for profile in loader(root) if profile.cell.id == cell_id]
         if len(matches) != 1:
             raise ValueError("unknown or ambiguous tuned cell: " + cell_id)
         return matches[0]
@@ -141,6 +142,7 @@ def load_runtime_cells(
     registry_root: str | Path = Path("runtimes"),
     *,
     include_profiles: bool = False,
+    include_production_profiles: bool = False,
 ) -> list[RuntimeCell | NativeCell]:
     root = Path(registry_root)
     cells: list[RuntimeCell | NativeCell] = [
@@ -157,6 +159,10 @@ def load_runtime_cells(
         from .tuning import load_tuned_profiles
 
         cells.extend(profile.cell for profile in load_tuned_profiles(root))
+    if include_production_profiles:
+        from .tuning import load_production_profiles
+
+        cells.extend(profile.cell for profile in load_production_profiles(root))
     if len({cell.id for cell in cells}) != len(cells):
         raise ValueError("runtime cell identifiers must be unique")
     return cells
@@ -169,7 +175,7 @@ def registry_metadata(cell: NativeCell) -> dict[str, str]:
         else cell.language
     )
     path = (
-        Path("runtimes/profiles/tuned4.json")
+        Path("runtimes/profiles") / (cell.profile + ".json")
         if cell.profile
         else Path("runtimes") / directory / "lock.json"
     )
@@ -193,7 +199,7 @@ def validate_native_container(
         or data.get("cell_id") != cell.id
     ):
         raise ValueError("native container image/run identity is stale or invalid")
-    cpus, memory = (4, 6442450944) if cell.profile == "tuned4" else (2, 3221225472)
+    cpus, memory = (4, 6442450944) if cell.profile else (2, 3221225472)
     if [data.get(k) for k in ("nano_cpus", "memory", "memory_swap")] != [
         cpus * 1000000000,
         memory,

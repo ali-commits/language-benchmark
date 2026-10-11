@@ -98,6 +98,7 @@ class WorkerSnapshot(TypedDict, total=False):
     free_threaded: bool
     jit: bool
     dependencies: dict[str, str]
+    tuning: dict[str, object]
 
 
 class Nofile(TypedDict):

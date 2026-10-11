@@ -1,5 +1,7 @@
 """Explicit machine profiles; legacy locks and defaults remain authoritative."""
 
+from __future__ import annotations
+
 import hashlib
 import json
 import math
@@ -158,7 +160,8 @@ def profile_for_cell(
 ) -> TunedProfile | None:
     if not cell.profile:
         return None
-    for profile in load_tuned_profiles(registry_root):
+    loader = load_production_profiles if cell.profile == "production4" else load_tuned_profiles
+    for profile in loader(registry_root):
         if cell == profile.cell:
             return profile
     raise ValueError("cell differs from explicit tuned registry")
@@ -180,7 +183,7 @@ class TuningReceipt(TypedDict):
 class ReceiptFile(TypedDict):
     filename: str
     modified_at: float
-    receipt: TuningReceipt
+    receipt: TuningReceipt | ProductionReceipt
 
 
 class ServingProcess(TypedDict):
@@ -222,7 +225,7 @@ def validate_tuning_receipts(
     processes: list[ServingProcess],
     run_id: str,
     container_started_at: float,
-) -> list[TuningReceipt]:
+) -> list[TuningReceipt | ProductionReceipt]:
     """Compare receipts with independent /proc process count, liveness and start times."""
     serving = {
         process["pid"]: process for process in processes if _serving(profile, process["command"])
@@ -244,20 +247,29 @@ def validate_tuning_receipts(
         else "process"
     )
     expected = dict(
-        schema_version=1,
+        schema_version=2 if profile.cell.profile == "production4" else 1,
         run_id=run_id,
         language=language,
         workers_total=profile.cell.workers,
-        connections_per_worker=20 // profile.cell.workers,
-        pool_budget=20,
+        connections_per_worker=profile.cell.pool_budget // profile.cell.workers,
+        pool_budget=profile.cell.pool_budget,
         cpu_parallelism=4 if scope == "process" else None,
         hash_concurrency=1 if scope == "worker" else 4,
         hash_scope=scope,
     )
+    extras = (
+        _production_receipt_fields(profile.base_cell)
+        if profile.cell.profile == "production4"
+        else {}
+    )
+    expected.update(extras)
     receipts = []
     for row in rows:
-        receipt = checked_record(row["receipt"], TuningReceipt)
-        if set(receipt) != set(TuningReceipt.__annotations__):
+        receipt = checked_record(
+            row["receipt"],
+            ProductionReceipt if profile.cell.profile == "production4" else TuningReceipt,
+        )
+        if set(receipt) != set(TuningReceipt.__annotations__) | set(extras):
             raise ValueError("tuned receipt contains unapproved fields")
         pid = receipt["pid"]
         # Request recycling can leave dead PHP worker files. Live workers still
@@ -278,7 +290,7 @@ def validate_tuning_receipts(
         receipts.append(receipt)
     if len(receipts) != profile.cell.workers or {r["pid"] for r in receipts} != set(serving):
         raise ValueError("missing or duplicate tuned worker receipts")
-    if sum(r["connections_per_worker"] for r in receipts) != 20:
+    if sum(r["connections_per_worker"] for r in receipts) != profile.cell.pool_budget:
         raise ValueError("tuned aggregate database budget mismatch")
     hashes = (
         sum(r["hash_concurrency"] for r in receipts)
@@ -378,7 +390,12 @@ def parse_process_probe(
                 ReceiptFile(
                     filename=row[1],
                     modified_at=float(row[2]),
-                    receipt=checked_record(value, TuningReceipt),
+                    receipt=checked_record(
+                        value,
+                        ProductionReceipt
+                        if profile.cell.profile == "production4"
+                        else TuningReceipt,
+                    ),
                 )
             )
         return files, processes
@@ -393,3 +410,223 @@ def validate_profile_configuration(
         raise ValueError("tuned target resources differ from the selected profile")
     if any(environment.get(key) != value for key, value in profile.environment.items()):
         raise ValueError("tuned target requires explicit matching profile environment references")
+
+
+class ProductionRegistry(ProfileRegistry):
+    dependency_locks: dict[str, str]
+
+
+def _production_controls(base: str) -> tuple[dict[str, str], dict[str, str]]:
+    language = base.split("-")[0]
+    env = {"BENCH_PROFILE": "production4", "HASH_CONCURRENCY": "4"}
+    build = {"HASH_CONCURRENCY": "4"}
+    if language == "python":
+        env.update(
+            APP_VARIANT="modern",
+            ADAPTER="async",
+            WORKERS="4",
+            HASH_CONCURRENCY="1",
+            DB_POOL_MIN_SIZE="2",
+            DB_POOL_MAX_SIZE="10",
+            UVICORN_LOOP="uvloop",
+            UVICORN_HTTP="httptools",
+        )
+        build = dict(
+            APP="modern",
+            DEPENDENCY_PROFILE="production",
+            WORKERS="4",
+            HASH_CONCURRENCY="1",
+            CONNECTIONS_PER_WORKER="10",
+            POOL_BUDGET="40",
+        )
+    elif language in ("node", "bun"):
+        env = dict(
+            BENCH_PROFILE="production4",
+            WORKERS="4",
+            UV_THREADPOOL_SIZE="4",
+            DB_POOL_MAX_SIZE="10",
+            NODE_ENV="production",
+        )
+        build = dict(
+            WORKERS="4", CONNECTIONS_PER_WORKER="10", POOL_BUDGET="40", UV_THREADPOOL_SIZE="4"
+        )
+        if language == "node":
+            env["NODE_OPTIONS"] = "--max-old-space-size=1024"
+    elif language == "php":
+        env.update(
+            PHP_WORKERS="32",
+            PHP_MEMORY_LIMIT="128M",
+            OPCACHE_MEMORY="256",
+            OPCACHE_INTERNED_STRINGS="16",
+            DB_PERSISTENT="1" if base == "php-laravel" else "0",
+            DB_SESSION_RESET="1",
+            RR_MAX_WORKER_MEMORY="256",
+        )
+        build.update({k: v for k, v in env.items() if k != "BENCH_PROFILE"})
+    else:
+        minimum = "16" if language == "java" else "4"
+        env.update(DB_POOL_MIN_SIZE=minimum, DB_POOL_MAX_SIZE="16")
+        build.update(DB_POOL_MIN_SIZE=minimum, DB_POOL_MAX_SIZE="16")
+        if language == "go":
+            env.update(GOMAXPROCS="4", GOMEMLIMIT="5GiB", GOGC="100")
+        elif language == "rust":
+            env["CPU_PARALLELISM"] = "4"
+            build["CPU_PARALLELISM"] = "4"
+        elif language == "java":
+            env.update(
+                JAVA_TOOL_OPTIONS="-XX:MaxRAMPercentage=65 -XX:ActiveProcessorCount=4",
+                HASH_EXECUTOR_MODE="platform",
+            )
+            build["HASH_EXECUTOR_MODE"] = "platform"
+        elif language == "csharp":
+            env.update(
+                DOTNET_PROCESSOR_COUNT="4",
+                DOTNET_GCHeapHardLimitPercent="0x41",
+                DB_PREPARE_ENABLED="true",
+            )
+            build["DB_PREPARE_ENABLED"] = "true"
+    return env, build
+
+
+def load_production_profiles(
+    registry_root: str | Path = Path("runtimes"), *, path: Path | None = None
+) -> list[TunedProfile]:
+    from .engine.resources import dependency_lock_path
+    from .native_runtime import load_runtime_cell
+
+    root = Path(registry_root)
+    d = checked_record(
+        json.loads((path or root / "profiles/production4.json").read_text()), ProductionRegistry
+    )
+    if (
+        set(d) != set(ProductionRegistry.__annotations__)
+        or d["schema_version"] != 2
+        or d["resources"] != TUNED_RESOURCES
+    ):
+        raise ValueError("uncontrolled production profile budget/schema")
+    original_locks = checked_record(
+        json.loads((root / "profiles/tuned4.json").read_text()), ProfileRegistry
+    )["source_locks"]
+    if d["source_locks"] != original_locks or any(
+        hashlib.sha256((root / k).read_bytes()).hexdigest() != v for k, v in original_locks.items()
+    ):
+        raise ValueError("production original lock fingerprint mismatch")
+    paths = {
+        "backends/python/modern/requirements.lock",
+        "backends/python/production/requirements.lock",
+        "backends/python/production/uv.lock",
+        "backends/python/production/pyproject.toml",
+    }
+    if set(d["dependency_locks"]) != paths or any(
+        hashlib.sha256(dependency_lock_path(k).read_bytes()).hexdigest() != v
+        for k, v in d["dependency_locks"].items()
+    ):
+        raise ValueError("production dependency fingerprint mismatch")
+
+    def pins(relative: str) -> dict[str, str]:
+        import re
+
+        return dict(
+            re.findall(r"^([\w.-]+)==([^\s;]+)", dependency_lock_path(relative).read_text(), re.M)
+        )
+
+    old = pins("backends/python/modern/requirements.lock")
+    new = pins("backends/python/production/requirements.lock")
+    if (
+        not old
+        or any(new.get(k) != v for k, v in old.items())
+        or set(new) - set(old) != {"uvloop", "httptools"}
+    ):
+        raise ValueError(
+            "production dependencies must preserve every old pin plus two accelerators"
+        )
+    if len(d["cells"]) != 9 or {e["base_cell"] for e in d["cells"]} != set(BASE_CELLS):
+        raise ValueError("production requires nine unique frozen cells")
+    result = []
+    for e in d["cells"]:
+        original = load_runtime_cell(e["base_cell"], root)
+        env, build = _production_controls(original.id)
+        if (
+            set(e) != set(ProfileEntry.__annotations__)
+            or e["id"] != original.id + "-production4"
+            or e["image"] != original.image + "-production4"
+            or e["environment"] != env
+            or e["build_args"] != build
+        ):
+            raise ValueError("production identity/version/configuration mismatch")
+        workers = (
+            4
+            if original.id.startswith(("python", "node", "bun"))
+            else 32
+            if original.id.startswith("php")
+            else 1
+        )
+        budget = 40 if workers == 4 else 32 if workers == 32 else 16
+        if isinstance(original, RuntimeCell):
+            cell: RuntimeCell | NativeCell = replace(
+                original,
+                id=e["id"],
+                image=e["image"],
+                profile="production4",
+                workers=workers,
+                pool_budget=budget,
+                dependency_lock="backends/python/production/requirements.lock",
+            )
+        else:
+            cell = replace(
+                original,
+                id=e["id"],
+                image=e["image"],
+                profile="production4",
+                workers=workers,
+                pool_budget=budget,
+                connections_per_worker=budget // workers,
+                topology=f"production4; workers{workers}; pool{budget}; aggregate hash4",
+            )
+        result.append(TunedProfile(original.id, cell, d["resources"].copy(), env, build))
+    return result
+
+
+class ProductionReceipt(TuningReceipt, total=False):
+    pool_min_size: int
+    event_loop: str
+    http_parser: str
+    worker_mode: str
+    libuv_threads: int
+    hash_executor_mode: str
+    db_prepare_enabled: bool
+    db_max_auto_prepare: int
+    db_auto_prepare_min_usages: int
+    db_enlist: bool
+    db_connection_reuse: str
+    db_session_reset: bool
+    memory_limit: str
+    opcache_memory: int
+    opcache_interned_strings: int
+
+
+def _production_receipt_fields(base: str) -> dict[str, int | str | bool]:
+    language = base.split("-")[0]
+    if language == "python":
+        return dict(pool_min_size=2, event_loop="uvloop", http_parser="httptools")
+    if language in ("node", "bun"):
+        return dict(worker_mode="cluster", libuv_threads=4)
+    if language == "php":
+        return dict(
+            db_connection_reuse="pdo-persistent" if base == "php-laravel" else "worker-retained",
+            db_session_reset=True,
+            memory_limit="128M",
+            opcache_memory=256,
+            opcache_interned_strings=16,
+        )
+    fields: dict[str, int | str | bool] = dict(pool_min_size=16 if language == "java" else 4)
+    if language == "java":
+        fields["hash_executor_mode"] = "platform"
+    elif language == "csharp":
+        fields.update(
+            db_prepare_enabled=True,
+            db_max_auto_prepare=64,
+            db_auto_prepare_min_usages=5,
+            db_enlist=False,
+        )
+    return fields

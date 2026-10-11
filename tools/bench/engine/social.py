@@ -348,7 +348,7 @@ def attest_tuned_runtime(
             continue
         receipts = validate_tuning_receipts(profile, rows, processes, context.trial_id, started_at)
         return {
-            "profile": "tuned4",
+            "profile": profile.cell.profile,
             "resources": profile.resources,
             "receipts": receipts,
             "serving_processes": [p for p in processes if p["pid"] in {r["pid"] for r in receipts}],

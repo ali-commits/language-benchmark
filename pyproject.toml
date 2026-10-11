@@ -61,6 +61,7 @@ dev = [
 ]
 
 [tool.hatch.build.targets.wheel.force-include]
+"runtimes/profiles/production4.json" = "tools/bench/engine/attestation/runtimes/profiles/production4.json"
 "runtimes/profiles/tuned4.json" = "tools/bench/engine/attestation/runtimes/profiles/tuned4.json"
 "benchmarks/k6/engine" = "tools/bench/engine/k6"
 "runtimes/python/lock.json" = "tools/bench/engine/attestation/runtimes/python/lock.json"
@@ -74,6 +75,12 @@ dev = [
 "runtimes/php-octane/lock.json" = "tools/bench/engine/attestation/runtimes/php-octane/lock.json"
 "backends/python/baseline/requirements.lock" = "tools/bench/engine/attestation/backends/python/baseline/requirements.lock"
 "backends/python/modern/requirements.lock" = "tools/bench/engine/attestation/backends/python/modern/requirements.lock"
+
+"backends/python/production/requirements.lock" = "tools/bench/engine/attestation/backends/python/production/requirements.lock"
+
+"backends/python/production/uv.lock" = "tools/bench/engine/attestation/backends/python/production/uv.lock"
+
+"backends/python/production/pyproject.toml" = "tools/bench/engine/attestation/backends/python/production/pyproject.toml"
 
 [tool.mypy]
 python_version = "3.10"

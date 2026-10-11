@@ -75,3 +75,40 @@ search policy remain unchanged. Historical and tuned results identify different
 runtime configurations; compare them as measured deployments, not universal
 language rankings. Staging these profiles does not authorize modifying an
 already running campaign.
+
+## Production-guided four-CPU profile
+
+`load_production_profiles()` loads nine isolated `-production4` identities.
+`load_runtime_cell("go-net-http-production4")` selects one directly;
+`load_runtime_cells(include_production_profiles=True)` appends them explicitly.
+`include_profiles=True` retains its historical meaning: append only `tuned4`.
+Neither flag changes the default runtime inventory or original locks.
+
+The common container budget remains four CPUs/six GiB/no swap/nofile250000.
+Database maxima now reflect independent stack configurations: Python/Node/Bun
+four workers ×10 connections (40), four native single-process stacks16, and
+PHP FPM/Octane32 workers ×one connection (32). Python pools retain min2 per
+worker; native min4 except Java's fixed16. These selected limits are engineering
+choices informed by official production guidance, not experimentally proven
+universal optima. The full rationale and primary sources are in
+[the production specification](../../docs/superpowers/specs/2026-10-11-production-guided-four-cpu.md).
+
+Python adds only uvloop and httptools to its isolated pinned production lock;
+all original dependency pins remain identical. The registry fingerprints the
+original runtime locks and production requirements/uv/pyproject inputs. Wheels
+bundle those files so installed CLI attestation works outside the checkout.
+Production Python explicitly runs uvloop/httptools; Node/Bun use four supported
+cluster workers with libuv4. Go uses GOMAXPROCS4, GOMEMLIMIT5GiB, GOGC100; Java
+uses a dedicated bounded platform hash executor; .NET enables bounded Npgsql
+automatic preparation without transaction enlistment. PHP enables safe physical
+connection reuse,128MiB memory limits,256MiB OPcache/16MiB interned strings and
+Octane's256MiB worker recycle threshold. The registry exposes the exact build
+arguments and safe environment controls, including `BENCH_PROFILE=production4`.
+
+Production receipts use schema2, with strict per-stack keys for effective pool
+minimums, server protocol/event loop, worker mode, executor, preparation or PHP
+reuse/OPcache settings. Schema1 receipts remain unchanged for historical and
+tuned profiles. The verifier still independently checks actual live PIDs,
+commands, nonce/start times, cgroup quotas and immutable image labels. A claimed
+20-connection receipt or forged/missing feature cannot satisfy a production
+profile. Original and tuned results stay separate from this new configuration.

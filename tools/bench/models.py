@@ -28,13 +28,13 @@ class RuntimeCell:
             "free-threaded",
         ):
             raise ValueError("unknown application/build")
-        tuned = self.profile == "tuned4"
-        if self.profile not in ("", "tuned4") or (
+        tuned = self.profile in ("tuned4", "production4")
+        if self.profile not in ("", "tuned4", "production4") or (
             tuned
             and (
                 self.app != "modern"
                 or self.adapter != "async"
-                or self.id != "python-modern-3.14.8-standard-jit0-gil1-async-tuned4"
+                or self.id != "python-modern-3.14.8-standard-jit0-gil1-async-" + self.profile
                 or self.python != "3.14.8"
                 or self.build != "standard"
                 or self.jit
@@ -44,7 +44,7 @@ class RuntimeCell:
             raise ValueError("uncontrolled runtime profile")
         if (
             self.workers not in ((4,) if tuned else (1, 2))
-            or self.pool_budget != 20
+            or self.pool_budget != (40 if self.profile == "production4" else 20)
             or self.threads != 16
         ):
             raise ValueError("uncontrolled resource settings")
@@ -121,15 +121,26 @@ class NativeCell:
         }
         if self.language not in expected:
             raise ValueError("unknown native language")
-        if self.profile not in ("", "tuned4") or (self.profile and not self.id.endswith("-tuned4")):
+        if self.profile not in ("", "tuned4", "production4") or (
+            self.profile and not self.id.endswith("-" + self.profile)
+        ):
             raise ValueError("uncontrolled native profile")
         framework, workers, connections = expected[self.language]
-        if self.profile and self.id != self.language + "-" + self.framework + "-tuned4":
+        if self.profile and self.id != self.language + "-" + self.framework + "-" + self.profile:
             raise ValueError("uncontrolled tuned native identity")
         if self.profile and self.language in ("node", "bun"):
             workers, connections = 4, 5
+        if self.profile == "production4":
+            workers, connections = (
+                (4, 10)
+                if self.language in ("node", "bun")
+                else (32, 1)
+                if self.language == "php"
+                else (1, 16)
+            )
+        budget = 40 if self.language in ("node", "bun") else 32 if self.language == "php" else 16
         if self.language == "php" and self.framework == "laravel-octane":
-            if self.id != "php-laravel-octane" + ("-tuned4" if self.profile else ""):
+            if self.id != "php-laravel-octane" + ("-" + self.profile if self.profile else ""):
                 raise ValueError("uncontrolled native Octane identity")
             framework = "laravel-octane"
         if (
@@ -137,7 +148,7 @@ class NativeCell:
             or type(self.workers) is not int
             or type(self.connections_per_worker) is not int
             or (self.workers, self.connections_per_worker) != (workers, connections)
-            or self.pool_budget != 20
+            or self.pool_budget != (budget if self.profile == "production4" else 20)
             or self.workers * self.connections_per_worker != self.pool_budget
         ):
             raise ValueError("uncontrolled native resource settings")
